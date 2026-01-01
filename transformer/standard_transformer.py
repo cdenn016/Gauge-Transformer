@@ -44,6 +44,16 @@ class StandardMultiHeadAttention(nn.Module):
         self.head_dim = embed_dim // n_heads
         self.scale = self.head_dim ** -0.5
 
+        # Warn about pathologically small head dimensions
+        if self.head_dim < 16:
+            import warnings
+            warnings.warn(
+                f"head_dim={self.head_dim} is very small (embed_dim={embed_dim}, n_heads={n_heads}). "
+                f"This severely limits model capacity. Recommended head_dim >= 32. "
+                f"Consider using fewer heads (e.g., n_heads={embed_dim // 32} for head_dim=32).",
+                UserWarning
+            )
+
         # Standard attention projections (THIS IS WHAT GAUGE MODEL DOESN'T HAVE!)
         self.W_Q = nn.Linear(embed_dim, embed_dim, bias=False)
         self.W_K = nn.Linear(embed_dim, embed_dim, bias=False)
@@ -78,8 +88,9 @@ class StandardMultiHeadAttention(nn.Module):
 
         # Apply causal mask
         if mask is not None:
-            if mask.dim() == 2:
-                mask = mask.unsqueeze(0).unsqueeze(0)  # (1, 1, N, N)
+            # Ensure mask has shape (1, 1, N, N) for proper broadcasting with (B, H, N, N) scores
+            while mask.dim() < 4:
+                mask = mask.unsqueeze(0)
             scores = scores.masked_fill(mask == 0, float('-inf'))
 
         attn_weights = F.softmax(scores, dim=-1)  # (B, H, N, N)
