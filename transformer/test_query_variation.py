@@ -148,11 +148,28 @@ def test_belief_similarity(model, input_ids):
             print(f"  Token {i}: {mu_batch[i, :5].cpu().numpy()}")
 
 
-def main():
-    print("Loading model...")
+def main(checkpoint_path: str = None):
+    """
+    Run query variation analysis on a trained model.
 
-    # Load checkpoint (UPDATE THIS PATH!)
-    checkpoint_path = "C:/Users/chris and christine/Desktop/Complete Refactor/transformer/checkpoints_publication/146_K=25_N=148_steps=450000_ffn_VFE_dynamic/best_model.pt"
+    Args:
+        checkpoint_path: Path to model checkpoint. If None, uses command line arg.
+    """
+    import argparse
+
+    if checkpoint_path is None:
+        parser = argparse.ArgumentParser(description='Analyze query-side variation in attention')
+        parser.add_argument('checkpoint', type=str, nargs='?', default=None,
+                          help='Path to model checkpoint (best_model.pt)')
+        args = parser.parse_args()
+        checkpoint_path = args.checkpoint
+
+    if checkpoint_path is None:
+        print("ERROR: No checkpoint path provided.")
+        print("Usage: python test_query_variation.py <path/to/best_model.pt>")
+        return
+
+    print("Loading model...")
 
     if not Path(checkpoint_path).exists():
         print(f"ERROR: Checkpoint not found at {checkpoint_path}")
