@@ -830,6 +830,86 @@ The key insight is that \emph{social structure creates epistemic consequences th
 
 The gauge-theoretic component of the framework opens particularly rich territory. Incommensurability between paradigms, the difficulty of interdisciplinary translation, and the costs of frame misalignment in collective action all receive geometric interpretations. The framework suggests that communication is not merely exchange of propositions but alignment of reference frames---a perspective with implications for understanding both everyday miscommunication and fundamental theoretical disagreements.
 
+\section{Extended Framework: Meta-Agents, Renormalization, and Participatory Dynamics}
+
+The derivations above treat agents as fixed entities interacting through belief dynamics. A richer framework---developed in detail in the companion manuscript on participatory information geometry---extends this to hierarchical multi-scale systems where agents themselves form and dissolve dynamically. This section sketches the sociological implications of four key constructions from that framework.
+
+\subsection{Meta-Agent Formation: Institutions as Emergent Collective Entities}
+
+When agents achieve sufficient belief coherence---measured by small KL divergence after gauge transport---they can form \emph{meta-agents}: higher-order collective entities that are not mere aggregates but autonomous dynamical systems with their own beliefs, priors, and gauge frames.
+
+\begin{definition}[Meta-Agent Formation Condition]
+A cluster of scale-$s$ agents $\{i, j, \ldots\}$ forms a scale-$(s+1)$ meta-agent when:
+\begin{equation}
+C_{\text{belief}} \cdot C_{\text{model}} > \Gamma_{\min}, \quad \text{where } C_{\text{belief}} = \exp\left(-\frac{1}{|S|}\sum_{i,j \in S} \text{KL}(q_i \| \Omega_{ij}[q_j])\right)
+\end{equation}
+and similarly for model coherence $C_{\text{model}}$.
+\end{definition}
+
+\paragraph{Sociological interpretation.} This formalizes the emergence of institutions, organizations, and collective actors. A family forms when individuals achieve sufficient alignment in beliefs about shared domestic reality. A scientific discipline forms when researchers achieve consensus on methods, exemplars, and evaluative standards. A nation forms when populations develop shared narratives, norms, and expectations. Crucially, the meta-agent is not a metaphor but a genuine dynamical entity: it evolves according to the same free energy minimization principles as individual agents, and it can influence its constituents through top-down feedback.
+
+\paragraph{The consensus-diversity balance.} The framework predicts a fundamental tension between consensus (enabling meta-agent formation and collective action) and diversity (preventing \emph{epistemic death}---the pathological limit where all agents become informationally identical). Groupthink represents excessive consensus; fragmentation represents insufficient consensus. Healthy institutions occupy the critical regime where coherence enables collective action while diversity preserves adaptive capacity. This provides a quantitative framework for analyzing organizational pathologies.
+
+\paragraph{Gauge covariance and organizational translation.} Different members of an organization may use different ``languages'' (gauge frames) while maintaining genuine alignment on underlying beliefs. The marketing department and engineering department may describe the same product differently, but if their beliefs are related by well-defined gauge transport $\Omega_{ij}$, they constitute a coherent meta-agent. Organizational dysfunction often corresponds to gauge mismatch: departments using incompatible frames with no well-defined translation.
+
+\subsection{Dynamical Renormalization: Scale Transitions in Social Systems}
+
+The formation of meta-agents implements an information-theoretic analog of renormalization group transformations. Instead of coarse-graining over physical space, we coarse-grain over \emph{belief coherence}---agents form meta-agents not because they are spatially proximate but because their beliefs align.
+
+\paragraph{Scale-invariant dynamics.} The free energy functional at scale $(s+1)$ has the same form as at scale $s$:
+\begin{equation}
+F^{(s+1)} = \sum_I \text{KL}(q_I^{(s+1)} \| p_I^{(s+1)}) + \sum_{IJ} \beta_{IJ}^{(s+1)} \text{KL}(q_I \| \Omega_{IJ}[q_J]) + \cdots
+\end{equation}
+This scale invariance suggests that the same dynamical principles govern individuals, groups, organizations, and societies---differing only in effective coupling constants and characteristic timescales.
+
+\paragraph{Emergent timescale hierarchy.} Meta-agents at higher scales evolve more slowly than their constituents:
+\begin{equation}
+\tau^{(0)} < \tau^{(1)} < \tau^{(2)} < \cdots < \tau^{(s_{\max})}
+\end{equation}
+This emerges from three mechanisms: spatial/informational averaging smooths out fast fluctuations, coordinated multi-agent updates require more time, and accumulated epistemic mass resists rapid change. The sociological implication is that institutional change is \emph{necessarily} slower than individual opinion change---not due to bureaucratic friction but due to the geometric structure of collective belief dynamics.
+
+\paragraph{Emergent properties.} Meta-agents exhibit properties absent at lower scales: longer coherence lengths (organizational culture spanning an entire company), higher precision (collective knowledge exceeding any individual's), and emergent coordination patterns (market behavior not reducible to individual trades). This provides a mathematical foundation for claims about ``emergent social properties'' that have long been debated in sociological theory.
+
+\subsection{The Ouroboros Tower: Cultural Hierarchies and Historical Memory}
+
+A key extension allows agents to receive priors not just from their immediate parent meta-agent but from \emph{all ancestral scales} simultaneously:
+\begin{align}
+p_i^{(s)} &\leftarrow \Omega_{i,I_1}[q_{I_1}^{(s+1)}] \quad \text{(parent: family)} \\
+h_i^{(s,1)} &\leftarrow \Omega_{i,I_2}[q_{I_2}^{(s+2)}] \quad \text{(grandparent: community)} \\
+h_i^{(s,2)} &\leftarrow \Omega_{i,I_3}[q_{I_3}^{(s+3)}] \quad \text{(great-grandparent: tradition)}
+\end{align}
+with exponentially decaying weights $\lambda_k = \lambda_0 \cdot \gamma^k$ for $k$-generational distance.
+
+\paragraph{Cultural heritage as hyperprior.} This formalizes how individuals are shaped not just by their immediate social context but by entire civilizational heritage. A scientist is influenced not only by their research group (scale 1) but by their discipline's paradigm (scale 2), the broader scientific tradition (scale 3), and Enlightenment epistemology (scale 4). Each ancestral level contributes a hyperprior with exponentially decaying weight, explaining why deep cultural assumptions are both influential and difficult to articulate explicitly.
+
+\paragraph{Tradition and innovation.} The exponential decay $\gamma^k$ predicts that recent ancestry matters more than distant, but distant ancestry still exerts measurable influence. This provides a quantitative model for the interplay between tradition (high-scale hyperpriors) and innovation (low-scale belief updates). Highly traditional societies correspond to large $\gamma$ (slow decay, strong ancestral influence); rapidly modernizing societies correspond to small $\gamma$ (fast decay, weak ancestral influence).
+
+\paragraph{Self-referential closure.} For agents at the top of the hierarchy, priors are formed by observing the entire system state---society watching itself through media, polling, collective representations. This creates Wheeler's ``self-excited circuit'': society constructs collective priors that flow down to shape individual beliefs, which aggregate into new collective representations, which society re-observes. The participatory loop has no external ground---neither individuals nor collectives are fundamental; both co-constitute through perpetual information exchange.
+
+\subsection{Bidirectional Information Flow: Micro-Macro Dynamics}
+
+The framework formalizes both bottom-up and top-down causation in social systems:
+
+\paragraph{Bottom-up: emergence.} Individual beliefs aggregate into collective beliefs through gauge-covariant averaging. Public opinion is not merely the sum of individual opinions but a geometrically constructed meta-belief that accounts for frame differences between individuals. This explains why aggregate measures (polls, markets, votes) can diverge from naive averages---the aggregation procedure matters.
+
+\paragraph{Top-down: constraint.} Meta-agent beliefs become priors for constituents through gauge-covariant transport: $p_i \leftarrow \Omega_{i,I}[q_I]$. Social norms, institutional expectations, and cultural scripts are not merely external pressures but become internalized priors that shape individual belief dynamics from within. The mechanism is not coercion but prior propagation---individuals adopt collective perspectives as their own expectations.
+
+\paragraph{Non-equilibrium dynamics.} A functioning participatory system must remain far from equilibrium. Complete consensus (epistemic death) would eliminate information gradients and freeze evolution. The framework predicts that healthy societies maintain sufficient diversity to sustain adaptation while achieving sufficient consensus to enable collective action. This tension drives perpetual social dynamics---there is no stable end-state, only ongoing negotiation between convergence and divergence.
+
+\subsection{Sociological Predictions from Participatory Dynamics}
+
+The participatory framework generates several distinctive predictions for social systems:
+
+\paragraph{Formation thresholds.} Organizational formation should exhibit threshold effects: below critical coherence $\Gamma_{\min}$, no stable meta-agent forms; above it, meta-agents emerge and persist. This predicts \emph{phase transitions} in organizational formation---gradual increases in belief alignment produce sudden emergence of collective identity.
+
+\paragraph{Hierarchical depth and inertia.} Individuals embedded in deep institutional hierarchies should update beliefs more slowly than those in shallow hierarchies, controlling for other factors. Each ancestral scale contributes hyperpriors that increase effective mass, explaining why bureaucrats in ancient institutions resist change more than entrepreneurs in startups.
+
+\paragraph{Self-observation effects.} Societies with more collective self-observation (pervasive media, frequent polling, social media analytics) should exhibit qualitatively different dynamics---potentially faster consensus formation but also increased susceptibility to collective delusions when self-observation feeds back into the observed system.
+
+\paragraph{Timescale ratios.} The framework predicts specific relationships between characteristic timescales at adjacent scales: $\tau^{(s+1)}/\tau^{(s)} = f(\beta, N, \sigma)$ where $f$ depends on coupling strengths, group sizes, and uncertainty. This could be empirically tested by comparing the rate of individual opinion change to the rate of institutional norm change across different organizational contexts.
+
+\paragraph{Gauge mismatch and organizational conflict.} The framework predicts that inter-organizational conflict should correlate with gauge mismatch $\|\Omega_{IJ} - I\|$ between organizational frames, independently of belief similarity. Two organizations with similar goals but different conceptual frameworks may conflict more intensely than organizations with opposed goals but aligned frames---because frame mismatch makes even agreement difficult to recognize.
+
 \appendix
 
 \section{Appendix: Technical Details}
