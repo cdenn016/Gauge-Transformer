@@ -16,77 +16,18 @@ Instead of mapping English words to BPE tokens, this script:
 This avoids the BPE mismatch problem.
 """
 
-import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from pathlib import Path
-import json
 import sys
 from collections import Counter
 
 # Add project to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from transformer.model import GaugeTransformerLM
-
-
-def load_model(checkpoint_path: str):
-    """Load trained model from checkpoint."""
-
-    checkpoint_dir = Path(checkpoint_path).parent
-    config_json_path = checkpoint_dir / "experiment_config.json"
-
-    # Start with default config
-    config = {
-        'vocab_size': 50257,
-        'embed_dim': 25,
-        'n_layers': 1,
-        'irrep_spec': [('ℓ0', 5, 1), ('ℓ1', 3, 3), ('ℓ2', 1, 5)],
-        'hidden_dim': 112,
-        'max_seq_len': 128,
-        'kappa_beta': 1.0,
-        'dropout': 0.1,
-        'pos_encoding_mode': 'learned',
-        'evolve_sigma': True,
-        'evolve_phi': False,
-        'tie_embeddings': True,
-        'use_diagonal_covariance': True,
-        'ffn_mode': 'variational_gradient_engine',
-    }
-
-    if config_json_path.exists():
-        print(f"Loading config from {config_json_path}")
-        with open(config_json_path, 'r') as f:
-            json_data = json.load(f)
-
-        if 'config' in json_data and isinstance(json_data['config'], dict):
-            config.update(json_data['config'])
-        else:
-            config.update(json_data)
-
-    # Add missing key translations
-    if 'kappa_beta' not in config and 'kappa_beta_base' in config:
-        config['kappa_beta'] = config['kappa_beta_base']
-    if 'use_diagonal_covariance' not in config and 'diagonal_covariance' in config:
-        config['use_diagonal_covariance'] = config['diagonal_covariance']
-
-    print(f"Config: K={config['embed_dim']}, vocab={config['vocab_size']}, "
-          f"layers={config['n_layers']}")
-
-    model = GaugeTransformerLM(config)
-
-    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
-    if 'model_state_dict' in checkpoint:
-        model.load_state_dict(checkpoint['model_state_dict'])
-    else:
-        model.load_state_dict(checkpoint)
-
-    print(f"✓ Loaded checkpoint")
-    model.eval()
-
-    return model, config
+from transformer.checkpoint_utils import load_model
 
 
 def get_frequent_tokens(n_tokens=100, dataset='wikitext-2'):
@@ -323,8 +264,26 @@ def analyze_embedding_diversity(mu_embeddings):
     print(f"{'='*70}\n")
 
 
-def main():
-    checkpoint_path = "C:/Users/chris and christine/Desktop/Complete Refactor/transformer/checkpoints_publication/180_so10_100_ffn_VFE_dynamic/best_model.pt"
+def main(checkpoint_path: str = None):
+    """
+    Visualize frequent token embeddings in belief space.
+
+    Args:
+        checkpoint_path: Path to model checkpoint. If None, uses command line arg.
+    """
+    import argparse
+
+    if checkpoint_path is None:
+        parser = argparse.ArgumentParser(description='Visualize frequent token embeddings')
+        parser.add_argument('checkpoint', type=str, nargs='?', default=None,
+                          help='Path to model checkpoint (best_model.pt)')
+        args = parser.parse_args()
+        checkpoint_path = args.checkpoint
+
+    if checkpoint_path is None:
+        print("ERROR: No checkpoint path provided.")
+        print("Usage: python visualize_belief_space_frequent.py <path/to/best_model.pt>")
+        return
 
     if not Path(checkpoint_path).exists():
         print(f"ERROR: Checkpoint not found at {checkpoint_path}")

@@ -168,15 +168,6 @@ def compute_softmax_weights(
 
     return weights
 
-    
-    # Package as dictionary mapping neighbor j → weight field
-    weights = {
-        j: beta_stack[i].astype(np.float32)
-        for i, j in enumerate(neighbor_list)
-    }
-    
-    return weights
-
 
 
 
