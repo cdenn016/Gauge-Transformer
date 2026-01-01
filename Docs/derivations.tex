@@ -507,6 +507,7 @@ M_i = \Sigma_{p,i}^{-1} + \Sigma_{o,i}^{-1} + \sum_j \beta_{ij} \tilde{\Sigma}_{
 
 with $\tilde{\Sigma}_{q,j}^{-1} = \Omega_{ij}\Sigma_{q,j}^{-1}\Omega_{ij}^T$ the transported neighbor precision.
 
+
 \textbf{Step 2: Effect of high prior precision.}
 When prior precision $\Sigma_p^{-1}$ is large (agent is confident in prior):
 \begin{equation}
@@ -525,6 +526,7 @@ M_i \text{ large} \implies M_i^{-1} \text{ small} \implies \frac{d\mu_i}{dt} \te
 \end{equation}
 
 Note the crucial distinction: $\beta_{ji}$ (others attending to $i$) contributes to $i$'s mass, not $\beta_{ij}$ (whom $i$ attends to).
+
 
 \textbf{Step 4: Asymmetric response to evidence.}
 Consider evidence $o$ that contradicts agent $i$'s belief. The observation term contributes:
@@ -603,6 +605,7 @@ M_i \approx \Sigma_p^{-1} + \Sigma_o^{-1} + \sum_j (\text{Strength}_j \times \te
 \end{equation}
 
 where the final term captures ``recoil''---having followers increases one's own inertia.
+
 
 \subsection{What the VFE Framework Adds}
 
