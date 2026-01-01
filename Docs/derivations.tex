@@ -57,15 +57,9 @@ F[q, p] &= \sum_i \alpha \int \chi_i(c) \KL(q_i \| p_i) \, dc \label{eq:vfe_self
 &\quad - \sum_i \lambda_{\text{obs}} \int \chi_i(c) \mathbb{E}_q[\log p(o|x)] \, dc \label{eq:vfe_obs}
 \end{align}
 
-where:
-\begin{itemize}[leftmargin=*]
-\item \textbf{Self-coupling term} \eqref{eq:vfe_self}: Encourages beliefs $q_i$ to match priors $p_i$. The strength $\alpha$ controls resistance to belief change.
-\item \textbf{Belief alignment term} \eqref{eq:vfe_belief}: Encourages agents to align beliefs with their neighbors. The weights $\beta_{ij}(c)$ are dynamically computed via softmax attention (see below).
-\item \textbf{Prior alignment term} \eqref{eq:vfe_prior}: Encourages agents to align priors (cultural norms, initial opinions). The weights $\gamma_{ij}(c)$ are also softmax-based.
-\item \textbf{Observation term} \eqref{eq:vfe_obs}: Encourages beliefs to explain observed data $o$.
-\end{itemize}
+Each term serves a distinct functional role in belief dynamics. The self-coupling term \eqref{eq:vfe_self} penalizes deviation from prior expectations, with the strength parameter $\alpha$ controlling resistance to belief change; this captures the cognitive cost of abandoning established world models. The belief alignment term \eqref{eq:vfe_belief} encourages agents to align their current beliefs with those of their neighbors, where the attention weights $\beta_{ij}(c)$ are computed dynamically via softmax (detailed below) rather than fixed exogenously. The prior alignment term \eqref{eq:vfe_prior} operates analogously on priors themselves, capturing slower cultural or normative alignment with the softmax-based weights $\gamma_{ij}(c)$. Finally, the observation term \eqref{eq:vfe_obs} grounds beliefs in sensory evidence by penalizing distributions that fail to explain observed data $o$.
 
-The spatial integration weights $\chi_i(c) \in [0,1]$ represent agent $i$'s support (where they have beliefs), and $\chi_{ij} = \chi_i \cdot \chi_j$ captures overlap between agents.
+The spatial integration weights $\chi_i(c) \in [0,1]$ represent agent $i$'s epistemic support---the regions of state space where they maintain active beliefs---and $\chi_{ij} = \chi_i \cdot \chi_j$ captures the overlap between agents' cognitive domains.
 
 \subsubsection{Softmax Attention Mechanism}
 
@@ -83,15 +77,11 @@ The transport operator $\Omega_{ij} \in SO(K)$ accounts for gauge transformation
 
 The natural gradient descent dynamics on the statistical manifold are governed by the inverse Fisher metric (mass matrix):
 \begin{equation}
-M_i(\theta) = \Sigma_{p,i}^{-1} + \sum_j \beta_{ij}(\theta) \, \Omega_{ij} \Sigma_{q,j}^{-1} \Omega_{ij}^T
+M_i(\theta) = \Sigma_{p,i}^{-1} + \Sigma_{o,i}^{-1} + \sum_j \beta_{ij}(\theta) \, \Omega_{ij} \Sigma_{q,j}^{-1} \Omega_{ij}^T + \sum_j \beta_{ji}(\theta) \, \Sigma_{q,i}^{-1}
 \label{eq:mass_matrix}
 \end{equation}
 
-This matrix has two components:
-\begin{itemize}[leftmargin=*]
-\item \textbf{Bare mass} $\Sigma_{p,i}^{-1}$: Resistance to change from prior beliefs. High prior precision (low $\Sigma_p$) creates high inertia.
-\item \textbf{Social mass} $\sum_j \beta_{ij} \Omega_{ij} \Sigma_{q,j}^{-1} \Omega_{ij}^T$: Additional inertia from attention received. Agents with many followers (high $\sum_j \beta_{ji}$) acquire epistemic rigidity.
-\end{itemize}
+This matrix comprises four physically interpretable contributions. The first term, $\Sigma_{p,i}^{-1}$, represents \emph{prior mass}---the resistance to belief change arising from established expectations, where high prior precision (low $\Sigma_p$) creates correspondingly high inertia. The second term, $\Sigma_{o,i}^{-1}$, captures \emph{observation mass}, reflecting how precise sensory evidence anchors beliefs against social pressure; agents with strong perceptual grounding are less susceptible to influence. The third term, $\sum_j \beta_{ij} \Omega_{ij} \Sigma_{q,j}^{-1} \Omega_{ij}^T$, constitutes the \emph{incoming social mass}---the accumulated inertia from attending to confident neighbors, where being pulled toward precise sources paradoxically increases one's own resistance to further change. Most notably, the fourth term, $\sum_j \beta_{ji} \Sigma_{q,i}^{-1}$, represents \emph{outgoing social mass}: the recoil from exerting influence on others. Agents with many followers (high $\sum_j \beta_{ji}$) acquire epistemic rigidity not through irrationality but through geometric necessity---the ``burden of leadership'' that renders opinion leaders resistant to revision.
 
 \subsubsection{Dynamics: Overdamped vs. Hamiltonian Regimes}
 
@@ -212,22 +202,18 @@ Agents pay more attention to similar others, creating homophily as an emergent p
 
 \paragraph{Uncertainty dynamics.} Removing condition (ii), beliefs are full distributions $q_i = \N(\mu_i, \Sigma_i)$. Uncertainty can increase or decrease over time, capturing phenomena like pluralistic ignorance or confidence polarization that mean-only models miss.
 
-\paragraph{Epistemic inertia.} When agents receive asymmetric attention (some have many followers), the social mass term in \eqref{eq:mass_matrix} becomes significant:
+\paragraph{Epistemic inertia.} When agents receive asymmetric attention (some have many followers), the outgoing social mass term in \eqref{eq:mass_matrix} becomes significant:
 \begin{equation}
-M_i = \Sigma_p^{-1} + \sum_j \beta_{ji} \Sigma_{q,j}^{-1}
+M_i = \Sigma_p^{-1} + \Sigma_o^{-1} + \sum_j \beta_{ij} \tilde{\Sigma}_{q,j}^{-1} + \sum_j \beta_{ji} \Sigma_{q,i}^{-1}
 \end{equation}
 
-High-attention agents (influencers, opinion leaders) develop higher mass, making their beliefs more resistant to change---a mechanistic explanation for rigidity in positions of authority.
+where $\tilde{\Sigma}_{q,j}^{-1} = \Omega_{ij}\Sigma_{q,j}^{-1}\Omega_{ij}^T$ is the transported precision. High-attention agents (influencers, opinion leaders) develop higher mass via the $\sum_j \beta_{ji}$ term, making their beliefs more resistant to change---a mechanistic explanation for rigidity in positions of authority.
 
 \paragraph{Underdamped regime.} Removing condition (i) and allowing low friction $\gamma < \gamma_c$, beliefs can overshoot equilibrium and oscillate. This provides a potential mechanism for opinion cycling and instability in rapid social media discourse.
 
 \subsection{Novel Predictions}
 
-\begin{enumerate}
-\item \textbf{Attention shifts:} Influence weights $\beta_{ij}(t)$ should evolve as beliefs converge, testable via longitudinal network analysis.
-\item \textbf{Heterogeneous convergence:} Agents with many followers should update more slowly than peripheral agents, even controlling for initial belief extremity.
-\item \textbf{Uncertainty reduction:} As beliefs align, agents should report increased confidence (decreasing $\Sigma_i$), measurable via confidence ratings.
-\end{enumerate}
+The unified framework generates several testable predictions beyond DeGroot's original model. First, influence weights $\beta_{ij}(t)$ should evolve dynamically as beliefs converge, a prediction testable via longitudinal network analysis tracking communication patterns alongside opinion change. Second, agents occupying central network positions---those with many followers---should update their beliefs more slowly than peripheral agents, even when controlling for initial belief extremity; this heterogeneous convergence follows from the asymmetric mass accumulation in \eqref{eq:mass_matrix}. Third, as beliefs align through social learning, agents should report increased subjective confidence (manifested as decreasing $\Sigma_i$), a prediction requiring measurement of confidence intervals rather than point estimates alone.
 
 \section{Derivation 2: Friedkin-Johnsen Opinion Dynamics (Rigorous)}
 
@@ -323,35 +309,17 @@ The key sociological insight is that stubbornness $\alpha_i'$ in \eqref{eq:emerg
 
 \subsection{Dynamic Stubbornness and Social Context}
 
-Unlike the classical model where $\alpha_i$ is constant, the VFE framework predicts that stubbornness changes with social context. Consider two agents with identical priors but different network positions:
-\begin{itemize}
-\item \textbf{Agent A:} Embedded in dense network with $\sum_j w_{Aj}$ large. Lower equilibrium stubbornness $\alpha_A'$, but higher inertial mass $M_A$ (from received attention).
-\item \textbf{Agent B:} Peripheral with $\sum_j w_{Bj}$ small. Higher equilibrium stubbornness $\alpha_B'$, but lower inertial mass $M_B$.
-\end{itemize}
-
-This generates the testable prediction: centrally-located agents should express opinions closer to the group mean (low $\alpha'$) but update more slowly over time (high $M$).
+Unlike the classical model where $\alpha_i$ is constant, the VFE framework predicts that stubbornness changes with social context. Consider two agents with identical priors but different network positions. Agent A, embedded in a dense network with $\sum_j w_{Aj}$ large, exhibits lower equilibrium stubbornness $\alpha_A'$ due to intense social pressure, yet paradoxically develops higher inertial mass $M_A$ from the attention received. Agent B, occupying a peripheral position with $\sum_j w_{Bj}$ small, maintains higher equilibrium stubbornness $\alpha_B'$ but lower inertial mass $M_B$. This dissociation between equilibrium position and dynamic responsiveness generates the testable prediction that centrally-located agents should express opinions closer to the group mean (low $\alpha'$) while simultaneously updating more slowly over time (high $M$).
 
 \subsection{Novel Predictions}
 
-\begin{enumerate}
-\item \textbf{Network position effects:} Stubbornness should correlate with network peripherality, controlling for prior beliefs.
-\item \textbf{Inertia vs. stubbornness:} In time-series data, distinguish equilibrium displacement (stubbornness) from update rate (inertia).
-\item \textbf{Context-dependence:} The same individual should exhibit different stubbornness in different social contexts (e.g., work vs. friend networks).
-\end{enumerate}
+The framework yields three principal predictions for Friedkin-Johnsen dynamics. Network position effects should manifest as a correlation between stubbornness and network peripherality, controlling for prior beliefs. The distinction between equilibrium displacement (stubbornness) and update rate (inertia) should be empirically separable in time-series data, as these quantities derive from different terms in the framework. Perhaps most importantly, the same individual should exhibit different degrees of stubbornness across different social contexts---for instance, between professional and personal networks---contradicting trait-based theories that treat resistance to influence as a stable personality characteristic.
 
 \section{Derivation 3: Echo Chambers and Polarization (Rigorous)}
 
 \subsection{Phenomenon}
 
-Echo chambers describe the self-reinforcing process whereby:
-\begin{enumerate}
-\item Individuals preferentially attend to similar others (homophily)
-\item In-group beliefs converge (assimilation)
-\item Out-group beliefs diverge (polarization)
-\item Cross-group communication declines (isolation)
-\end{enumerate}
-
-This phenomenon has become central to understanding political polarization, radicalization, and the epistemic effects of social media.
+Echo chambers constitute a self-reinforcing dynamical process with four characteristic stages. Initially, individuals preferentially attend to similar others---a phenomenon termed homophily. This selective attention causes in-group beliefs to converge through assimilation, while simultaneously causing out-group beliefs to diverge through polarization. The process culminates in isolation, as cross-group communication declines to negligible levels. This phenomenon has become central to understanding political polarization, radicalization, and the epistemic consequences of algorithmically-mediated social media.
 
 \subsection{Classical Approaches}
 
@@ -378,13 +346,7 @@ The natural gradient flow is:
 \frac{d\mu_i}{dt} \propto \sum_j \beta_{ij}(\mu) (\mu_j - \mu_i)
 \end{equation}
 
-Consider the dynamics:
-\begin{enumerate}[label=\arabic*.]
-\item Agents with similar beliefs attend to each other (high $\beta_{ij}$)
-\item Mutual attention causes beliefs to converge: $\mu_i \to \mu_j$
-\item Convergence increases attention further: $\beta_{ij} \uparrow$
-\item Eventually cross-group attention vanishes: $\beta_{ij}^{\text{cross}} \to 0$
-\end{enumerate}
+This creates a positive feedback loop through the following mechanism. Agents with similar beliefs attend preferentially to each other, generating high $\beta_{ij}$. This mutual attention causes their beliefs to converge further, $\mu_i \to \mu_j$, which in turn increases attention still more as KL divergence decreases. The process continues until cross-group attention effectively vanishes, $\beta_{ij}^{\text{cross}} \to 0$, leaving the population fragmented into internally cohesive but mutually isolated clusters.
 
 \textbf{Step 3: Stability of polarized states.}
 Consider two groups $A$ and $B$ with means $\mu_A$ and $\mu_B$. Within-group attention is:
@@ -440,11 +402,7 @@ Interventions to reduce polarization should target $\kappa_\beta$: increasing ex
 
 \subsection{Novel Predictions}
 
-\begin{enumerate}
-\item \textbf{Phase transition:} Vary attention selectivity experimentally; predict sharp onset of polarization at critical value.
-\item \textbf{Reversibility:} Polarized groups can de-polarize if $\kappa_\beta$ is raised (increased cross-group exposure) or if uncertainty increases (epistemic humility).
-\item \textbf{Asymmetric polarization:} Smaller groups should polarize more easily (lower threshold) than large groups, due to denominator in \eqref{eq:polarization_threshold}.
-\end{enumerate}
+The framework generates three principal predictions concerning echo chamber dynamics. First, varying attention selectivity experimentally should reveal a sharp phase transition: polarization should emerge abruptly at a critical value of $\kappa_\beta$ rather than gradually, analogous to thermodynamic phase transitions. Second, polarized states should be reversible under appropriate interventions---raising $\kappa_\beta$ through increased cross-group exposure, or increasing epistemic uncertainty $\sigma^2$ through epistemic humility interventions, can in principle dissolve echo chambers by restoring cross-group attention. Third, smaller groups should polarize more easily than larger ones, as the threshold in \eqref{eq:polarization_threshold} scales with $\log N$; this asymmetric polarization may explain why small online communities often exhibit more extreme views than larger populations.
 
 \section{Derivation 4: Bounded Confidence Models (Solid Approximation)}
 
@@ -507,39 +465,17 @@ which matches the Hegselmann-Krause update (in continuous time). \qed
 
 \subsection{Key Difference: Soft vs. Hard Threshold}
 
-It is crucial to note that the VFE framework produces a \emph{soft threshold} (exponential decay) rather than the \emph{hard cutoff} of classical bounded confidence:
-\begin{itemize}
-\item \textbf{Hegselmann-Krause:} $\beta_{ij} = \begin{cases} 1/|N_i| & \text{if } d < \epsilon \\ 0 & \text{if } d \geq \epsilon \end{cases}$ (discontinuous)
-\item \textbf{VFE Framework:} $\beta_{ij} = \exp(-d^2 / (2\sigma^2\kappa_\beta)) / Z_i$ (continuous)
-\end{itemize}
+A crucial distinction separates the VFE framework from classical bounded confidence models. Hegselmann-Krause employs a hard cutoff, $\beta_{ij} = 1/|N_i|$ if $d < \epsilon$ and zero otherwise, creating a discontinuous attention function. The VFE framework instead produces a soft threshold via the exponential form $\beta_{ij} = \exp(-d^2 / (2\sigma^2\kappa_\beta)) / Z_i$, which decays smoothly with distance.
 
-This difference has two implications:
-\begin{enumerate}
-\item \textbf{Realism:} Real social attention likely has smooth falloff rather than abrupt cutoffs, favoring the VFE version.
-\item \textbf{Mathematical tractability:} Soft thresholds are differentiable, enabling analytic study of stability and bifurcations.
-\end{enumerate}
+This distinction carries two significant implications. Regarding realism, actual social attention likely exhibits smooth falloff rather than abrupt cutoffs; people do not entirely ignore slightly-too-distant opinions but rather attend to them with diminishing weight. The soft threshold better captures this psychological reality. Regarding mathematical tractability, soft thresholds are differentiable everywhere, enabling analytic study of stability, bifurcations, and phase transitions that would be inaccessible with discontinuous dynamics.
 
 \subsection{Adaptive Threshold}
 
-Unlike fixed-$\epsilon$ models, the effective threshold in the VFE framework depends on:
-\begin{equation}
-\epsilon_{\text{eff}} = f(\sigma, \kappa_\beta, N)
-\end{equation}
-
-This generates novel predictions:
-\begin{itemize}
-\item \textbf{Uncertainty effect:} Higher uncertainty $\sigma$ increases tolerance (larger $\epsilon$), consistent with findings that epistemic humility reduces polarization.
-\item \textbf{Group size effect:} Larger groups (high $N$) have wider effective thresholds, potentially explaining why small echo chambers are more extreme than large ones.
-\item \textbf{Context-dependence:} The same individual should exhibit different thresholds in different contexts (varying $\kappa_\beta$).
-\end{itemize}
+Unlike fixed-$\epsilon$ models, the effective threshold in the VFE framework depends dynamically on multiple parameters through the relationship $\epsilon_{\text{eff}} = f(\sigma, \kappa_\beta, N)$. This functional dependence generates several novel predictions. The uncertainty effect predicts that higher epistemic uncertainty $\sigma$ increases tolerance for distant opinions (larger effective $\epsilon$), consistent with empirical findings that epistemic humility reduces polarization. The group size effect predicts that larger groups exhibit wider effective thresholds due to the $\log N$ scaling, potentially explaining why small online echo chambers often display more extreme views than larger populations. Finally, context-dependence implies that the same individual should exhibit different tolerance thresholds across different social contexts characterized by varying $\kappa_\beta$---a person might engage with distant opinions in academic settings (high $\kappa_\beta$) while ignoring them in partisan political contexts (low $\kappa_\beta$).
 
 \subsection{Novel Predictions}
 
-\begin{enumerate}
-\item \textbf{Smooth transitions:} No sharp clustering boundaries; instead, gradual attention decay measurable via interaction frequencies.
-\item \textbf{Temperature manipulation:} Experimentally vary $\kappa_\beta$ (e.g., via platform design); predict changes in effective threshold.
-\item \textbf{Uncertainty effects:} Inducing epistemic humility (raising $\sigma$) should increase cross-group engagement.
-\end{enumerate}
+The bounded confidence derivation yields three testable predictions. Rather than sharp clustering boundaries, the soft threshold predicts gradual attention decay measurable via interaction frequencies across opinion distances. Experimental manipulation of $\kappa_\beta$---for instance, through platform design choices that encourage or discourage engagement with diverse content---should produce predictable changes in effective tolerance thresholds. Interventions that induce epistemic humility, operationalized as raising subjective uncertainty $\sigma$, should measurably increase cross-group engagement by widening the effective confidence bound.
 
 \section{Derivation 5: Confirmation Bias (Requires Natural Gradient)}
 
@@ -564,10 +500,13 @@ The update dynamics are:
 \frac{d\mu_i}{dt} = -M_i^{-1} \nabla_{\mu_i} F
 \end{equation}
 
-where:
+where the full mass matrix is:
 \begin{equation}
-M_i = \Sigma_{p,i}^{-1} + \sum_j \beta_{ij} \Sigma_{q,j}^{-1}
+M_i = \Sigma_{p,i}^{-1} + \Sigma_{o,i}^{-1} + \sum_j \beta_{ij} \tilde{\Sigma}_{q,j}^{-1} + \sum_j \beta_{ji} \Sigma_{q,i}^{-1}
 \end{equation}
+
+with $\tilde{\Sigma}_{q,j}^{-1} = \Omega_{ij}\Sigma_{q,j}^{-1}\Omega_{ij}^T$ the transported neighbor precision.
+
 
 \textbf{Step 2: Effect of high prior precision.}
 When prior precision $\Sigma_p^{-1}$ is large (agent is confident in prior):
@@ -581,10 +520,13 @@ For the same force $\nabla F$, the velocity is small:
 \end{equation}
 
 \textbf{Step 3: Effect of social mass.}
-When $\sum_j \beta_{ij} \Sigma_{q,j}^{-1}$ is large (many precise followers paying attention):
+When $\sum_j \beta_{ji} \Sigma_{q,i}^{-1}$ is large (many followers paying attention to agent $i$):
 \begin{equation}
 M_i \text{ large} \implies M_i^{-1} \text{ small} \implies \frac{d\mu_i}{dt} \text{ small}
 \end{equation}
+
+Note the crucial distinction: $\beta_{ji}$ (others attending to $i$) contributes to $i$'s mass, not $\beta_{ij}$ (whom $i$ attends to).
+
 
 \textbf{Step 4: Asymmetric response to evidence.}
 Consider evidence $o$ that contradicts agent $i$'s belief. The observation term contributes:
@@ -594,16 +536,10 @@ Consider evidence $o$ that contradicts agent $i$'s belief. The observation term 
 
 Update magnitude:
 \begin{equation}
-\Delta \mu_i \propto M_i^{-1} (\mu_i - \mu_{\text{evidence}}) = \left[\Sigma_p^{-1} + \sum_j \beta_{ij} \Sigma_{q,j}^{-1}\right]^{-1} (\mu_i - \mu_{\text{evidence}})
+\Delta \mu_i \propto M_i^{-1} (\mu_i - \mu_{\text{evidence}}) = \left[\Sigma_p^{-1} + \Sigma_o^{-1} + \sum_j \beta_{ij} \tilde{\Sigma}_{q,j}^{-1} + \sum_j \beta_{ji} \Sigma_{q,i}^{-1}\right]^{-1} (\mu_i - \mu_{\text{evidence}})
 \end{equation}
 
-Agents with:
-\begin{itemize}
-\item \textbf{High prior precision} (low $\Sigma_p$) → large $M$ → small updates
-\item \textbf{Many followers} (large $\sum_j \beta_{ji}$) → large $M$ → small updates
-\end{itemize}
-
-This creates confirmation bias: beliefs resistant to contradictory evidence. \qed
+The magnitude of belief updates thus depends inversely on the total epistemic mass. Agents with high prior precision (low $\Sigma_p$) develop large mass and correspondingly small updates. Those with strong sensory grounding (low $\Sigma_o$) remain anchored against social pressure. Agents with many followers (large $\sum_j \beta_{ji}$) accumulate substantial outgoing social mass, rendering them resistant to new information. Even agents who merely attend to confident neighbors (large $\sum_j \beta_{ij}\tilde{\Sigma}_{q,j}^{-1}$) develop increased incoming social mass. Through these four mechanisms, confirmation bias emerges naturally: beliefs become resistant to contradictory evidence not through motivated reasoning but through the geometric structure of the statistical manifold. \qed
 \end{proof}
 
 \subsection{Critical Assumption: Natural Gradient}
@@ -616,60 +552,34 @@ This derivation requires interpreting the dynamics as \emph{natural gradient des
 
 \subsection{Social Component of Confirmation Bias}
 
-The novel insight is the \emph{social mass} term $\sum_j \beta_{ij} \Sigma_{q,j}^{-1}$ in the mass matrix. This predicts:
-\begin{enumerate}
-\item \textbf{Audience-dependent bias:} The same individual should exhibit stronger confirmation bias when they have many followers (e.g., public intellectuals vs. private citizens).
-\item \textbf{Precision-weighted:} Followers with high confidence contribute more to mass, suggesting that confident audiences amplify bias more than uncertain ones.
-\item \textbf{Dynamic:} As attention structure changes (e.g., going viral), confirmation bias should increase in real-time.
-\end{enumerate}
+The novel insight of this derivation concerns the \emph{outgoing social mass} term $\sum_j \beta_{ji} \Sigma_{q,i}^{-1}$---representing the recoil from influencing others. This term generates three distinctive predictions. First, confirmation bias should be audience-dependent: the same individual should exhibit stronger resistance to counter-evidence when they have many followers (as with public intellectuals compared to private citizens), because $\sum_j \beta_{ji}$ increases with audience size. Second, the effect is self-precision-weighted, scaling with agent $i$'s own confidence $\Sigma_{q,i}^{-1}$; confident leaders therefore experience more rigidity than uncertain ones with identical follower counts. Third, the effect is dynamic: as attention structure changes---for instance, when content goes viral---confirmation bias should increase in real-time through the evolving $\beta_{ji}$ terms.
 
 \subsection{Novel Predictions}
 
-\begin{enumerate}
-\item \textbf{Follower effect:} Experimentally manipulate perceived audience size; predict increased resistance to counter-evidence.
-\item \textbf{Precision effect:} Counter-evidence from confident sources should be more (not less) resisted if it triggers defensive doubling-down.
-\item \textbf{Temporal dynamics:} Sudden attention spikes (going viral) should temporarily increase confirmation bias during the attention peak.
-\end{enumerate}
+The confirmation bias derivation yields three experimentally tractable predictions. The follower effect predicts that manipulating perceived audience size should produce corresponding changes in resistance to counter-evidence. The precision effect, somewhat counterintuitively, predicts that counter-evidence from highly confident sources may be \emph{more} strongly resisted if it triggers defensive responses that increase the target's own precision. The temporal dynamics prediction suggests that sudden attention spikes---as when content goes viral---should produce temporarily elevated confirmation bias during the attention peak, with subsequent relaxation as attention disperses.
 
 \section{Derivation 6: Social Impact Theory (Interpretive Mapping)}
 
 \subsection{Classical Formulation}
 
-Latané's Social Impact Theory (1981) posits that influence is a multiplicative function of:
+Latané's Social Impact Theory (1981) posits that social influence is a multiplicative function of three factors:
 \begin{equation}
 \text{Impact} = f(\text{Strength} \times \text{Immediacy} \times \text{Number})
 \label{eq:sit_classical}
 \end{equation}
 
-where:
-\begin{itemize}
-\item \textbf{Strength:} Expertise, status, power of the source
-\item \textbf{Immediacy:} Proximity in space or time
-\item \textbf{Number:} How many sources are present
-\end{itemize}
-
-This qualitative principle has been widely applied but lacks a quantitative mechanistic formulation.
+Here strength encompasses the expertise, status, and power of the influence source; immediacy captures proximity in space or time; and number reflects how many sources are simultaneously present. This qualitative principle has been widely applied across social psychology but has historically lacked a quantitative mechanistic formulation that would render it precisely testable.
 
 \subsection{Mapping to VFE Framework}
 
 The mass matrix \eqref{eq:mass_matrix} provides a natural quantitative interpretation of Latané's factors:
 \begin{equation}
-M_i = \Sigma_p^{-1} + \sum_j \beta_{ij} \Omega_{ij} \Sigma_{q,j}^{-1} \Omega_{ij}^T
+M_i = \Sigma_p^{-1} + \Sigma_o^{-1} + \sum_j \beta_{ij} \Omega_{ij} \Sigma_{q,j}^{-1} \Omega_{ij}^T + \sum_j \beta_{ji} \Sigma_{q,i}^{-1}
 \end{equation}
 
-\paragraph{Strength $\leftrightarrow$ $\Sigma_{q,j}^{-1}$.} Source precision (confidence, expertise) contributes to mass:
-\begin{itemize}
-\item Experts have high precision → high $\Sigma_q^{-1}$ → large contribution to target's mass
-\item Uncertain sources have low precision → low $\Sigma_q^{-1}$ → small contribution
-\end{itemize}
+\paragraph{Strength $\leftrightarrow$ $\Sigma_{q,j}^{-1}$.} Source precision---operationalized as confidence or expertise---contributes directly to the mass experienced by the target. Experts possess high precision (large $\Sigma_q^{-1}$) and consequently make large contributions to target mass, while uncertain sources with low precision contribute negligibly. This provides a mechanistic account of why expert opinions carry more weight: they literally increase the epistemic inertia of those who attend to them.
 
-\paragraph{Immediacy $\leftrightarrow$ Transport penalty $\|\Omega_{ij} - I\|$.} Spatial/temporal distance enters through gauge transformations:
-\begin{itemize}
-\item Close agents: $\Omega_{ij} \approx I$ → small KL penalty → high $\beta_{ij}$
-\item Distant agents: $\Omega_{ij}$ rotated → large KL penalty → low $\beta_{ij}$
-\end{itemize}
-
-The immediacy function emerges from softmax:
+\paragraph{Immediacy $\leftrightarrow$ Transport penalty $\|\Omega_{ij} - I\|$.} Spatial and temporal distance enter the framework through gauge transformations between reference frames. Agents who are ``close'' in the relevant sense have nearly aligned frames ($\Omega_{ij} \approx I$), incurring small KL penalties and receiving high attention weights $\beta_{ij}$. Distant agents, whose frames are significantly rotated, incur large KL penalties and receive correspondingly low attention. The immediacy function thus emerges naturally from the softmax mechanism:
 \begin{equation}
 f_{\text{imm}}(\Omega_{ij}) = \exp(-\|\Omega_{ij} - I\|_F^2 / \kappa_\beta)
 \end{equation}
@@ -690,9 +600,12 @@ In scalar form (for simplicity):
 
 Total impact:
 \begin{equation}
-M_i \approx \Sigma_p^{-1} + \sum_j (\text{Strength}_j \times \text{Immediacy}_{ij} \times \beta_{ij})
+M_i \approx \Sigma_p^{-1} + \Sigma_o^{-1} + \sum_j (\text{Strength}_j \times \text{Immediacy}_{ij} \times \beta_{ij}) + \sum_j (\text{Self-precision} \times \beta_{ji})
 \label{eq:sit_vfe}
 \end{equation}
+
+where the final term captures ``recoil''---having followers increases one's own inertia.
+
 
 \subsection{What the VFE Framework Adds}
 
@@ -700,10 +613,10 @@ M_i \approx \Sigma_p^{-1} + \sum_j (\text{Strength}_j \times \text{Immediacy}_{i
 
 \paragraph{Time-varying impact.} As beliefs and attention evolve, mass changes dynamically:
 \begin{equation}
-M_i(t) = \Sigma_p^{-1} + \sum_j \beta_{ij}(t) \Sigma_{q,j}(t)^{-1}
+M_i(t) = \Sigma_p^{-1} + \Sigma_o^{-1} + \sum_j \beta_{ij}(t) \tilde{\Sigma}_{q,j}(t)^{-1} + \sum_j \beta_{ji}(t) \Sigma_{q,i}(t)^{-1}
 \end{equation}
 
-This captures how influence waxes and wanes with changing confidence and attention.
+This captures how influence waxes and wanes with changing confidence, attention, and audience structure.
 
 \paragraph{Asymmetry.} Social impact is not reciprocal:
 \begin{equation}
@@ -712,14 +625,7 @@ This captures how influence waxes and wanes with changing confidence and attenti
 
 High-status sources influence low-status targets more than the reverse, even with symmetric communication.
 
-\paragraph{Testability.} Each component can be measured independently:
-\begin{itemize}
-\item Strength: Confidence ratings, expertise measures
-\item Immediacy: Physical distance, temporal lags, frame alignment
-\item Number: Network degree, audience size
-\end{itemize}
-
-Then test whether the combined effect matches \eqref{eq:sit_vfe}.
+\paragraph{Testability.} Each component of the VFE formulation admits independent measurement: strength through confidence ratings and expertise assessments, immediacy through physical distance, temporal lags, and measures of frame alignment, and number through network degree and audience size metrics. The framework becomes testable by measuring these components separately and then verifying whether their combined effect matches the quantitative predictions of \eqref{eq:sit_vfe}.
 
 \subsection{Caveat: Interpretive Mapping}
 
@@ -727,11 +633,7 @@ This is an \emph{interpretive correspondence}, not a formal equivalence. Latané
 
 \subsection{Novel Predictions}
 
-\begin{enumerate}
-\item \textbf{Confidence modulation:} Impact should scale with source confidence $\Sigma_q^{-1}$, testable by manipulating perceived expertise.
-\item \textbf{Frame alignment:} Sources in ``different languages'' (high $\|\Omega - I\|$) should have reduced impact, even if physically proximate.
-\item \textbf{Temporal decay:} Impact should decline with communication lag, with decay rate determined by $\kappa_\beta$.
-\end{enumerate}
+The Social Impact Theory mapping generates three distinctive predictions. The confidence modulation prediction states that impact should scale with source confidence $\Sigma_q^{-1}$, testable by experimentally manipulating perceived expertise while holding other factors constant. The frame alignment prediction addresses the phenomenon of ``talking past each other'': sources operating in different conceptual frameworks (high $\|\Omega - I\|$) should exert reduced impact even when physically proximate, suggesting that shared language and conceptual alignment matter independently of spatial proximity. The temporal decay prediction states that impact should decline with communication lag according to a specific functional form, with decay rate determined by the attention temperature $\kappa_\beta$.
 
 \section{Summary Table: Derivation Quality}
 
@@ -755,25 +657,15 @@ Social Impact Theory & $\checkmark\checkmark$ & Interpretive & Qualitative corre
 
 \section{Novel Predictions Summary}
 
-Beyond recovering classical models, the VFE framework generates novel empirical predictions:
+Beyond recovering classical models, the VFE framework generates novel empirical predictions that distinguish it from existing theories.
 
-\begin{enumerate}
-\item \textbf{Dynamic attention} ($\beta_{ij}(t)$ changes): Influence networks should restructure as beliefs converge/diverge, measurable via longitudinal data.
+The prediction of \emph{dynamic attention} states that influence networks should restructure as beliefs converge or diverge, with $\beta_{ij}(t)$ evolving in measurable ways via longitudinal network data. The \emph{epistemic inertia} prediction asserts that agents receiving high social attention should update their beliefs more slowly than peripheral agents, controlling for prior strength; this is testable via social media data (Twitter, Metaculus) tracking opinion leaders' update rates. The \emph{uncertainty dynamics} prediction states that subjective confidence should increase with consensus and decrease with exposure to diverse views, requiring measurement of confidence intervals rather than point estimates alone.
 
-\item \textbf{Epistemic inertia} (followers → rigidity): Agents receiving high attention should update beliefs more slowly, controlling for prior strength. Testable via Twitter/Metaculus data.
+The \emph{phase transition} prediction draws a direct analogy to thermodynamics: polarization should emerge sharply at a critical attention selectivity $\kappa_\beta^{\text{crit}}$ rather than gradually, exhibiting the hallmarks of a genuine phase transition. The prediction of \emph{context-dependent stubbornness} contradicts trait-based theories by asserting that the same individual should exhibit variable resistance to influence across different contexts and network positions. The \emph{asymmetric influence} prediction states that impact should scale with source precision $\Sigma_q^{-1}$ independently of network centrality, implying that confident sources exert disproportionate influence even when structurally equivalent to uncertain ones.
 
-\item \textbf{Uncertainty dynamics} ($\Sigma_i(t)$ evolves): Confidence should increase with consensus and decrease with exposure to diverse views. Requires confidence interval measurements, not just point estimates.
+Finally, the speculative prediction of \emph{underdamped oscillations} suggests that in low-friction environments characteristic of rapid social media discourse, beliefs may overshoot equilibrium and oscillate before settling, a phenomenon potentially measurable via high-frequency polling of opinion dynamics.
 
-\item \textbf{Phase transitions} (critical $\kappa_\beta$): Polarization should emerge sharply at critical attention selectivity, analogous to thermodynamic phase transitions.
-
-\item \textbf{Context-dependent stubbornness}: The same individual should exhibit variable resistance to influence across contexts (network positions), contradicting trait-based theories.
-
-\item \textbf{Asymmetric influence}: Impact should scale with source precision ($\Sigma_q^{-1}$), not just network centrality. Confident sources exert more influence than uncertain ones with identical connectivity.
-
-\item \textbf{Underdamped oscillations} (speculative): In low-friction environments (social media), beliefs may overshoot and oscillate before settling, measurable via high-frequency polling.
-\end{enumerate}
-
-Testing even a subset of these predictions would provide strong empirical validation of the unifying framework.
+Testing even a subset of these predictions would provide strong empirical validation of the unifying framework, while falsification of any would constrain the parameter regimes where the theory applies.
 
 \section{Conclusion}
 

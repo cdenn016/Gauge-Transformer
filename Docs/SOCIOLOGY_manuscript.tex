@@ -269,13 +269,13 @@ Combining all contributions, the effective mass of agent $i$ is:
 
 \begin{equation}
 \boxed{
-M_i = \underbrace{\Lambda_{pi}}_{\substack{\text{prior} \\ \text{precision}}} + \underbrace{\Lambda_{oi}}_{\substack{\text{observation} \\ \text{precision}}} + \underbrace{\sum_k \beta_{ik}\tilde{\Lambda}_{qk}}_{\substack{\text{incoming} \\ \text{social precision}}} + \underbrace{\sum_j \beta_{ji}\Lambda_{qi}}_{\substack{\text{outgoing} \\ \text{social precision}}}
+M_i = \underbrace{\bar{\Lambda}_{pi}}_{\substack{\text{prior} \\ \text{precision}}} + \underbrace{\Lambda_{oi}}_{\substack{\text{observation} \\ \text{precision}}} + \underbrace{\sum_k \beta_{ik}\tilde{\Lambda}_{qk}}_{\substack{\text{incoming} \\ \text{social precision}}} + \underbrace{\sum_j \beta_{ji}\Lambda_{qi}}_{\substack{\text{outgoing} \\ \text{social precision}}}
 }
 \end{equation}
 
 This four-part structure has transparent physical meaning:
 \begin{itemize}
-    \item $\Lambda_{pi}$: \textbf{Prior inertia}—resistance from the cost of deviating from deep expectations
+    \item $\bar{\Lambda}_{pi}$: \textbf{Prior inertia}—resistance from the cost of deviating from deep expectations
     \item $\Lambda_{oi}$: \textbf{Sensory inertia}—grounding through observation; precise senses anchor beliefs
     \item $\sum_k \beta_{ik}\tilde{\Lambda}_{qk}$: \textbf{Incoming social inertia}—being pulled toward confident neighbors
     \item $\sum_j \beta_{ji}\Lambda_{qi}$: \textbf{Outgoing social inertia}—recoil from exerting influence on others
@@ -499,7 +499,7 @@ Curiously this implies that high-mass (confident) agents have larger resonance a
 The characteristic time for a belief to relax toward equilibrium in a social setting is given by
 
 \begin{equation}
-\boxed{\tau = \frac{M_i}{\gamma_i} = \frac{\bar{\Lambda}_i + \Lambda_{oi}+ \sum_k\beta_{ik}\tilde{\Lambda}_k + \sum_j\beta_{ji}\Lambda_i}{\gamma_i}}
+\boxed{\tau = \frac{M_i}{\gamma_i} = \frac{\bar{\Lambda}_{pi} + \Lambda_{oi}+ \sum_k\beta_{ik}\tilde{\Lambda}_{qk} + \sum_j\beta_{ji}\Lambda_{qi}}{\gamma_i}}
 \end{equation}
 
 
