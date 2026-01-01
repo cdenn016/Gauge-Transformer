@@ -253,11 +253,13 @@ def _validate_so3_generators(
     if G.shape != (3, K, K):
         raise ValueError(f"Expected shape (3, K, K), got {G.shape}")
 
-    G_x, G_y, G_z = G[0], G[1], G[2]
+    # Cast to float64 for validation to avoid precision issues with large spin
+    G64 = G.astype(np.float64)
+    G_x, G_y, G_z = G64[0], G64[1], G64[2]
 
     # ========== Check 1: Skew-symmetry ==========
     for a, name in enumerate(['x', 'y', 'z']):
-        G_a = G[a]
+        G_a = G64[a]
         skew_error = np.linalg.norm(G_a + G_a.T, ord='fro')
         if skew_error > eps:
             raise RuntimeError(
@@ -279,9 +281,10 @@ def _validate_so3_generators(
 
     max_error = max(error_xy, error_yz, error_zx)
 
-    # Scale tolerance by generator norm
-    scale = max(np.linalg.norm(G[a], ord='fro') for a in range(3))
-    threshold = eps * max(scale, 1.0)
+    # Scale tolerance by generator norm squared for commutator checks
+    # (matrix products accumulate errors proportional to scale²)
+    scale = max(np.linalg.norm(G64[a], ord='fro') for a in range(3))
+    threshold = eps * max(scale * scale, 1.0)
 
     if max_error > threshold:
         raise RuntimeError(
@@ -292,7 +295,8 @@ def _validate_so3_generators(
             f"  threshold: {threshold:.3e}"
         )
 
-    C_2 = -sum(G[a] @ G[a] for a in range(3))
+    # Use float64 for Casimir check as well
+    C_2 = -sum(G64[a] @ G64[a] for a in range(3))
 
     # Extract eigenvalues (should all be ℓ(ℓ+1))
     eigenvalues    = np.linalg.eigvalsh(C_2)
@@ -304,7 +308,7 @@ def _validate_so3_generators(
     casimir_expected = ell * (ell + 1)
     casimir_error = abs(casimir_value - casimir_expected)
 
-    # Scale tolerance by the size of C₂
+    # Scale tolerance by the size of C₂ (larger for high spin)
     base = max(abs(casimir_expected), 1.0)
     tol  = eps * base
 
@@ -320,7 +324,7 @@ def _validate_so3_generators(
     if verbose:
         print("✓ SO(3) generator validation passed:")
         print(f"  Dimension: K = {K} (ℓ = {ell})")
-        print(f"  Skew-symmetry: max error = {max([np.linalg.norm(G[a] + G[a].T) for a in range(3)]):.3e}")
+        print(f"  Skew-symmetry: max error = {max([np.linalg.norm(G64[a] + G64[a].T) for a in range(3)]):.3e}")
         print(f"  Commutation: max error = {max_error:.3e}")
         print(f"  Casimir: C₂ = {casimir_value:.6f} (expected {casimir_expected})")
 
@@ -431,9 +435,12 @@ def _validate_block_diagonal_generators(
     """
     K = G.shape[1]
 
+    # Cast to float64 for validation to avoid precision issues with large spin
+    G64 = G.astype(np.float64)
+
     # Check skew-symmetry
     for a in range(3):
-        skew_error = np.linalg.norm(G[a] + G[a].T, ord='fro')
+        skew_error = np.linalg.norm(G64[a] + G64[a].T, ord='fro')
         if skew_error > eps:
             raise RuntimeError(
                 f"Block-diagonal generator G[{a}] not skew-symmetric: "
@@ -441,7 +448,7 @@ def _validate_block_diagonal_generators(
             )
 
     # Check commutation relations
-    G_x, G_y, G_z = G[0], G[1], G[2]
+    G_x, G_y, G_z = G64[0], G64[1], G64[2]
 
     comm_xy = G_x @ G_y - G_y @ G_x
     error_xy = np.linalg.norm(comm_xy - G_z, ord='fro')
@@ -453,15 +460,19 @@ def _validate_block_diagonal_generators(
     error_zx = np.linalg.norm(comm_zx - G_y, ord='fro')
 
     max_error = max(error_xy, error_yz, error_zx)
-    scale = max(np.linalg.norm(G[a], ord='fro') for a in range(3))
-    threshold = eps * max(scale, 1.0)
+
+    # Scale tolerance by generator norm squared for commutator checks
+    # (matrix products accumulate errors proportional to scale²)
+    scale = max(np.linalg.norm(G64[a], ord='fro') for a in range(3))
+    threshold = eps * max(scale * scale, 1.0)
 
     if max_error > threshold:
         raise RuntimeError(
             f"Block-diagonal SO(3) commutation violated:\n"
             f"  [G_x, G_y] - G_z: {error_xy:.3e}\n"
             f"  [G_y, G_z] - G_x: {error_yz:.3e}\n"
-            f"  [G_z, G_x] - G_y: {error_zx:.3e}"
+            f"  [G_z, G_x] - G_y: {error_zx:.3e}\n"
+            f"  threshold: {threshold:.3e}"
         )
 
     # Check block structure (off-diagonal blocks should be zero)
@@ -477,7 +488,7 @@ def _validate_block_diagonal_generators(
             if i != j:
                 # Check off-diagonal block is zero
                 for a in range(3):
-                    block = G[a, start_i:start_i+dim_i, start_j:start_j+dim_j]
+                    block = G64[a, start_i:start_i+dim_i, start_j:start_j+dim_j]
                     block_norm = np.linalg.norm(block, ord='fro')
                     if block_norm > eps:
                         raise RuntimeError(
