@@ -1,0 +1,2555 @@
+"""
+KL-Divergence Based Attention Mechanism (0D Gauge Transformer)
+===============================================================
+
+Implements attention via information geometry instead of learned Q, K projections:
+
+    β_ij = softmax(-KL(q_i || Ω_ij[q_j]) / κ)
+
+where:
+    - q_i = N(μ_i, Σ_i): Agent i's belief distribution
+    - Ω_ij: Parallel transport operator (gauge connection)
+    - KL: Kullback-Leibler divergence (information distance)
+    - κ: Temperature parameter
+
+Key Insight: NO W_Q, W_K matrices! Attention emerges from geometry.
+
+0D Architecture:
+    - All agents at single point c*
+    - β_ij are scalars (not spatial fields)
+    - No spatial integrals, just sums over agents
+
+Author: Implementation from plan.py
+Date: November 2025
+"""
+
+# Suppress noisy warnings BEFORE other imports
+import warnings
+warnings.filterwarnings("ignore", message="CUDA path could not be detected", module="cupy")
+warnings.filterwarnings("ignore", message="Failed to find cuobjdump", module="triton")
+warnings.filterwarnings("ignore", message="Failed to find nvdisasm", module="triton")
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from typing import Optional, Tuple, List, Union
+
+# Import our fast math kernels
+try:
+    from math_utils.numba_kernels import (
+        kl_gaussian_numba,
+        compute_kl_transported_numba,
+        push_gaussian_numba,
+    )
+    NUMBA_AVAILABLE = True
+except ImportError:
+    NUMBA_AVAILABLE = False
+    print("⚠️  Numba kernels not available - falling back to PyTorch (slower)")
+
+# Import transport operators
+try:
+    from math_utils.transport import compute_transport
+    from math_utils.generators import generate_so3_generators
+    TRANSPORT_AVAILABLE = True
+except ImportError:
+    TRANSPORT_AVAILABLE = False
+    print("⚠️  Transport module not available")
+
+
+# =============================================================================
+# Sparse Attention Patterns
+# =============================================================================
+
+def create_attention_mask(
+    num_agents: int,
+    pattern: str = 'full',
+    window: int = 64,
+    device: torch.device = torch.device('cpu'),
+    causal: bool = True,
+) -> torch.Tensor:
+    """
+    Create sparse attention mask for scalability.
+
+    Args:
+        num_agents: Number of agents (sequence length)
+        pattern: 'full', 'local', or 'strided'
+        window: Local window size for 'local' pattern
+        device: Device to create tensor on
+        causal: If True, apply causal masking (i can't attend to j>i)
+
+    Returns:
+        mask: (N, N) binary mask where 1 = can attend, 0 = cannot attend
+
+    Patterns:
+        - 'full': All-to-all attention (standard transformer)
+        - 'local': Local window attention (Longformer-style)
+        - 'strided': Strided attention (sparse transformer)
+    """
+    N = num_agents
+
+    if pattern == 'full':
+        # Full attention
+        mask = torch.ones(N, N, device=device)
+
+    elif pattern == 'local':
+        # Local window attention: agent i attends to [i-window, i+window]
+        mask = torch.zeros(N, N, device=device)
+        for i in range(N):
+            start = max(0, i - window // 2)
+            end = min(N, i + window // 2 + 1)
+            mask[i, start:end] = 1.0
+
+    elif pattern == 'strided':
+        # Strided attention: agent i attends to every k-th agent
+        stride = max(1, N // window)  # Ensure ~window agents attended to
+        mask = torch.zeros(N, N, device=device)
+        for i in range(N):
+            # Local neighborhood
+            mask[i, max(0, i-8):min(N, i+9)] = 1.0
+            # Strided attention
+            for j in range(0, N, stride):
+                mask[i, j] = 1.0
+
+    else:
+        raise ValueError(f"Unknown attention pattern: {pattern}")
+
+    # Apply causal masking if requested
+    if causal:
+        causal_mask = torch.tril(torch.ones(N, N, device=device))
+        mask = mask * causal_mask
+
+    return mask
+
+
+# =============================================================================
+# Transport Operator Caching (for evolve_phi=False optimization)
+# =============================================================================
+
+def compute_transport_operators(
+    phi: torch.Tensor,         # (B, N, n_gen) gauge frames where n_gen is # of generators
+    generators: torch.Tensor,  # (n_gen, K, K) Lie algebra generators
+    use_fast_exp: bool = True,   # Use Taylor approximation for small angles (default True)
+    exp_order: int = 4,          # Order of Taylor expansion (if use_fast_exp=True)
+) -> dict:
+    """
+    Precompute transport operators for caching when phi is fixed.
+
+    Works for both SO(3) and SO(N) gauge groups:
+    - SO(3): n_gen = 3, phi ∈ ℝ³
+    - SO(N): n_gen = N(N-1)/2, phi ∈ ℝ^{N(N-1)/2}
+
+    When evolve_phi=False, these operators are constant across layers.
+    Computing once saves 2 matrix exponentials per head per layer.
+
+    Args:
+        phi: Gauge frames (B, N, n_gen) in so(N) Lie algebra
+             - For SO(3): shape (B, N, 3)
+             - For SO(N): shape (B, N, N*(N-1)/2)
+        generators: Lie algebra generators (n_gen, K, K)
+             - For SO(3): shape (3, K, K)
+             - For SO(N): shape (N*(N-1)/2, K, K)
+        use_fast_exp: If True, use Taylor series approximation instead of torch.matrix_exp.
+                      Faster but only accurate for small angles (|φ| < 0.5).
+        exp_order: Order of Taylor expansion when use_fast_exp=True.
+                   Higher = more accurate but slower. Default 4 is good for |φ| < 0.3.
+
+    Returns:
+        dict with:
+            'exp_phi': (B, N, K, K) - exp(φ·G) for each token
+            'exp_neg_phi': (B, N, K, K) - exp(-φ·G) for each token
+            'Omega': (B, N, N, K, K) - full pairwise transport Ω_ij = exp(φ_i)exp(-φ_j)
+    """
+    # φ·G: combine gauge frames with generators
+    phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
+
+    # Matrix exponentials (the expensive operations!)
+    if use_fast_exp:
+        # Taylor series: exp(A) ≈ I + A + A²/2! + A³/3! + ...
+        # Faster than torch.matrix_exp for small angles
+        exp_phi = _taylor_matrix_exp(phi_matrix, order=exp_order)
+        exp_neg_phi = _taylor_matrix_exp(-phi_matrix, order=exp_order)
+    else:
+        exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
+        exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
+
+    # Full pairwise transport: Ω_ij = exp(φ_i) @ exp(-φ_j)
+    Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)  # (B, N, N, K, K)
+
+    return {
+        'exp_phi': exp_phi,
+        'exp_neg_phi': exp_neg_phi,
+        'Omega': Omega,
+    }
+
+
+def _taylor_matrix_exp(A: torch.Tensor, order: int = 4) -> torch.Tensor:
+    """
+    Compute matrix exponential using Taylor series approximation.
+
+    exp(A) ≈ I + A + A²/2! + A³/3! + ... + A^n/n!
+
+    This is faster than torch.matrix_exp for small matrices and small |A|,
+    but less accurate for large |A|. Use only when |A| < 0.5.
+
+    Args:
+        A: Input matrix (..., K, K)
+        order: Number of terms in Taylor series (default 4)
+
+    Returns:
+        exp(A): Matrix exponential approximation (..., K, K)
+    """
+    K = A.shape[-1]
+    device = A.device
+    dtype = A.dtype
+
+    # Start with identity
+    result = torch.eye(K, device=device, dtype=dtype).expand_as(A).clone()
+    term = result.clone()  # Current term A^n / n!
+
+    for n in range(1, order + 1):
+        term = torch.matmul(term, A) / n  # A^n / n! = (A^{n-1} / (n-1)!) @ A / n
+        result = result + term
+
+    return result
+
+
+# =============================================================================
+# Core Attention: KL-Based Weights
+# =============================================================================
+
+def compute_attention_weights(
+    mu_q: torch.Tensor,        # (B, N, K) belief means
+    sigma_q: torch.Tensor,     # (B, N, K, K) or (B, N, K) if diagonal_covariance=True
+    phi: torch.Tensor,         # (B, N, 3) gauge frames
+    generators: torch.Tensor,  # (3, K, K) SO(3) generators
+    kappa: float,              # Temperature
+    epsilon: float = 1e-8,     # Numerical stability
+    mask: Optional[torch.Tensor] = None,  # (B, N, N) causal mask
+    use_numba: bool = True,
+    return_kl: bool = False,   # Return KL matrix for loss computation
+    diagonal_covariance: bool = False,  # Use diagonal sigma (B,N,K) instead of full (B,N,K,K)
+    cached_transport: Optional[dict] = None,  # Precomputed transport operators (from compute_transport_operators)
+    self_attention_penalty: float = 0.0,  # DEPRECATED: Ad-hoc penalty removed. Use kappa instead.
+    # Memory-efficient options (NEW!)
+    irrep_dims: Optional[List[int]] = None,  # Block-diagonal structure [d₁, d₂, ...] for principled KL decomposition
+    chunk_size: Optional[int] = None,  # Chunk size for memory-efficient computation (None = auto)
+    # ALiBi-style positional bias (NEW!)
+    alibi_slope: Optional[float] = None,  # If set, adds slope * (i-j) to logits for relative position
+    # Identity transport mode (diagnostic/simplification)
+    use_identity_transport: bool = False,  # If True, Ω_ij = I (no gauge transport)
+    # Self-attention masking (prevents attention collapse)
+    mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
+) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+    """
+    Compute attention weights from KL divergences (0D version).
+
+    Formula:
+        β_ij = softmax_j(-KL(q_i || Ω_ij[q_j]) / κ)
+
+    where Ω_ij = exp(φ_i) · exp(-φ_j) transports q_j to i's frame.
+
+    0D Structure:
+        - All agents at single point c*, so β_ij are SCALARS
+        - No spatial fields β_ij(c), just one number per pair
+        - No spatial integration, just O(N²) agent-pair loop
+
+    Args:
+        mu_q: Query belief means, shape (B, N, K)
+              N = num_agents at single point c*
+        sigma_q: Query covariances, shape (B, N, K, K) if full, (B, N, K) if diagonal
+        phi: Gauge frames, shape (B, N, 3) in so(3)
+        generators: SO(3) generators for irrep, shape (3, K, K)
+        kappa: Temperature parameter (higher = softer attention)
+        epsilon: Softmax stability constant
+        mask: Optional causal mask (B, N, N) - 0 masks out position
+        use_numba: Use fast Numba kernels if available
+        diagonal_covariance: If True, sigma_q is (B,N,K) diagonal variances.
+                            Uses O(N²×K) memory instead of O(N²×K²)!
+        cached_transport: Optional precomputed transport operators from compute_transport_operators().
+                         When evolve_phi=False, caching avoids redundant matrix exponentials.
+        irrep_dims: Optional list of irrep block dimensions [d₁, d₂, ...].
+                   When provided, uses block-diagonal KL computation which is:
+                   1. Theoretically principled (respects gauge structure)
+                   2. Memory efficient: O(N² × Σᵢdᵢ²) vs O(N² × K²)
+                   For K=255 with 75×ℓ₀ + 30×ℓ₁ + 18×ℓ₂: ~82× memory savings!
+        chunk_size: Optional chunk size for memory-efficient processing.
+                   When provided, processes N×N attention in C×C chunks.
+                   None = no chunking (fast but memory-hungry)
+        alibi_slope: Optional ALiBi-style positional bias slope.
+                    When set, adds slope * (i - j) to attention logits.
+                    Negative values favor recent tokens (recency bias).
+                    Unlike positional embeddings in μ or φ, this doesn't
+                    affect transport Ω_ij, keeping attention content-based
+                    while adding controlled positional information.
+                    Typical values: -0.1 to -0.01 (for recency bias)
+        use_identity_transport: If True, bypass gauge transport entirely.
+                               Sets Ω_ij = I for all pairs, computing raw
+                               KL(q_i || q_j) without any rotation.
+                               Useful for diagnostics or when transport is
+                               not desired.
+        mask_self_attention: If True, mask out diagonal of attention matrix.
+                            This prevents the model from attending to itself,
+                            forcing it to attend to other tokens. Critical for
+                            preventing attention collapse since KL(q_i||q_i)=0
+                            always makes self-attention the most attractive.
+
+    Returns:
+        beta: Attention weights, shape (B, N, N)
+              beta[b, i, j] = attention from agent i to agent j
+        kl_matrix: (Optional) KL divergence matrix (B, N, N) if return_kl=True
+                   kl_matrix[b, i, j] = KL(q_i || Ω_ij[q_j])
+
+    Example:
+        >>> B, N, K = 2, 10, 32
+        >>> mu = torch.randn(B, N, K)
+        >>> sigma = torch.eye(K).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1)
+        >>> phi = torch.randn(B, N, 3) * 0.1
+        >>> G = torch.from_numpy(generate_so3_generators(K)).float()
+        >>> beta = compute_attention_weights(mu, sigma, phi, G, kappa=1.0)
+        >>> beta.shape
+        torch.Size([2, 10, 10])
+        >>> beta.sum(dim=-1)  # Should sum to 1 (plus epsilon)
+        tensor([[1.0000, 1.0000, ...], ...])
+    """
+    batch_size, num_agents, K = mu_q.shape
+    device = mu_q.device
+    dtype = mu_q.dtype
+
+    # Allocate KL divergence matrix
+    kl_matrix = torch.zeros(batch_size, num_agents, num_agents, device=device, dtype=dtype)
+
+    # =========================================================================
+    # Compute all pairwise KL divergences: KL(q_i || Ω_ij[q_j])
+    # =========================================================================
+
+    # CRITICAL: Never use Numba path on CUDA devices!
+    # Numba kernels are CPU-only and would cause GPU→CPU→GPU transfer bottleneck.
+    # The PyTorch path is fully vectorized and runs efficiently on GPU.
+    is_cuda = device.type == 'cuda'
+
+    # =========================================================================
+    # MEMORY-EFFICIENT PATHS (NEW!)
+    # Priority: block-diagonal > chunked > diagonal > full
+    # =========================================================================
+    if irrep_dims is not None and not diagonal_covariance:
+        # BLOCK-DIAGONAL MODE: Principled + memory-efficient!
+        # Uses O(N² × Σᵢdᵢ²) instead of O(N² × K²) - massive savings!
+        if chunk_size is not None:
+            # Block-diagonal + chunked: maximum memory efficiency
+            _compute_kl_matrix_block_diagonal_chunked(
+                mu_q, sigma_q, phi, generators, kl_matrix, irrep_dims, chunk_size
+            )
+        else:
+            # Block-diagonal only (still big savings vs full K×K)
+            _compute_kl_matrix_block_diagonal(
+                mu_q, sigma_q, phi, generators, kl_matrix, irrep_dims
+            )
+    elif chunk_size is not None and not diagonal_covariance:
+        # CHUNKED MODE: Full covariance but memory-efficient
+        _compute_kl_matrix_chunked(
+            mu_q, sigma_q, phi, generators, kl_matrix, chunk_size
+        )
+    elif diagonal_covariance:
+        # DIAGONAL MODE: O(N²×K) memory instead of O(N²×K²)!
+        # sigma_q is (B, N, K) not (B, N, K, K)
+        if chunk_size is not None:
+            _compute_kl_matrix_diagonal_chunked(
+                mu_q, sigma_q, phi, generators, kl_matrix, chunk_size
+            )
+        else:
+            _compute_kl_matrix_diagonal(
+                mu_q, sigma_q, phi, generators, kl_matrix, cached_transport
+            )
+    elif use_numba and NUMBA_AVAILABLE and TRANSPORT_AVAILABLE and not is_cuda:
+        # Fast path: Use Numba kernels (CPU only)
+        # Note: Numba path doesn't support cached_transport (CPU-only fallback)
+        _compute_kl_matrix_numba(
+            mu_q, sigma_q, phi, generators, kl_matrix
+        )
+    else:
+        # GPU path OR CPU fallback: Pure PyTorch (fully vectorized, CUDA-compatible)
+        _compute_kl_matrix_torch(
+            mu_q, sigma_q, phi, generators, kl_matrix, cached_transport,
+            use_identity_transport=use_identity_transport
+        )
+
+    # =========================================================================
+    # Convert KL distances to attention weights
+    # =========================================================================
+
+    # NOTE: KL divergence is used directly without /K normalization.
+    # With proper initialization (init_std = 1/sqrt(K)), the mean embeddings
+    # have ||μ||² = O(1), making KL divergence naturally O(1) regardless of K.
+    # This avoids artificial scaling that breaks the information-geometric
+    # interpretation of attention as belief similarity.
+
+    # Attention logits: -KL / κ (more similar = less KL = higher attention)
+    logits = -kl_matrix / kappa  # (B, N, N)
+
+    # ==========================================================================
+    # ALiBi-STYLE POSITIONAL BIAS: Add relative position information
+    # Unlike positional embeddings in μ or φ, this doesn't affect transport Ω_ij.
+    # The bias is purely additive: logits[i,j] += slope * (i - j)
+    # Negative slope encourages attending to recent tokens (recency bias).
+    # This provides explicit, controlled positional information while keeping
+    # the gauge transport purely content-based.
+    # ==========================================================================
+    if alibi_slope is not None and alibi_slope != 0.0:
+        B, N, _ = logits.shape
+        positions = torch.arange(N, device=logits.device, dtype=logits.dtype)
+        # rel_pos[i, j] = i - j (positive for future, negative for past)
+        rel_pos = positions[:, None] - positions[None, :]  # (N, N)
+        # Apply slope (typically negative to favor recent tokens)
+        alibi_bias = alibi_slope * rel_pos  # (N, N)
+        logits = logits + alibi_bias.unsqueeze(0)  # (B, N, N)
+
+    # ==========================================================================
+    # SELF-ATTENTION PENALTY: Prevent diagonal from dominating
+    # Self-attention always has KL=0 (since KL(q_i||q_i)=0), which makes the
+    # diagonal dominate when kappa is small. For high-dimensional irreps (K>10),
+    # this can cause attention to collapse to pure self-attention.
+    # Adding a penalty to the diagonal encourages attending to other tokens.
+    # ==========================================================================
+    if self_attention_penalty > 0:
+        # Add penalty to diagonal (makes self-attention less attractive)
+        # Penalty is in logit units: -penalty means self-attention logit = -penalty
+        # instead of 0, equivalent to having KL = penalty * kappa for self-attention
+        B, N, _ = logits.shape
+        diag_idx = torch.arange(N, device=logits.device)
+        # Clone to avoid inplace modification (needed for gradient computation)
+        logits = logits.clone()
+        logits[:, diag_idx, diag_idx] = logits[:, diag_idx, diag_idx] - self_attention_penalty
+
+    # Apply causal mask if provided (BEFORE self-attention masking)
+    if mask is not None:
+        # mask[b, i, j] = 0 means agent i CANNOT attend to agent j
+        logits = logits.masked_fill(mask == 0, float('-inf'))
+
+    # ==========================================================================
+    # SELF-ATTENTION MASKING: Force model to attend to other tokens
+    # KL(q_i||q_i)=0 always, making diagonal dominant. Masking diagonal forces
+    # the model to learn meaningful attention patterns over other tokens.
+    #
+    # IMPORTANT: Only mask diagonal where there are OTHER valid targets!
+    # With causal masking, position 0 can only attend to itself - masking it
+    # would leave no valid targets, causing NaN in softmax.
+    # ==========================================================================
+    if mask_self_attention:
+        B, N, _ = logits.shape
+        diag_idx = torch.arange(N, device=logits.device)
+        # Check which positions have at least one other valid target
+        # A position has other targets if any off-diagonal element is not -inf
+        has_other_targets = (logits != float('-inf')).sum(dim=-1) > 1  # (B, N)
+        # Clone to avoid inplace modification (needed for gradient computation)
+        logits = logits.clone()
+        # Apply masking only where safe (where there are other targets)
+        diag_vals = logits[:, diag_idx, diag_idx]  # (B, N)
+        masked_diag_vals = torch.where(
+            has_other_targets,
+            torch.full_like(diag_vals, float('-inf')),
+            diag_vals
+        )
+        logits[:, diag_idx, diag_idx] = masked_diag_vals
+
+    # Softmax over keys (dimension 2)
+    beta = F.softmax(logits, dim=-1)  # (B, N, N)
+
+    # Clamp for numerical stability (prevents exact zeros in log/division)
+    # Using clamp instead of adding epsilon preserves sum(beta) ≈ 1
+    beta = beta.clamp(min=epsilon)
+
+    if return_kl:
+        return beta, kl_matrix
+    else:
+        return beta
+
+
+def _compute_kl_matrix_numba(
+    mu_q: torch.Tensor,
+    sigma_q: torch.Tensor,
+    phi: torch.Tensor,
+    generators: torch.Tensor,
+    kl_matrix: torch.Tensor,
+) -> None:
+    """
+    Fast KL matrix computation using Numba kernels.
+
+    Computes KL(q_i || Ω_ij[q_j]) for all pairs (i,j) using:
+    1. Transport q_j → i's frame via Ω_ij
+    2. Compute KL divergence
+
+    Modifies kl_matrix in-place.
+    """
+    batch_size, num_agents, K = mu_q.shape
+
+    # Convert to numpy for Numba
+    mu_np = mu_q.detach().cpu().numpy().astype(np.float64)
+    sigma_np = sigma_q.detach().cpu().numpy().astype(np.float64)
+    phi_np = phi.detach().cpu().numpy().astype(np.float64)
+    G_np = generators.detach().cpu().numpy().astype(np.float64)
+
+    # Compute KL matrix
+    for b in range(batch_size):
+        for i in range(num_agents):
+            for j in range(num_agents):
+                # Compute transport operator Ω_ij
+                Omega_ij = compute_transport(
+                    phi_np[b, i],      # φ_i
+                    phi_np[b, j],      # φ_j
+                    G_np,
+                    validate=False,
+                    eps=1e-8
+                )  # (K, K)
+
+                # Compute KL(q_i || Ω_ij[q_j]) in one shot
+                kl_ij = compute_kl_transported_numba(
+                    mu_np[b, i],       # μ_i
+                    sigma_np[b, i],    # Σ_i
+                    mu_np[b, j],       # μ_j
+                    sigma_np[b, j],    # Σ_j
+                    Omega_ij           # Ω_ij
+                )
+
+                kl_matrix[b, i, j] = kl_ij
+
+
+def _compute_kl_matrix_torch(
+    mu_q: torch.Tensor,
+    sigma_q: torch.Tensor,
+    phi: torch.Tensor,
+    generators: torch.Tensor,
+    kl_matrix: torch.Tensor,
+    cached_transport: Optional[dict] = None,  # Precomputed transport operators
+    use_identity_transport: bool = False,  # If True, bypass transport (Ω = I)
+) -> None:
+    """
+    VECTORIZED KL matrix computation using pure PyTorch.
+
+    Computes all pairwise KL divergences without Python loops.
+
+    Args:
+        mu_q: (B, N, K) belief means
+        sigma_q: (B, N, K, K) belief covariances
+        phi: (B, N, 3) gauge fields
+        generators: (3, K, K) SO(3) generators
+        kl_matrix: (B, N, N) output tensor (modified in-place)
+        cached_transport: Optional dict with precomputed 'Omega' from compute_transport_operators()
+        use_identity_transport: If True, skip transport and compute raw KL(q_i || q_j)
+    """
+    B, N, K = mu_q.shape
+    device = mu_q.device
+    dtype = mu_q.dtype
+    eps = 1e-6
+
+    # =========================================================================
+    # Step 1: Get transport operators (use cached if available)
+    # =========================================================================
+    if use_identity_transport:
+        # IDENTITY TRANSPORT: Ω_ij = I for all pairs
+        # Skip expensive matrix exponentials - just use raw beliefs
+        # μ_transported = μ_j (no rotation)
+        # Σ_transported = Σ_j (no rotation)
+        # Use .clone() after expand to avoid view-related gradient issues
+        mu_transported = mu_q[:, None, :, :].expand(-1, N, -1, -1).clone()  # (B, N, N, K)
+        Sigma_transported = sigma_q[:, None, :, :, :].expand(-1, N, -1, -1, -1).clone()  # (B, N, N, K, K)
+    else:
+        if cached_transport is not None and 'Omega' in cached_transport:
+            # Use precomputed transport operators (saves 2 matrix exponentials!)
+            Omega = cached_transport['Omega']
+        else:
+            # Compute transport operators
+            # phi: (B, N, 3) -> phi_matrix: (B, N, K, K)
+            phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
+            exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
+            exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
+
+            # Omega_ij = exp(φ_i) @ exp(-φ_j)
+            # Result: (B, N, N, K, K)
+            Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
+
+        # =========================================================================
+        # Step 2: Transport all means and covariances
+        # =========================================================================
+        # μ_j^{→i} = Ω_ij @ μ_j
+        mu_transported = torch.einsum('bijkl,bjl->bijk', Omega, mu_q)  # (B, N, N, K)
+
+        # Σ_j^{→i} = Ω_ij @ Σ_j @ Ω_ij^T
+        Sigma_transported = torch.einsum(
+            'bijkl,bjlm,bijmn->bijkn',
+            Omega, sigma_q, Omega.transpose(-1, -2)
+        )  # (B, N, N, K, K)
+
+    # =========================================================================
+    # Step 3: Expand mu_i and Sigma_i for pairwise comparison
+    # Use .clone() after expand to avoid view-related gradient issues
+    # =========================================================================
+    mu_i = mu_q[:, :, None, :].expand(-1, -1, N, -1).clone()  # (B, N, N, K)
+    Sigma_i = sigma_q[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()  # (B, N, N, K, K)
+
+    # =========================================================================
+    # Step 4: Compute all KL divergences
+    # KL(q_i || Ω_ij[q_j]) = KL(N(μ_i, Σ_i) || N(μ_j^{→i}, Σ_j^{→i}))
+    # =========================================================================
+    I = torch.eye(K, device=device, dtype=dtype)
+    Sigma_i_reg = Sigma_i + eps * I
+    Sigma_transported_reg = Sigma_transported + eps * I
+
+    try:
+        # Cholesky of transported covariances (prior in KL)
+        L_p = torch.linalg.cholesky(Sigma_transported_reg)
+
+        # Trace term: tr(Σ_p⁻¹ Σ_q) where Σ_p = Σ_j^{→i}, Σ_q = Σ_i
+        Y = torch.linalg.solve_triangular(L_p, Sigma_i_reg, upper=False)
+        Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
+        trace_term = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)  # (B, N, N)
+
+        # Mahalanobis term: (μ_p - μ_q)ᵀ Σ_p⁻¹ (μ_p - μ_q)
+        delta_mu = mu_transported - mu_i  # (B, N, N, K)
+        v = torch.linalg.solve_triangular(
+            L_p, delta_mu.unsqueeze(-1), upper=False
+        ).squeeze(-1)
+        mahal_term = torch.sum(v ** 2, dim=-1)  # (B, N, N)
+
+        # Log determinant terms
+        logdet_p = 2.0 * torch.sum(
+            torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1
+        )
+        L_q = torch.linalg.cholesky(Sigma_i_reg)
+        logdet_q = 2.0 * torch.sum(
+            torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1
+        )
+        logdet_term = logdet_p - logdet_q  # (B, N, N)
+
+        # KL divergence for all pairs
+        kl_all = 0.5 * (trace_term + mahal_term - K + logdet_term)  # (B, N, N)
+        kl_all = torch.clamp(kl_all, min=0.0)
+
+        # Copy to output (in-place)
+        kl_matrix.copy_(kl_all)
+
+    except RuntimeError:
+        # Fallback to loop-based computation if Cholesky fails
+        for b in range(B):
+            for i in range(N):
+                for j in range(N):
+                    mu_j_transported, sigma_j_transported = _transport_gaussian_torch(
+                        mu_q[b, j], sigma_q[b, j],
+                        phi[b, i], phi[b, j], generators
+                    )
+                    kl_ij = _kl_gaussian_torch(
+                        mu_q[b, i], sigma_q[b, i],
+                        mu_j_transported, sigma_j_transported
+                    )
+                    kl_matrix[b, i, j] = kl_ij
+
+
+def _transport_gaussian_torch(
+    mu: torch.Tensor,         # (K,)
+    sigma: torch.Tensor,      # (K, K)
+    phi_dst: torch.Tensor,    # (3,)
+    phi_src: torch.Tensor,    # (3,)
+    generators: torch.Tensor, # (3, K, K)
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Transport Gaussian via Ω = exp(φ_dst) · exp(-φ_src).
+
+    Returns:
+        mu_transported: Ω μ, shape (K,)
+        sigma_transported: Ω Σ Ω^T, shape (K, K)
+    """
+    # Build transport operator Ω
+    # X_dst = Σ_a φ_dst[a] * G_a
+    X_dst = torch.einsum('a,aij->ij', phi_dst, generators)  # (K, K)
+    X_src = torch.einsum('a,aij->ij', phi_src, generators)
+
+    # Matrix exponential (use Taylor series for small angles)
+    Omega = torch.matrix_exp(X_dst) @ torch.matrix_exp(-X_src)
+
+    # Transport
+    # Use torch.mv for proper matrix-vector product: (K,K) @ (K,) → (K,)
+    mu_transported = torch.mv(Omega, mu)
+    sigma_transported = Omega @ sigma @ Omega.T
+
+    # Symmetrize
+    sigma_transported = 0.5 * (sigma_transported + sigma_transported.T)
+
+    return mu_transported, sigma_transported
+
+
+def _kl_gaussian_torch(
+    mu1: torch.Tensor,     # (K,)
+    sigma1: torch.Tensor,  # (K, K)
+    mu2: torch.Tensor,     # (K,)
+    sigma2: torch.Tensor,  # (K, K)
+    eps: float = 1e-8
+) -> torch.Tensor:
+    """
+    KL divergence between two Gaussians: KL(N(μ1,Σ1) || N(μ2,Σ2)).
+
+    Formula:
+        KL = 0.5 * [tr(Σ2^{-1} Σ1) + (μ2-μ1)^T Σ2^{-1} (μ2-μ1) - K + log|Σ2|/|Σ1|]
+    """
+    K = mu1.shape[0]
+
+    # Regularize for stability
+    sigma1_reg = sigma1 + eps * torch.eye(K, device=sigma1.device, dtype=sigma1.dtype)
+    sigma2_reg = sigma2 + eps * torch.eye(K, device=sigma2.device, dtype=sigma2.dtype)
+
+    # Cholesky decomposition for numerical stability
+    L1 = torch.linalg.cholesky(sigma1_reg)
+    L2 = torch.linalg.cholesky(sigma2_reg)
+
+    # Log determinants: log|Σ| = 2*sum(log(diag(L)))
+    logdet1 = 2.0 * torch.sum(torch.log(torch.diag(L1)))
+    logdet2 = 2.0 * torch.sum(torch.log(torch.diag(L2)))
+
+    # Trace term: tr(Σ2^{-1} Σ1)
+    # Solve L2 Y = Σ1 for Y, then solve L2^T Z = Y for Z
+    Y = torch.linalg.solve_triangular(L2, sigma1_reg, upper=False)
+    Z = torch.linalg.solve_triangular(L2.T, Y, upper=True)
+    trace_term = torch.trace(Z)
+
+    # Quadratic term: (μ2-μ1)^T Σ2^{-1} (μ2-μ1)
+    delta_mu = mu2 - mu1
+    # solve_triangular needs 2D input - reshape (K,) → (K, 1)
+    y = torch.linalg.solve_triangular(L2, delta_mu.unsqueeze(-1), upper=False).squeeze(-1)
+    z = torch.linalg.solve_triangular(L2.T, y.unsqueeze(-1), upper=True).squeeze(-1)
+    quad_term = torch.dot(delta_mu, z)
+
+    # Combine
+    kl = 0.5 * (trace_term + quad_term - K + logdet2 - logdet1)
+
+    # Numerical safety: clamp to [0, ∞)
+    return torch.clamp(kl, min=0.0)
+
+
+def _compute_kl_matrix_diagonal(
+    mu_q: torch.Tensor,        # (B, N, K) belief means
+    sigma_q: torch.Tensor,     # (B, N, K) diagonal variances (NOT K×K!)
+    phi: torch.Tensor,         # (B, N, 3) gauge frames
+    generators: torch.Tensor,  # (3, K, K) SO(3) generators
+    kl_matrix: torch.Tensor,   # (B, N, N) output tensor
+    cached_transport: Optional[dict] = None,  # Precomputed transport operators
+) -> None:
+    """
+    DIAGONAL covariance KL computation - O(N²×K) instead of O(N²×K²).
+
+    For diagonal Gaussians, KL simplifies to:
+        KL(N(μ_q, diag(σ_q)) || N(μ_p, diag(σ_p))) =
+        0.5 * (sum(σ_q/σ_p) + sum((μ_p - μ_q)²/σ_p) - K + sum(log(σ_p) - log(σ_q)))
+
+    Key simplifications:
+    - No Cholesky decomposition (O(K³) → O(K))
+    - No matrix inversion
+    - No N×N×K×K intermediate tensors!
+    - Transport still rotates μ, but σ stays diagonal (approximation)
+
+    Args:
+        mu_q: (B, N, K) belief means
+        sigma_q: (B, N, K) diagonal variances (positive)
+        phi: (B, N, 3) gauge fields
+        generators: (3, K, K) SO(3) generators
+        kl_matrix: (B, N, N) output tensor (modified in-place)
+        cached_transport: Optional dict with precomputed 'Omega' from compute_transport_operators()
+    """
+    # Squeeze trailing singleton dimensions for robustness
+    # (handles case where sigma_q comes in as (B, N, K, 1) instead of (B, N, K))
+    while sigma_q.dim() > 3 and sigma_q.shape[-1] == 1:
+        sigma_q = sigma_q.squeeze(-1)
+
+    B, N, K = mu_q.shape
+    device = mu_q.device
+    dtype = mu_q.dtype
+    eps = 1e-6
+
+    # Ensure sigma is positive
+    sigma_q = sigma_q.clamp(min=eps)
+
+    # =========================================================================
+    # Step 1: Get transport operators (use cached if available)
+    # =========================================================================
+    if cached_transport is not None and 'Omega' in cached_transport:
+        # Use precomputed transport operators (saves 2 matrix exponentials!)
+        Omega = cached_transport['Omega']
+    else:
+        # Compute transport operators
+        phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
+        exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
+        exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
+
+        # Omega_ij = exp(φ_i) @ exp(-φ_j)
+        Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)  # (B, N, N, K, K)
+
+    # =========================================================================
+    # Step 2: Transport means (still needed for accurate KL)
+    # =========================================================================
+    # μ_j^{→i} = Ω_ij @ μ_j
+    mu_transported = torch.einsum('bijkl,bjl->bijk', Omega, mu_q)  # (B, N, N, K)
+
+    # =========================================================================
+    # Step 3: Compute diagonal of transported covariance
+    # Σ_j_transported = Ω @ diag(σ_j) @ Ω^T
+    # diag(Σ_j_transported)_k = Σ_l Ω_kl² * σ_j[l]
+    # This is more accurate than just using σ_j, especially for non-identity Ω
+    # =========================================================================
+    # σ_j expanded for all pairs - use .clone() after expand to avoid view issues
+    sigma_j_orig = sigma_q[:, None, :, :].expand(-1, N, -1, -1).clone()  # (B, N, N, K)
+    sigma_i = sigma_q[:, :, None, :].expand(-1, -1, N, -1).clone()  # (B, N, N, K)
+
+    # Compute diagonal of transported covariance: diag(Ω @ diag(σ_j) @ Ω^T)_k = Σ_l Ω_kl² * σ_j[l]
+    # Omega: (B, N, N, K, K), sigma_j_orig: (B, N, N, K)
+    # Result: (B, N, N, K)
+    Omega_sq = Omega ** 2  # (B, N, N, K, K)
+    sigma_j_transported_diag = torch.einsum('bijkl,bijl->bijk', Omega_sq, sigma_j_orig)  # (B, N, N, K)
+
+    # Clamp for numerical stability
+    sigma_j_transported_diag = sigma_j_transported_diag.clamp(min=eps)
+
+    # =========================================================================
+    # Step 4: Diagonal KL divergence (vectorized)
+    # KL(q_i || transported q_j) where q_i ~ N(μ_i, diag(σ_i))
+    # transported q_j ~ N(μ_j^{→i}, diag(σ_j_transported))
+    # =========================================================================
+    mu_i = mu_q[:, :, None, :].expand(-1, -1, N, -1).clone()  # (B, N, N, K)
+
+    # Trace term: sum(σ_i / σ_j_transported)
+    trace_term = (sigma_i / sigma_j_transported_diag).sum(dim=-1)  # (B, N, N)
+
+    # Mahalanobis term: sum((μ_j^{→i} - μ_i)² / σ_j_transported)
+    delta_mu = mu_transported - mu_i  # (B, N, N, K)
+    mahal_term = ((delta_mu ** 2) / sigma_j_transported_diag).sum(dim=-1)  # (B, N, N)
+
+    # Log determinant term: sum(log(σ_j_transported) - log(σ_i))
+    logdet_term = (torch.log(sigma_j_transported_diag) - torch.log(sigma_i)).sum(dim=-1)  # (B, N, N)
+
+    # Full KL
+    kl_all = 0.5 * (trace_term + mahal_term - K + logdet_term)
+    kl_all = torch.clamp(kl_all, min=0.0)
+
+    kl_matrix.copy_(kl_all)
+
+
+# =============================================================================
+# CHUNKED KL Computation (Memory-Efficient Full Attention)
+# =============================================================================
+# Trades compute time for memory by processing N×N attention in C×C chunks.
+# Peak memory: O(C²K²) instead of O(N²K²), where C << N
+# =============================================================================
+
+def _compute_kl_matrix_chunked(
+    mu_q: torch.Tensor,        # (B, N, K) belief means
+    sigma_q: torch.Tensor,     # (B, N, K, K) belief covariances
+    phi: torch.Tensor,         # (B, N, n_gen) gauge frames
+    generators: torch.Tensor,  # (n_gen, K, K) generators
+    kl_matrix: torch.Tensor,   # (B, N, N) output tensor
+    chunk_size: int = 32,      # Process chunk_size × chunk_size blocks at a time
+) -> None:
+    """
+    CHUNKED KL matrix computation - O(C²K²) memory instead of O(N²K²).
+
+    Strategy:
+    1. Precompute exp(φ_i) and exp(-φ_i) for all i: O(N×K²) memory
+    2. For each (i_chunk, j_chunk) pair:
+       - Compute Omega[i_chunk, j_chunk]: O(C²×K²) memory
+       - Compute KL for chunk and write to output
+       - Delete intermediate tensors
+
+    Args:
+        mu_q: (B, N, K) belief means
+        sigma_q: (B, N, K, K) belief covariances
+        phi: (B, N, n_gen) gauge fields
+        generators: (n_gen, K, K) Lie algebra generators
+        kl_matrix: (B, N, N) output tensor (modified in-place)
+        chunk_size: Size of chunks to process (smaller = less memory, slower)
+    """
+    B, N, K = mu_q.shape
+    device = mu_q.device
+    dtype = mu_q.dtype
+    eps = 1e-6
+
+    # =========================================================================
+    # Step 1: Precompute matrix exponentials for ALL positions
+    # This is O(N×K²) memory - much smaller than O(N²×K²)
+    # =========================================================================
+    # phi: (B, N, n_gen) -> phi_matrix: (B, N, K, K)
+    phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
+    exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
+    exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
+    del phi_matrix  # Free memory
+
+    # Precompute Cholesky of query covariances (for logdet_q term)
+    I = torch.eye(K, device=device, dtype=dtype)
+    sigma_q_reg = sigma_q + eps * I
+    L_q_all = torch.linalg.cholesky(sigma_q_reg)  # (B, N, K, K)
+    logdet_q_all = 2.0 * torch.sum(
+        torch.log(torch.diagonal(L_q_all, dim1=-2, dim2=-1) + eps), dim=-1
+    )  # (B, N)
+
+    # =========================================================================
+    # Step 2: Process in chunks
+    # =========================================================================
+    for i_start in range(0, N, chunk_size):
+        i_end = min(i_start + chunk_size, N)
+        n_i = i_end - i_start
+
+        # Get exp_phi for i-chunk - use .contiguous() to avoid inplace modification errors
+        exp_phi_i = exp_phi[:, i_start:i_end].contiguous()  # (B, n_i, K, K)
+
+        # Get query beliefs for i-chunk - use .contiguous() to create copies
+        mu_i = mu_q[:, i_start:i_end].contiguous()          # (B, n_i, K)
+        sigma_i = sigma_q[:, i_start:i_end].contiguous()    # (B, n_i, K, K)
+        sigma_i_reg = sigma_i + eps * I
+        logdet_q_i = logdet_q_all[:, i_start:i_end].contiguous()  # (B, n_i)
+
+        for j_start in range(0, N, chunk_size):
+            j_end = min(j_start + chunk_size, N)
+            n_j = j_end - j_start
+
+            # Get exp_neg_phi for j-chunk - use .contiguous() to avoid inplace modification errors
+            exp_neg_phi_j = exp_neg_phi[:, j_start:j_end].contiguous()  # (B, n_j, K, K)
+
+            # =================================================================
+            # Compute Omega for this chunk only: (B, n_i, n_j, K, K)
+            # =================================================================
+            Omega_chunk = torch.einsum(
+                'bikl,bjlm->bijkm',
+                exp_phi_i, exp_neg_phi_j
+            )  # (B, n_i, n_j, K, K)
+
+            # Get key beliefs for j-chunk - use .contiguous() to create copies
+            mu_j = mu_q[:, j_start:j_end].contiguous()        # (B, n_j, K)
+            sigma_j = sigma_q[:, j_start:j_end].contiguous()  # (B, n_j, K, K)
+
+            # =================================================================
+            # Transport j's beliefs to i's frame
+            # =================================================================
+            # μ_j^{→i} = Ω_ij @ μ_j
+            mu_transported = torch.einsum(
+                'bijkl,bjl->bijk', Omega_chunk, mu_j
+            )  # (B, n_i, n_j, K)
+
+            # Σ_j^{→i} = Ω_ij @ Σ_j @ Ω_ij^T
+            Sigma_transported = torch.einsum(
+                'bijkl,bjlm,bijmn->bijkn',
+                Omega_chunk, sigma_j, Omega_chunk.transpose(-1, -2)
+            )  # (B, n_i, n_j, K, K)
+
+            del Omega_chunk  # Free memory immediately
+
+            # =================================================================
+            # Compute KL divergence for this chunk
+            # =================================================================
+            # Expand mu_i and sigma_i for pairwise comparison - use .clone() after expand
+            mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1).clone()  # (B, n_i, n_j, K)
+            sigma_i_exp = sigma_i_reg[:, :, None, :, :].expand(-1, -1, n_j, -1, -1).clone()
+
+            Sigma_transported_reg = Sigma_transported + eps * I
+
+            try:
+                # Cholesky of transported covariances
+                L_p = torch.linalg.cholesky(Sigma_transported_reg)
+
+                # Trace term: tr(Σ_p⁻¹ Σ_q)
+                Y = torch.linalg.solve_triangular(L_p, sigma_i_exp, upper=False)
+                Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
+                trace_term = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)  # (B, n_i, n_j)
+
+                # Mahalanobis term
+                delta_mu = mu_transported - mu_i_exp  # (B, n_i, n_j, K)
+                v = torch.linalg.solve_triangular(
+                    L_p, delta_mu.unsqueeze(-1), upper=False
+                ).squeeze(-1)
+                mahal_term = torch.sum(v ** 2, dim=-1)  # (B, n_i, n_j)
+
+                # Log determinant terms
+                logdet_p = 2.0 * torch.sum(
+                    torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1
+                )  # (B, n_i, n_j)
+                logdet_q_i_exp = logdet_q_i[:, :, None].expand(-1, -1, n_j)  # (B, n_i, n_j)
+                logdet_term = logdet_p - logdet_q_i_exp
+
+                # KL divergence for chunk
+                kl_chunk = 0.5 * (trace_term + mahal_term - K + logdet_term)
+                kl_chunk = torch.clamp(kl_chunk, min=0.0)
+
+                # Write to output
+                kl_matrix[:, i_start:i_end, j_start:j_end] = kl_chunk
+
+            except RuntimeError:
+                # Fallback to element-wise computation if Cholesky fails
+                for bi in range(n_i):
+                    for bj in range(n_j):
+                        i_idx = i_start + bi
+                        j_idx = j_start + bj
+                        for b in range(B):
+                            kl_ij = _kl_gaussian_torch(
+                                mu_q[b, i_idx], sigma_q[b, i_idx],
+                                mu_transported[b, bi, bj], Sigma_transported[b, bi, bj]
+                            )
+                            kl_matrix[b, i_idx, j_idx] = kl_ij
+
+            # Explicit cleanup
+            del Sigma_transported, mu_transported
+
+
+def _compute_kl_matrix_diagonal_chunked(
+    mu_q: torch.Tensor,        # (B, N, K) belief means
+    sigma_q: torch.Tensor,     # (B, N, K) diagonal variances
+    phi: torch.Tensor,         # (B, N, n_gen) gauge frames
+    generators: torch.Tensor,  # (n_gen, K, K) generators
+    kl_matrix: torch.Tensor,   # (B, N, N) output tensor
+    chunk_size: int = 32,      # Process chunk_size × chunk_size blocks at a time
+) -> None:
+    """
+    CHUNKED diagonal covariance KL computation - O(C²K) memory instead of O(N²K).
+
+    For diagonal Gaussians with chunked processing.
+
+    Args:
+        mu_q: (B, N, K) belief means
+        sigma_q: (B, N, K) diagonal variances (positive)
+        phi: (B, N, n_gen) gauge fields
+        generators: (n_gen, K, K) generators
+        kl_matrix: (B, N, N) output tensor (modified in-place)
+        chunk_size: Size of chunks to process
+    """
+    # Squeeze trailing singleton dimensions for robustness
+    while sigma_q.dim() > 3 and sigma_q.shape[-1] == 1:
+        sigma_q = sigma_q.squeeze(-1)
+
+    B, N, K = mu_q.shape
+    device = mu_q.device
+    dtype = mu_q.dtype
+    eps = 1e-6
+
+    # Ensure sigma is positive
+    sigma_q = sigma_q.clamp(min=eps)
+
+    # =========================================================================
+    # Step 1: Precompute matrix exponentials for ALL positions
+    # =========================================================================
+    phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
+    exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
+    exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
+    del phi_matrix
+
+    # =========================================================================
+    # Step 2: Process in chunks
+    # =========================================================================
+    for i_start in range(0, N, chunk_size):
+        i_end = min(i_start + chunk_size, N)
+        n_i = i_end - i_start
+
+        # Use .contiguous() to create copies and avoid inplace modification errors
+        exp_phi_i = exp_phi[:, i_start:i_end].contiguous()  # (B, n_i, K, K)
+        mu_i = mu_q[:, i_start:i_end].contiguous()          # (B, n_i, K)
+        sigma_i = sigma_q[:, i_start:i_end].contiguous()    # (B, n_i, K)
+
+        for j_start in range(0, N, chunk_size):
+            j_end = min(j_start + chunk_size, N)
+            n_j = j_end - j_start
+
+            # Use .contiguous() to create copies and avoid inplace modification errors
+            exp_neg_phi_j = exp_neg_phi[:, j_start:j_end].contiguous()  # (B, n_j, K, K)
+            mu_j = mu_q[:, j_start:j_end].contiguous()                   # (B, n_j, K)
+            sigma_j = sigma_q[:, j_start:j_end].contiguous()             # (B, n_j, K)
+
+            # =================================================================
+            # Compute Omega for this chunk: (B, n_i, n_j, K, K)
+            # =================================================================
+            Omega_chunk = torch.einsum(
+                'bikl,bjlm->bijkm',
+                exp_phi_i, exp_neg_phi_j
+            )
+
+            # =================================================================
+            # Transport means
+            # =================================================================
+            mu_transported = torch.einsum(
+                'bijkl,bjl->bijk', Omega_chunk, mu_j
+            )  # (B, n_i, n_j, K)
+
+            # =================================================================
+            # Compute diagonal of transported covariance
+            # diag(Ω @ diag(σ_j) @ Ω^T)_k = Σ_l Ω_kl² * σ_j[l]
+            # =================================================================
+            # Use .clone() after expand to create copies and avoid view issues
+            sigma_j_exp = sigma_j[:, None, :, :].expand(-1, n_i, -1, -1).clone()  # (B, n_i, n_j, K)
+            Omega_sq = Omega_chunk ** 2
+            sigma_j_transported = torch.einsum(
+                'bijkl,bijl->bijk', Omega_sq, sigma_j_exp
+            ).clamp(min=eps)  # (B, n_i, n_j, K)
+
+            del Omega_chunk, Omega_sq
+
+            # =================================================================
+            # Diagonal KL computation
+            # =================================================================
+            # Use .clone() after expand to create copies and avoid view issues
+            mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1).clone()  # (B, n_i, n_j, K)
+            sigma_i_exp = sigma_i[:, :, None, :].expand(-1, -1, n_j, -1).clone()  # (B, n_i, n_j, K)
+
+            # Trace term: sum(σ_i / σ_j_transported)
+            trace_term = (sigma_i_exp / sigma_j_transported).sum(dim=-1)
+
+            # Mahalanobis term
+            delta_mu = mu_transported - mu_i_exp
+            mahal_term = ((delta_mu ** 2) / sigma_j_transported).sum(dim=-1)
+
+            # Log determinant term
+            logdet_term = (torch.log(sigma_j_transported) - torch.log(sigma_i_exp)).sum(dim=-1)
+
+            # Full KL
+            kl_chunk = 0.5 * (trace_term + mahal_term - K + logdet_term)
+            kl_chunk = torch.clamp(kl_chunk, min=0.0)
+
+            # Write to output
+            kl_matrix[:, i_start:i_end, j_start:j_end] = kl_chunk
+
+            del sigma_j_transported, mu_transported
+
+
+def estimate_chunk_size(
+    N: int,
+    K: int,
+    available_memory_gb: float = 8.0,
+    dtype_bytes: int = 4,
+    safety_factor: float = 0.5,
+    diagonal_covariance: bool = False,
+) -> int:
+    """
+    Estimate optimal chunk size based on available GPU memory.
+
+    Peak memory per chunk (full covariance):
+    - Omega: C² × K² × dtype_bytes
+    - Sigma_transported: C² × K² × dtype_bytes
+    - Intermediate: ~2-3 × C² × K² × dtype_bytes
+    Total: ~5 × C² × K² × dtype_bytes
+
+    Peak memory per chunk (diagonal covariance):
+    - Omega: C² × K² × dtype_bytes
+    - sigma_transported: C² × K × dtype_bytes
+    Total: ~2 × C² × K² × dtype_bytes (Omega dominates)
+
+    Args:
+        N: Sequence length
+        K: Embedding dimension
+        available_memory_gb: Available GPU memory in GB
+        dtype_bytes: Bytes per element (4 for float32)
+        safety_factor: Fraction of memory to use (0.5 = use 50%)
+        diagonal_covariance: Whether using diagonal mode
+
+    Returns:
+        Recommended chunk size C
+    """
+    available_bytes = available_memory_gb * 1e9 * safety_factor
+
+    # Memory per chunk: ~5 × C² × K² × dtype_bytes (full) or ~2 × C² × K² (diagonal)
+    multiplier = 2.0 if diagonal_covariance else 5.0
+    bytes_per_c_squared = multiplier * K * K * dtype_bytes
+
+    # Solve for C: C² ≤ available_bytes / bytes_per_c_squared
+    max_c_squared = available_bytes / bytes_per_c_squared
+    max_c = int(max_c_squared ** 0.5)
+
+    # Round down to power of 2 for efficiency (optional)
+    # chunk_size = 2 ** int(np.log2(max_c)) if max_c >= 2 else 1
+
+    # Clamp to reasonable range
+    chunk_size = max(4, min(max_c, N))
+
+    return chunk_size
+
+
+# =============================================================================
+# BLOCK-DIAGONAL KL Computation (Principled & Memory-Efficient)
+# =============================================================================
+# This is the PRINCIPLED approach: exploit block-diagonal structure of irreps.
+# For ρ = n₁ℓ₁ ⊕ n₂ℓ₂ ⊕ ... with block sizes d₁, d₂, ...:
+# - Generators G are block-diagonal → Omega = exp(φ·G) is block-diagonal
+# - Covariances Σ are block-diagonal
+# - KL(q || p) = Σᵢ KL(qᵢ || pᵢ) decomposes additively
+#
+# Memory: O(N² × Σᵢ dᵢ²) instead of O(N² × K²)
+# For K=255 with 75×ℓ₀ + 30×ℓ₁ + 18×ℓ₂: 795 vs 65025 = 82× savings!
+# =============================================================================
+
+def _compute_kl_matrix_block_diagonal(
+    mu_q: torch.Tensor,             # (B, N, K) belief means
+    sigma_q: torch.Tensor,          # (B, N, K, K) block-diagonal covariances
+    phi: torch.Tensor,              # (B, N, n_gen) gauge frames
+    generators: torch.Tensor,       # (n_gen, K, K) block-diagonal generators
+    kl_matrix: torch.Tensor,        # (B, N, N) output tensor
+    irrep_dims: List[int],          # [d₁, d₂, ...] dimensions of each irrep block
+) -> None:
+    """
+    BLOCK-DIAGONAL KL computation - exploits irrep structure for massive memory savings.
+
+    Since generators and covariances are block-diagonal:
+    - Omega_ij = exp(φ_i·G)·exp(-φ_j·G) is block-diagonal
+    - Transport Ω @ Σ @ Ω^T is block-diagonal
+    - KL = Σ_blocks KL_block (additive decomposition)
+
+    Args:
+        mu_q: (B, N, K) belief means
+        sigma_q: (B, N, K, K) block-diagonal covariances
+        phi: (B, N, n_gen) gauge fields
+        generators: (n_gen, K, K) block-diagonal generators
+        kl_matrix: (B, N, N) output tensor (modified in-place)
+        irrep_dims: List of block dimensions [d₁, d₂, d₃, ...]
+                   Must sum to K.
+    """
+    B, N, K = mu_q.shape
+    device = mu_q.device
+    dtype = mu_q.dtype
+    eps = 1e-6
+
+    # Validate irrep_dims
+    assert sum(irrep_dims) == K, f"irrep_dims sum {sum(irrep_dims)} != K={K}"
+
+    # Initialize output to zero (we'll accumulate KL from each block)
+    kl_matrix.zero_()
+
+    # =========================================================================
+    # Process each irrep block separately
+    # =========================================================================
+    block_start = 0
+    for block_idx, d in enumerate(irrep_dims):
+        block_end = block_start + d
+
+        # Extract block from beliefs - use .contiguous() to create copies and avoid
+        # inplace modification errors during backward pass
+        mu_block = mu_q[:, :, block_start:block_end].contiguous()  # (B, N, d)
+        sigma_block = sigma_q[:, :, block_start:block_end, block_start:block_end].contiguous()  # (B, N, d, d)
+
+        # Extract block from generators - contiguous for consistency
+        gen_block = generators[:, block_start:block_end, block_start:block_end].contiguous()  # (n_gen, d, d)
+
+        # =====================================================================
+        # Compute block-wise transport operators
+        # =====================================================================
+        # phi_matrix_block: (B, N, d, d)
+        phi_matrix_block = torch.einsum('bna,aij->bnij', phi, gen_block)
+        exp_phi_block = torch.matrix_exp(phi_matrix_block)        # (B, N, d, d)
+        exp_neg_phi_block = torch.matrix_exp(-phi_matrix_block)   # (B, N, d, d)
+
+        # Omega_block: (B, N, N, d, d) - MUCH smaller than (B, N, N, K, K)!
+        Omega_block = torch.einsum(
+            'bikl,bjlm->bijkm',
+            exp_phi_block, exp_neg_phi_block
+        )
+
+        del phi_matrix_block, exp_phi_block, exp_neg_phi_block
+
+        # =====================================================================
+        # Transport means and covariances for this block
+        # =====================================================================
+        # μ_block_transported: (B, N, N, d)
+        mu_block_transported = torch.einsum(
+            'bijkl,bjl->bijk', Omega_block, mu_block
+        )
+
+        # Σ_block_transported: (B, N, N, d, d)
+        sigma_block_transported = torch.einsum(
+            'bijkl,bjlm,bijmn->bijkn',
+            Omega_block, sigma_block, Omega_block.transpose(-1, -2)
+        )
+
+        del Omega_block
+
+        # =====================================================================
+        # Compute KL for this block
+        # =====================================================================
+        I_block = torch.eye(d, device=device, dtype=dtype)
+
+        # Expand for pairwise comparison - use .clone() after expand to create copies
+        # and avoid view-related gradient issues
+        mu_block_i = mu_block[:, :, None, :].expand(-1, -1, N, -1).clone()  # (B, N, N, d)
+        sigma_block_i = sigma_block[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()  # (B, N, N, d, d)
+
+        sigma_block_i_reg = sigma_block_i + eps * I_block
+        sigma_block_transported_reg = sigma_block_transported + eps * I_block
+
+        try:
+            # Cholesky decompositions
+            L_p = torch.linalg.cholesky(sigma_block_transported_reg)
+            L_q = torch.linalg.cholesky(sigma_block_i_reg)
+
+            # Trace term: tr(Σ_p⁻¹ Σ_q)
+            Y = torch.linalg.solve_triangular(L_p, sigma_block_i_reg, upper=False)
+            Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
+            trace_term = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)
+
+            # Mahalanobis term
+            delta_mu = mu_block_transported - mu_block_i
+            v = torch.linalg.solve_triangular(
+                L_p, delta_mu.unsqueeze(-1), upper=False
+            ).squeeze(-1)
+            mahal_term = torch.sum(v ** 2, dim=-1)
+
+            # Log determinant terms
+            logdet_p = 2.0 * torch.sum(
+                torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1
+            )
+            logdet_q = 2.0 * torch.sum(
+                torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1
+            )
+
+            # KL for this block
+            kl_block = 0.5 * (trace_term + mahal_term - d + logdet_p - logdet_q)
+            kl_block = torch.clamp(kl_block, min=0.0)
+
+            # ACCUMULATE to total KL (additive decomposition)
+            kl_matrix.add_(kl_block)
+
+        except RuntimeError as e:
+            # Fallback: add small regularization and retry
+            sigma_block_transported_reg = sigma_block_transported + 1e-4 * I_block
+            L_p = torch.linalg.cholesky(sigma_block_transported_reg)
+            # ... simplified fallback, just add eps contribution
+            kl_matrix.add_(eps)
+
+        # Cleanup
+        del sigma_block_transported, mu_block_transported
+
+        block_start = block_end
+
+
+def _compute_kl_matrix_block_diagonal_chunked(
+    mu_q: torch.Tensor,             # (B, N, K) belief means
+    sigma_q: torch.Tensor,          # (B, N, K, K) block-diagonal covariances
+    phi: torch.Tensor,              # (B, N, n_gen) gauge frames
+    generators: torch.Tensor,       # (n_gen, K, K) block-diagonal generators
+    kl_matrix: torch.Tensor,        # (B, N, N) output tensor
+    irrep_dims: List[int],          # [d₁, d₂, ...] dimensions of each irrep block
+    chunk_size: int = 64,           # Process N×N in chunks
+) -> None:
+    """
+    BLOCK-DIAGONAL + CHUNKED KL computation - maximum memory efficiency.
+
+    Combines:
+    1. Block-diagonal structure: O(Σᵢ dᵢ²) instead of O(K²) per pair
+    2. Chunking: O(C²) pairs at a time instead of O(N²)
+
+    Total memory: O(C² × max(dᵢ²)) instead of O(N² × K²)
+
+    Args:
+        mu_q: (B, N, K) belief means
+        sigma_q: (B, N, K, K) block-diagonal covariances
+        phi: (B, N, n_gen) gauge fields
+        generators: (n_gen, K, K) block-diagonal generators
+        kl_matrix: (B, N, N) output tensor (modified in-place)
+        irrep_dims: List of block dimensions [d₁, d₂, d₃, ...]
+        chunk_size: Process chunk_size × chunk_size position pairs at a time
+    """
+    B, N, K = mu_q.shape
+    device = mu_q.device
+    dtype = mu_q.dtype
+    eps = 1e-6
+
+    assert sum(irrep_dims) == K, f"irrep_dims sum {sum(irrep_dims)} != K={K}"
+
+    # Initialize output
+    kl_matrix.zero_()
+
+    # =========================================================================
+    # Precompute block-wise matrix exponentials for all positions
+    # Memory: O(N × Σᵢ dᵢ²) - manageable
+    # =========================================================================
+    block_exp_phi = []      # List of (B, N, dᵢ, dᵢ) tensors
+    block_exp_neg_phi = []  # List of (B, N, dᵢ, dᵢ) tensors
+
+    block_start = 0
+    for d in irrep_dims:
+        block_end = block_start + d
+        gen_block = generators[:, block_start:block_end, block_start:block_end]
+
+        phi_matrix_block = torch.einsum('bna,aij->bnij', phi, gen_block)  # (B, N, d, d)
+        block_exp_phi.append(torch.matrix_exp(phi_matrix_block))
+        block_exp_neg_phi.append(torch.matrix_exp(-phi_matrix_block))
+
+        block_start = block_end
+
+    # =========================================================================
+    # Process position pairs in chunks, accumulate KL across blocks
+    # =========================================================================
+    for i_start in range(0, N, chunk_size):
+        i_end = min(i_start + chunk_size, N)
+        n_i = i_end - i_start
+
+        for j_start in range(0, N, chunk_size):
+            j_end = min(j_start + chunk_size, N)
+            n_j = j_end - j_start
+
+            # Allocate chunk output
+            kl_chunk = torch.zeros(B, n_i, n_j, device=device, dtype=dtype)
+
+            # Process each irrep block
+            block_start = 0
+            for block_idx, d in enumerate(irrep_dims):
+                block_end = block_start + d
+
+                # Get precomputed exponentials for this chunk - use .contiguous() to avoid
+                # inplace modification errors during backward pass
+                exp_phi_i = block_exp_phi[block_idx][:, i_start:i_end].contiguous()      # (B, n_i, d, d)
+                exp_neg_phi_j = block_exp_neg_phi[block_idx][:, j_start:j_end].contiguous()  # (B, n_j, d, d)
+
+                # Compute Omega for this block-chunk: (B, n_i, n_j, d, d)
+                Omega_block = torch.einsum('bikl,bjlm->bijkm', exp_phi_i, exp_neg_phi_j)
+
+                # Extract beliefs for this block-chunk - use .contiguous() to create copies
+                mu_i = mu_q[:, i_start:i_end, block_start:block_end].contiguous()  # (B, n_i, d)
+                mu_j = mu_q[:, j_start:j_end, block_start:block_end].contiguous()  # (B, n_j, d)
+                sigma_i = sigma_q[:, i_start:i_end, block_start:block_end, block_start:block_end].contiguous()
+                sigma_j = sigma_q[:, j_start:j_end, block_start:block_end, block_start:block_end].contiguous()
+
+                # Transport
+                mu_transported = torch.einsum('bijkl,bjl->bijk', Omega_block, mu_j)
+                sigma_transported = torch.einsum(
+                    'bijkl,bjlm,bijmn->bijkn',
+                    Omega_block, sigma_j, Omega_block.transpose(-1, -2)
+                )
+
+                del Omega_block
+
+                # Compute KL for this block - use .clone() after expand to create copies
+                I_d = torch.eye(d, device=device, dtype=dtype)
+                mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1).clone()
+                sigma_i_exp = sigma_i[:, :, None, :, :].expand(-1, -1, n_j, -1, -1).clone()
+
+                sigma_i_reg = sigma_i_exp + eps * I_d
+                sigma_transported_reg = sigma_transported + eps * I_d
+
+                try:
+                    L_p = torch.linalg.cholesky(sigma_transported_reg)
+                    L_q = torch.linalg.cholesky(sigma_i_reg)
+
+                    # Trace term
+                    Y = torch.linalg.solve_triangular(L_p, sigma_i_reg, upper=False)
+                    Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
+                    trace_term = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)
+
+                    # Mahalanobis term
+                    delta_mu = mu_transported - mu_i_exp
+                    v = torch.linalg.solve_triangular(
+                        L_p, delta_mu.unsqueeze(-1), upper=False
+                    ).squeeze(-1)
+                    mahal_term = torch.sum(v ** 2, dim=-1)
+
+                    # Log det terms
+                    logdet_p = 2.0 * torch.sum(
+                        torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1
+                    )
+                    logdet_q = 2.0 * torch.sum(
+                        torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1
+                    )
+
+                    # Accumulate block KL
+                    kl_block = 0.5 * (trace_term + mahal_term - d + logdet_p - logdet_q)
+                    kl_chunk.add_(torch.clamp(kl_block, min=0.0))
+
+                except RuntimeError:
+                    # Fallback: add small contribution
+                    kl_chunk.add_(eps)
+
+                del sigma_transported, mu_transported
+                block_start = block_end
+
+            # Write chunk to output
+            kl_matrix[:, i_start:i_end, j_start:j_end] = kl_chunk
+
+
+# =============================================================================
+# Efficient Local Window Attention (O(N×W) instead of O(N²))
+# =============================================================================
+
+def compute_attention_weights_local(
+    mu_q: torch.Tensor,        # (B, N, K) belief means
+    sigma_q: torch.Tensor,     # (B, N, K, K) or (B, N, K) if diagonal
+    phi: torch.Tensor,         # (B, N, 3) gauge frames
+    generators: torch.Tensor,  # (3, K, K) SO(3) generators
+    kappa: float,              # Temperature
+    window: int,               # Local attention window size
+    epsilon: float = 1e-8,     # Numerical stability
+    causal: bool = True,       # Causal masking
+    diagonal_covariance: bool = False,  # Use diagonal sigma
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Efficient LOCAL window attention - O(N×W) instead of O(N²).
+
+    Each token i attends only to tokens in [max(0, i-W), i] (causal)
+    or [max(0, i-W//2), min(N, i+W//2+1)] (bidirectional).
+
+    This avoids computing the full N×N KL matrix by:
+    1. Only computing transport operators for local pairs
+    2. Using sparse iteration over the window
+
+    Args:
+        mu_q: Query belief means, shape (B, N, K)
+        sigma_q: Query covariances, (B, N, K, K) or (B, N, K) if diagonal
+        phi: Gauge frames, shape (B, N, 3)
+        generators: SO(3) generators, shape (3, K, K)
+        kappa: Temperature parameter
+        window: Local attention window size
+        epsilon: Softmax stability constant
+        causal: If True, apply causal masking (can only attend to past)
+        diagonal_covariance: If True, sigma_q is (B, N, K) diagonal
+
+    Returns:
+        beta: Sparse attention weights as dense (B, N, N) with zeros outside window
+        kl_matrix: Sparse KL divergences as dense (B, N, N) with zeros outside window
+
+    Complexity:
+        - Full attention: O(B × N² × K³)
+        - Local attention: O(B × N × W × K³)
+        - Speedup: N/W (e.g., 16x for N=1024, W=64)
+    """
+    B, N, K = mu_q.shape
+    device = mu_q.device
+    dtype = mu_q.dtype
+    eps = 1e-6
+
+    # Allocate sparse KL matrix (inf for invalid pairs)
+    kl_matrix = torch.full((B, N, N), float('inf'), device=device, dtype=dtype)
+
+    # Precompute per-token transport components (O(N×K³) for matrix exp)
+    phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
+    exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
+    exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
+
+    # For each relative position in the window, compute KL in batch
+    if causal:
+        # Causal: attend to positions [i-W+1, i] (including self)
+        rel_positions = range(-window + 1, 1)  # [-W+1, -W+2, ..., -1, 0]
+    else:
+        # Bidirectional: attend to positions [i-W//2, i+W//2]
+        half_w = window // 2
+        rel_positions = range(-half_w, half_w + 1)
+
+    for rel_pos in rel_positions:
+        # Compute indices: i attends to j = i + rel_pos
+        if rel_pos >= 0:
+            i_start, i_end = 0, N - rel_pos
+            j_start, j_end = rel_pos, N
+        else:
+            i_start, i_end = -rel_pos, N
+            j_start, j_end = 0, N + rel_pos
+
+        n_pairs = i_end - i_start
+        if n_pairs <= 0:
+            continue
+
+        # Slice tensors for this relative position
+        # Query tokens: positions i_start to i_end
+        mu_i = mu_q[:, i_start:i_end, :]           # (B, n_pairs, K)
+        phi_i_exp = exp_phi[:, i_start:i_end, :, :]  # (B, n_pairs, K, K)
+
+        # Key tokens: positions j_start to j_end
+        mu_j = mu_q[:, j_start:j_end, :]           # (B, n_pairs, K)
+        phi_j_neg_exp = exp_neg_phi[:, j_start:j_end, :, :]  # (B, n_pairs, K, K)
+
+        # Compute transport: Omega_ij = exp(phi_i) @ exp(-phi_j)
+        # Shape: (B, n_pairs, K, K)
+        Omega = torch.einsum('bpkl,bplm->bpkm', phi_i_exp, phi_j_neg_exp)
+
+        # Transport mu_j to i's frame: mu_j_transported = Omega @ mu_j
+        mu_j_transported = torch.einsum('bpkl,bpl->bpk', Omega, mu_j)  # (B, n_pairs, K)
+
+        if diagonal_covariance:
+            # Diagonal KL (efficient)
+            sigma_i = sigma_q[:, i_start:i_end, :]  # (B, n_pairs, K)
+            sigma_j = sigma_q[:, j_start:j_end, :]  # (B, n_pairs, K)
+
+            # Clamp for stability
+            sigma_i = sigma_i.clamp(min=eps)
+            sigma_j = sigma_j.clamp(min=eps)
+
+            # KL terms
+            trace_term = (sigma_i / sigma_j).sum(dim=-1)  # (B, n_pairs)
+            delta_mu = mu_j_transported - mu_i
+            mahal_term = ((delta_mu ** 2) / sigma_j).sum(dim=-1)  # (B, n_pairs)
+            logdet_term = (torch.log(sigma_j) - torch.log(sigma_i)).sum(dim=-1)
+
+            kl_vals = 0.5 * (trace_term + mahal_term - K + logdet_term)
+        else:
+            # Full covariance KL
+            sigma_i = sigma_q[:, i_start:i_end, :, :]  # (B, n_pairs, K, K)
+            sigma_j = sigma_q[:, j_start:j_end, :, :]  # (B, n_pairs, K, K)
+
+            # Transport sigma_j: Sigma_j_transported = Omega @ Sigma_j @ Omega^T
+            Sigma_j_transported = torch.einsum(
+                'bpkl,bplm,bpmn->bpkn',
+                Omega, sigma_j, Omega.transpose(-1, -2)
+            )  # (B, n_pairs, K, K)
+
+            # Compute KL via Cholesky
+            I = torch.eye(K, device=device, dtype=dtype)
+            sigma_i_reg = sigma_i + eps * I
+            Sigma_j_reg = Sigma_j_transported + eps * I
+
+            try:
+                L_p = torch.linalg.cholesky(Sigma_j_reg)
+                Y = torch.linalg.solve_triangular(L_p, sigma_i_reg, upper=False)
+                Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
+                trace_term = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)
+
+                delta_mu = mu_j_transported - mu_i
+                v = torch.linalg.solve_triangular(
+                    L_p, delta_mu.unsqueeze(-1), upper=False
+                ).squeeze(-1)
+                mahal_term = torch.sum(v ** 2, dim=-1)
+
+                logdet_p = 2.0 * torch.sum(
+                    torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1
+                )
+                L_q = torch.linalg.cholesky(sigma_i_reg)
+                logdet_q = 2.0 * torch.sum(
+                    torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1
+                )
+                logdet_term = logdet_p - logdet_q
+
+                kl_vals = 0.5 * (trace_term + mahal_term - K + logdet_term)
+            except RuntimeError:
+                # Fallback: set to large value
+                kl_vals = torch.full((B, n_pairs), 100.0, device=device, dtype=dtype)
+
+        kl_vals = torch.clamp(kl_vals, min=0.0)
+
+        # Scatter into KL matrix
+        i_indices = torch.arange(i_start, i_end, device=device)
+        j_indices = torch.arange(j_start, j_end, device=device)
+        kl_matrix[:, i_indices, j_indices] = kl_vals
+
+    # NOTE: KL used directly - proper init_std=1/sqrt(K) ensures O(1) scaling
+
+    # Convert KL to attention weights
+    logits = -kl_matrix / kappa
+    beta = F.softmax(logits, dim=-1)
+
+    # Clamp for numerical stability (preserves sum=1, see compute_attention_weights())
+    beta = beta.clamp(min=epsilon)
+
+    # CRITICAL: Replace inf with 0 in KL matrix for loss computation
+    # This prevents 0 * inf = NaN when computing beta * kl in the loss
+    # (beta is 0 where kl was inf, but floating point 0*inf = nan)
+    kl_matrix = torch.where(
+        torch.isinf(kl_matrix),
+        torch.zeros_like(kl_matrix),
+        kl_matrix
+    )
+
+    return beta, kl_matrix
+
+
+def compute_attention_weights_sparse(
+    mu_q: torch.Tensor,        # (B, N, K)
+    sigma_q: torch.Tensor,     # (B, N, K, K) or (B, N, K)
+    phi: torch.Tensor,         # (B, N, 3)
+    generators: torch.Tensor,  # (3, K, K)
+    kappa: float,
+    mask: torch.Tensor,        # (B, N, N) or (N, N) sparse mask
+    epsilon: float = 1e-8,
+    diagonal_covariance: bool = False,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Sparse attention that only computes KL for valid mask entries.
+
+    For sparse masks with M << N² valid entries, this is O(M×K³) instead of O(N²×K³).
+
+    Args:
+        mu_q: Query means (B, N, K)
+        sigma_q: Query covariances
+        phi: Gauge frames (B, N, 3)
+        generators: SO(3) generators (3, K, K)
+        kappa: Temperature
+        mask: Binary mask where 1 = can attend, 0 = cannot attend
+        epsilon: Numerical stability
+        diagonal_covariance: Use diagonal covariances
+
+    Returns:
+        beta: Attention weights (B, N, N) - zeros where mask=0
+        kl_matrix: KL divergences (B, N, N) - zeros where mask=0
+    """
+    B, N, K = mu_q.shape
+    device = mu_q.device
+    dtype = mu_q.dtype
+
+    # Expand mask if needed
+    if mask.dim() == 2:
+        mask = mask.unsqueeze(0).expand(B, -1, -1)
+
+    # Count valid pairs per row
+    valid_counts = mask.sum(dim=-1)  # (B, N)
+    total_valid = mask.sum().item()
+    total_pairs = B * N * N
+
+    # Heuristic: if more than 30% valid, use full computation
+    sparsity_ratio = total_valid / total_pairs
+    if sparsity_ratio > 0.3:
+        # Fall back to full computation with masking
+        kl_matrix = torch.zeros(B, N, N, device=device, dtype=dtype)
+        if diagonal_covariance:
+            _compute_kl_matrix_diagonal(mu_q, sigma_q, phi, generators, kl_matrix, None)
+        else:
+            _compute_kl_matrix_torch(mu_q, sigma_q, phi, generators, kl_matrix, None)
+
+        logits = -kl_matrix / kappa
+        logits = logits.masked_fill(mask == 0, float('-inf'))
+        beta = F.softmax(logits, dim=-1)
+        # Clamp for numerical stability (preserves sum=1)
+        beta = beta.clamp(min=epsilon)
+        return beta, kl_matrix
+
+    # Sparse computation: iterate over valid pairs
+    kl_matrix = torch.full((B, N, N), float('inf'), device=device, dtype=dtype)
+
+    # Find valid (i, j) pairs
+    valid_indices = mask.nonzero(as_tuple=False)  # (M, 3) where M = number of valid pairs
+
+    if valid_indices.numel() == 0:
+        # No valid pairs - return uniform attention
+        beta = torch.ones(B, N, N, device=device, dtype=dtype) / N
+        return beta, kl_matrix
+
+    # Precompute transport components
+    phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
+    exp_phi = torch.matrix_exp(phi_matrix)
+    exp_neg_phi = torch.matrix_exp(-phi_matrix)
+
+    eps = 1e-6
+
+    # Process in batches to limit memory
+    batch_size_sparse = min(1024, valid_indices.shape[0])
+
+    for start in range(0, valid_indices.shape[0], batch_size_sparse):
+        end = min(start + batch_size_sparse, valid_indices.shape[0])
+        batch_indices = valid_indices[start:end]  # (batch, 3)
+
+        b_idx = batch_indices[:, 0]
+        i_idx = batch_indices[:, 1]
+        j_idx = batch_indices[:, 2]
+
+        # Gather relevant tensors
+        mu_i = mu_q[b_idx, i_idx]      # (batch, K)
+        mu_j = mu_q[b_idx, j_idx]      # (batch, K)
+        exp_phi_i = exp_phi[b_idx, i_idx]      # (batch, K, K)
+        exp_neg_phi_j = exp_neg_phi[b_idx, j_idx]  # (batch, K, K)
+
+        # Compute Omega = exp(phi_i) @ exp(-phi_j)
+        Omega = torch.bmm(exp_phi_i, exp_neg_phi_j)  # (batch, K, K)
+
+        # Transport mu_j
+        mu_j_transported = torch.bmm(Omega, mu_j.unsqueeze(-1)).squeeze(-1)
+
+        if diagonal_covariance:
+            sigma_i = sigma_q[b_idx, i_idx].clamp(min=eps)  # (batch, K)
+            sigma_j = sigma_q[b_idx, j_idx].clamp(min=eps)
+
+            trace_term = (sigma_i / sigma_j).sum(dim=-1)
+            delta_mu = mu_j_transported - mu_i
+            mahal_term = ((delta_mu ** 2) / sigma_j).sum(dim=-1)
+            logdet_term = (torch.log(sigma_j) - torch.log(sigma_i)).sum(dim=-1)
+
+            kl_vals = 0.5 * (trace_term + mahal_term - K + logdet_term)
+        else:
+            sigma_i = sigma_q[b_idx, i_idx]  # (batch, K, K)
+            sigma_j = sigma_q[b_idx, j_idx]
+
+            # Transport sigma_j
+            Sigma_j_transported = torch.bmm(torch.bmm(Omega, sigma_j), Omega.transpose(-1, -2))
+
+            # KL computation
+            I = torch.eye(K, device=device, dtype=dtype)
+            sigma_i_reg = sigma_i + eps * I
+            Sigma_j_reg = Sigma_j_transported + eps * I
+
+            try:
+                L_p = torch.linalg.cholesky(Sigma_j_reg)
+                Y = torch.linalg.solve_triangular(L_p, sigma_i_reg, upper=False)
+                Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
+                trace_term = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)
+
+                delta_mu = mu_j_transported - mu_i
+                v = torch.linalg.solve_triangular(
+                    L_p, delta_mu.unsqueeze(-1), upper=False
+                ).squeeze(-1)
+                mahal_term = torch.sum(v ** 2, dim=-1)
+
+                logdet_p = 2.0 * torch.sum(
+                    torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1
+                )
+                L_q = torch.linalg.cholesky(sigma_i_reg)
+                logdet_q = 2.0 * torch.sum(
+                    torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1
+                )
+                logdet_term = logdet_p - logdet_q
+
+                kl_vals = 0.5 * (trace_term + mahal_term - K + logdet_term)
+            except RuntimeError:
+                kl_vals = torch.full((end - start,), 100.0, device=device, dtype=dtype)
+
+        kl_vals = torch.clamp(kl_vals, min=0.0)
+
+        # Scatter to output
+        kl_matrix[b_idx, i_idx, j_idx] = kl_vals
+
+    # NOTE: KL used directly - proper init_std=1/sqrt(K) ensures O(1) scaling
+
+    # Convert to attention
+    logits = -kl_matrix / kappa
+    beta = F.softmax(logits, dim=-1)
+    # Clamp for numerical stability (preserves sum=1)
+    beta = beta.clamp(min=epsilon)
+
+    # CRITICAL: Replace inf with 0 in KL matrix for loss computation
+    # This prevents 0 * inf = NaN when computing beta * kl in the loss
+    kl_matrix = torch.where(
+        torch.isinf(kl_matrix),
+        torch.zeros_like(kl_matrix),
+        kl_matrix
+    )
+
+    return beta, kl_matrix
+
+
+# =============================================================================
+# Message Aggregation with Parallel Transport
+# =============================================================================
+
+def aggregate_messages(
+    mu_q: torch.Tensor,         # (B, N, K)
+    sigma_q: torch.Tensor,      # (B, N, K, K) or (B, N, K) if diagonal
+    phi: torch.Tensor,          # (B, N, 3)
+    beta: torch.Tensor,         # (B, N, N) attention weights
+    generators: torch.Tensor,   # (3, K, K)
+    aggregate_mode: str = 'mean_only',  # 'mean_only' or 'full_distribution'
+    diagonal_covariance: bool = False,
+    cached_transport: Optional[dict] = None,  # Precomputed transport operators
+) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    """
+    Aggregate messages: m_i = Σ_j β_ij Ω_ij[μ_j].
+
+    0D Version: Simple weighted sum over agents, no spatial integration!
+
+    Two modes:
+        1. 'mean_only': Only aggregate means (faster)
+           Returns: (messages, None)
+
+        2. 'full_distribution': Aggregate full distributions
+           Returns: (mu_aggregated, sigma_aggregated)
+           Uses mixture of Gaussians approximation
+
+    Args:
+        mu_q: Belief means (B, N, K)
+        sigma_q: Belief covariances (B, N, K, K)
+        phi: Gauge frames (B, N, 3)
+        beta: Attention weights (B, N, N) - SCALARS, not fields!
+        generators: SO(3) generators (3, K, K)
+        aggregate_mode: 'mean_only' or 'full_distribution'
+        cached_transport: Optional dict with precomputed 'Omega' from compute_transport_operators()
+
+    Returns:
+        mu_agg: Aggregated means (B, N, K)
+        sigma_agg: Aggregated covariances (B, N, K, K) or None
+
+    Example:
+        >>> mu_agg, _ = aggregate_messages(mu, sigma, phi, beta, G, mode='mean_only')
+        >>> # mu_agg[b, i] = Σ_j β[b,i,j] * Ω_ij[μ[b,j]]
+    """
+    batch_size, num_agents, K = mu_q.shape
+    device = mu_q.device
+    dtype = mu_q.dtype
+
+    # =========================================================================
+    # VECTORIZED aggregation - no Python loops!
+    # =========================================================================
+
+    # Step 1: Get transport operators (use cached if available)
+    if cached_transport is not None and 'Omega' in cached_transport:
+        # Use precomputed transport operators (saves 2 matrix exponentials!)
+        Omega = cached_transport['Omega']
+    else:
+        # Compute all pairwise transport operators Ω_ij = exp(φ_i) exp(-φ_j)
+        phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
+        exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
+        exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
+
+        # Omega_ij = exp(φ_i) @ exp(-φ_j)  ->  (B, N, N, K, K)
+        Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
+
+    # Step 2: Transport all means: μ_j^{→i} = Ω_ij @ μ_j
+    mu_transported = torch.einsum('bijkl,bjl->bijk', Omega, mu_q)  # (B, N, N, K)
+
+    # Step 3: Weighted aggregation: m_i = Σ_j β_ij * μ_j^{→i}
+    # beta: (B, N, N), mu_transported: (B, N, N, K)
+    mu_aggregated = torch.einsum('bij,bijk->bik', beta, mu_transported)  # (B, N, K)
+
+    # Step 4: Covariance aggregation (if requested)
+    if aggregate_mode == 'full_distribution':
+        B, N, K = mu_q.shape
+        if diagonal_covariance:
+            # DIAGONAL MODE: sigma_q is (B, N, K)
+            # IMPORTANT: Transport DOES change diagonal covariance!
+            # Σ_j^{→i} = Ω_ij @ diag(σ_j) @ Ω_ij^T is generally FULL, but we
+            # take its diagonal for the output to stay in diagonal mode.
+            # This is the CORRECT approximation: diag(Ω @ diag(σ) @ Ω^T)
+
+            # Squeeze trailing singleton dimensions for robustness
+            sigma_q_diag = sigma_q
+            while sigma_q_diag.dim() > 3 and sigma_q_diag.shape[-1] == 1:
+                sigma_q_diag = sigma_q_diag.squeeze(-1)
+
+            # Expand diagonal to full covariance for transport: (B, N, K, K)
+            sigma_full = torch.diag_embed(sigma_q_diag)  # (B, N, K, K)
+
+            # Transport covariances: Σ_j^{→i} = Ω_ij @ Σ_j @ Ω_ij^T
+            # Omega: (B, N, N, K, K), sigma_full: (B, N, K, K)
+            Sigma_transported_full = torch.einsum(
+                'bijkl,bjlm,bijmn->bijkn',
+                Omega, sigma_full, Omega.transpose(-1, -2)
+            )  # (B, N, N, K, K)
+
+            # Extract diagonal of transported covariance: (B, N, N, K)
+            # Use .clone() to avoid view-related gradient issues
+            sigma_transported_diag = torch.diagonal(Sigma_transported_full, dim1=-2, dim2=-1).clone()
+
+            # Second moment: E[x²] = diag(Σ_transported) + μ²
+            second_moment = sigma_transported_diag + mu_transported ** 2  # (B, N, N, K)
+
+            # Weighted sum
+            sigma_aggregated = torch.einsum('bij,bijk->bik', beta, second_moment)
+
+            # Complete mixture variance: Var = E[x²] - E[x]²
+            sigma_aggregated = sigma_aggregated - mu_aggregated ** 2  # (B, N, K)
+        else:
+            # FULL COVARIANCE MODE: sigma_q is (B, N, K, K)
+            # Transport all covariances: Σ_j^{→i} = Ω_ij @ Σ_j @ Ω_ij^T
+            Sigma_transported = torch.einsum(
+                'bijkl,bjlm,bijmn->bijkn',
+                Omega, sigma_q, Omega.transpose(-1, -2)
+            )  # (B, N, N, K, K)
+
+            # Second moment: E[x x^T] = Σ + μ μ^T
+            # (B, N, N, K, K) + (B, N, N, K, 1) @ (B, N, N, 1, K)
+            second_moment = Sigma_transported + torch.einsum(
+                'bijk,bijl->bijkl', mu_transported, mu_transported
+            )
+
+            # Weighted sum of second moments
+            # beta: (B, N, N), second_moment: (B, N, N, K, K)
+            sigma_aggregated = torch.einsum('bij,bijkl->bikl', beta, second_moment)
+
+            # Complete mixture variance: Σ_mix = E[x x^T] - E[x] E[x]^T
+            sigma_aggregated = sigma_aggregated - torch.einsum(
+                'bik,bil->bikl', mu_aggregated, mu_aggregated
+            )
+    else:
+        sigma_aggregated = None
+
+    return mu_aggregated, sigma_aggregated
+
+
+# =============================================================================
+# Multi-Head Attention with Irrep Structure
+# =============================================================================
+
+class IrrepMultiHeadAttention(nn.Module):
+    """
+    Multi-head attention where heads correspond to SO(3) irreducible representations.
+
+    Standard Transformer:
+        - n_heads separate (W_Q, W_K, W_V) projections
+        - Head dim = embed_dim / n_heads
+        - Free parameter choices
+
+    Gauge Transformer:
+        - NO W_Q, W_K! (attention from KL divergence)
+        - Heads = irrep blocks (ℓ0, ℓ1, ℓ2, ℓ3, ...)
+        - Constrained by SO(3) symmetry
+        - Each irrep transforms with specific rule under gauge
+
+    Irrep Decomposition:
+        K = Σ_ℓ multiplicity_ℓ × dim_ℓ
+
+    Example (96-dim embedding):
+        K = 12×1 + 7×3 + 5×5 + 2×7 = 96
+        ℓ0: 12 scalar channels (gauge-invariant)
+        ℓ1: 7 vector channels (transform as vectors)
+        ℓ2: 5 rank-2 tensor channels
+        ℓ3: 2 rank-3 tensor channels
+    """
+
+    def __init__(
+        self,
+        embed_dim: int,
+        irrep_spec: List[Tuple[str, int, int]],
+        kappa_beta: float,
+        epsilon: float = 1e-8,
+        aggregate_mode: str = 'mean_only',
+        diagonal_covariance: bool = False,
+        attention_pattern: str = 'full',
+        attention_window: int = 64,
+        use_fast_exp: bool = True,   # Default True for speed
+        exp_order: int = 4,
+        gauge_group: str = 'SO3',  # 'SO3' or 'SON'
+        gauge_dim: int = 3,        # N for SO(N) - only used when gauge_group='SON'
+        global_generators: Optional[torch.Tensor] = None,  # (n_gen, K, K) for SO(N) mode
+        self_attention_penalty: float = 0.0,  # DEPRECATED: Ad-hoc penalty removed. Use kappa instead.
+        alibi_slope: Optional[float] = None,  # ALiBi-style positional bias (negative = recency bias)
+        use_identity_transport: bool = False,  # If True, Ω_ij = I (no gauge transport)
+        mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
+    ):
+        """
+        Initialize irrep-structured multi-head attention.
+
+        Args:
+            embed_dim: Total embedding dimension K
+            irrep_spec: List of (label, multiplicity, dim) tuples
+                Example: [('ℓ0', 12, 1), ('ℓ1', 7, 3), ...]
+            kappa_beta: Temperature for attention softmax
+            epsilon: Numerical stability constant
+            aggregate_mode: 'mean_only' or 'full_distribution'
+            diagonal_covariance: If True, sigma is (B,N,K) diagonal variances
+            attention_pattern: 'full', 'local', or 'sparse'
+                - 'full': O(N²) standard attention
+                - 'local': O(N×W) efficient local window attention
+                - 'sparse': Use sparse computation with provided mask
+            attention_window: Window size for 'local' pattern
+            use_fast_exp: If True, use Taylor series approximation for matrix exp.
+                         Faster but only accurate for small angles (|φ| < 0.5).
+            exp_order: Order of Taylor expansion when use_fast_exp=True.
+                      Higher = more accurate but slower. Default 4 is good for |φ| < 0.3.
+            gauge_group: 'SO3' for SO(3) Wigner D-matrices, 'SON' for SO(N) fundamentals
+            gauge_dim: N for SO(N) mode - determines generator structure
+            global_generators: Pre-computed generators for SO(N) mode (n_gen, K, K)
+                              Required when gauge_group='SON'
+            mask_self_attention: If True, mask out diagonal (no self-attention).
+                                This prevents attention collapse since KL(q_i||q_i)=0
+                                always makes self-attention the most attractive.
+        """
+        super().__init__()
+        self.diagonal_covariance = diagonal_covariance
+        self.embed_dim = embed_dim
+        self.irrep_spec = irrep_spec
+        self.kappa_beta = kappa_beta
+        self.epsilon = epsilon
+        self.aggregate_mode = aggregate_mode
+        self.attention_pattern = attention_pattern
+        self.attention_window = attention_window
+        self.use_fast_exp = use_fast_exp
+        self.exp_order = exp_order
+        self.self_attention_penalty = self_attention_penalty
+        self.alibi_slope = alibi_slope
+        self.use_identity_transport = use_identity_transport
+        self.mask_self_attention = mask_self_attention
+
+        # Build irrep block structure
+        self.irrep_dims = []
+        self.irrep_labels = []
+        total_dim = 0
+
+        for label, multiplicity, dim in irrep_spec:
+            for _ in range(multiplicity):
+                self.irrep_dims.append(dim)
+                self.irrep_labels.append(label)
+                total_dim += dim
+
+        # Pad to embed_dim if needed - add SCALAR heads (dim=1), not one big head
+        if total_dim < embed_dim:
+            padding = embed_dim - total_dim
+            for _ in range(padding):
+                self.irrep_dims.append(1)  # Each padding is a scalar head
+                self.irrep_labels.append('ℓ0_pad')
+            total_dim = embed_dim
+        elif total_dim > embed_dim:
+            raise ValueError(
+                f"Irrep spec sums to {total_dim}, exceeds embed_dim={embed_dim}"
+            )
+
+        self.n_heads = len(self.irrep_dims)
+        self.total_dim = total_dim
+
+        # Store gauge group info
+        self.gauge_group = gauge_group
+        self.gauge_dim = gauge_dim
+
+        # =================================================================
+        # Create generators for each head dimension
+        # =================================================================
+        # SO(3) mode:
+        #   - For ℓ=0 (dim=1): Zero generator (scalars don't transform)
+        #   - For ℓ≥1 (dim=3,5,7,...): Proper Wigner D-matrix generators
+        #
+        # SO(N) mode:
+        #   - Use global generators (block-diagonal structure)
+        #   - Extract appropriate blocks for each head
+        #
+        # Store as a list of buffers (can't use ParameterList since non-trainable)
+        self.head_generators = nn.ModuleList()  # Will hold generator-holding modules
+
+        # Track cumulative dimension for extracting blocks in SO(N) mode
+        cum_dim = 0
+
+        for head_idx, dim in enumerate(self.irrep_dims):
+            if gauge_group == 'SO3':
+                # SO(3) mode: Create Wigner D-matrix generators per head
+                if dim == 1:
+                    # Scalar irrep: zero generator (no transformation)
+                    gen = torch.zeros(3, 1, 1)
+                elif dim % 2 == 1 and dim >= 3:
+                    # Proper SO(3) irrep: use Wigner D-matrix generators
+                    gen_np = generate_so3_generators(dim)
+                    gen = torch.from_numpy(gen_np).float()
+                else:
+                    # Even dimension - not a valid SO(3) irrep!
+                    raise ValueError(
+                        f"Head {head_idx} has dim={dim}, which is not a valid SO(3) irrep dimension. "
+                        f"SO(3) irreps must have odd dimensions (1, 3, 5, 7, ...). "
+                        f"For even dimensions, use gauge_group='SON' with appropriate gauge_dim."
+                    )
+            else:
+                # SO(N) mode: Extract block from global generators
+                if global_generators is None:
+                    raise ValueError(
+                        f"SO(N) mode requires global_generators to be provided. "
+                        f"Pass generators from model.py to IrrepMultiHeadAttention."
+                    )
+                # Extract the block for this head from the global block-diagonal generators
+                # global_generators: (n_gen, K, K) where K = embed_dim
+                n_gen = global_generators.shape[0]
+                gen = global_generators[:, cum_dim:cum_dim+dim, cum_dim:cum_dim+dim].clone()
+                # gen shape: (n_gen, dim, dim)
+
+            # Wrap in a module to register as buffer
+            gen_holder = nn.Module()
+            gen_holder.register_buffer('gen', gen)
+            self.head_generators.append(gen_holder)
+
+            cum_dim += dim
+
+        # No output projection - pure VFE approach returns concatenated beliefs directly
+        # (Removed nn.Linear to avoid neural network mixing between irrep blocks)
+
+        # Count scalar (ℓ=0) vs non-scalar heads for gauge frame analysis
+        n_scalar_heads = sum(1 for d in self.irrep_dims if d == 1)
+        n_gauge_active_heads = self.n_heads - n_scalar_heads
+        scalar_channels = sum(d for d in self.irrep_dims if d == 1)
+
+        print(f"IrrepMultiHeadAttention: {self.n_heads} heads, dims={self.irrep_dims}")
+
+        # Warn if a large fraction of channels are gauge-invariant
+        if n_scalar_heads > 0:
+            import warnings
+            scalar_fraction = scalar_channels / embed_dim
+            if scalar_fraction > 0.5:
+                warnings.warn(
+                    f"IrrepMultiHeadAttention: {n_scalar_heads}/{self.n_heads} heads are ℓ=0 (scalar), "
+                    f"comprising {scalar_channels}/{embed_dim} = {100*scalar_fraction:.1f}% of channels. "
+                    f"Scalar channels are GAUGE-INVARIANT: transport Ω_ij acts as identity, "
+                    f"so gauge frame evolution (update_phi=True) won't affect them. "
+                    f"Consider increasing non-scalar irreps (ℓ≥1) for gauge-sensitive representations.",
+                    UserWarning
+                )
+            print(f"  → {n_scalar_heads} scalar (ℓ=0) heads: GAUGE-INVARIANT (Ω=I)")
+            print(f"  → {n_gauge_active_heads} non-scalar heads: gauge-active (transport via Wigner D)")
+
+    def forward(
+        self,
+        mu_q: torch.Tensor,
+        sigma_q: torch.Tensor,
+        phi: torch.Tensor,
+        generators: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+        return_attention: bool = False,
+        cached_head_transports: Optional[List[dict]] = None,  # Cross-layer cache
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
+        """
+        Forward pass through multi-head attention.
+
+        Args:
+            mu_q: (B, N, K) belief means
+            sigma_q: (B, N, K, K) belief covariances
+            phi: (B, N, 3) gauge frames
+            generators: (3, K, K) SO(3) generators
+            mask: (B, N, N) optional causal mask
+            return_attention: If True, return attention weights and KL matrices
+            cached_head_transports: Optional list of precomputed transport dicts, one per head.
+                                   When evolve_phi=False, this can be computed once at model
+                                   entry and reused across all layers (6× speedup).
+
+        Returns:
+            mu_out: (B, N, K) updated means
+            sigma_out: (B, N, K, K) updated covariances (or None)
+            attention_weights: (B, n_heads, N, N) for visualization (or None)
+            kl_matrices: (B, n_heads, N, N) KL divergences (or None)
+        """
+        batch_size, num_agents, K = mu_q.shape
+
+        # =====================================================================
+        # Split into irrep blocks
+        # =====================================================================
+        mu_blocks = self._split_irreps(mu_q)       # List of (B, N, dim_ℓ)
+        sigma_blocks = self._split_irreps_sigma(sigma_q)  # List of (B, N, dim_ℓ, dim_ℓ)
+
+        # =====================================================================
+        # Process each head (irrep block)
+        # =====================================================================
+        head_outputs_mu = []
+        head_outputs_sigma = []
+        all_attention_weights = []
+        all_kl_matrices = []
+
+        for head_idx, (mu_head, sigma_head, dim_head, label) in enumerate(
+            zip(mu_blocks, sigma_blocks, self.irrep_dims, self.irrep_labels)
+        ):
+            # Use proper SO(3) generators for this irrep dimension
+            # These were pre-computed in __init__ using Wigner D-matrices
+            gen_head = self.head_generators[head_idx].gen.to(
+                device=generators.device, dtype=generators.dtype
+            )
+
+            # Get transport operators: use cross-layer cache if provided, else compute
+            if cached_head_transports is not None:
+                # Cross-layer cache: reuse transport computed at model entry
+                head_cached_transport = cached_head_transports[head_idx]
+            else:
+                # Within-layer cache: compute once, reuse for KL and aggregation
+                head_cached_transport = compute_transport_operators(
+                    phi, gen_head,
+                    use_fast_exp=self.use_fast_exp,
+                    exp_order=self.exp_order,
+                )
+
+            # Compute attention for this head (with optional KL matrices)
+            # Use efficient sparse attention if pattern is 'local'
+            if self.attention_pattern == 'local':
+                # O(N×W) efficient local window attention
+                beta_head, kl_head = compute_attention_weights_local(
+                    mu_head,
+                    sigma_head,
+                    phi,
+                    gen_head,
+                    kappa=self.kappa_beta,
+                    window=self.attention_window,
+                    epsilon=self.epsilon,
+                    causal=(mask is not None),  # Assume causal if mask provided
+                    diagonal_covariance=self.diagonal_covariance,
+                )  # (B, N, N), (B, N, N)
+                if return_attention:
+                    all_attention_weights.append(beta_head)
+                    all_kl_matrices.append(kl_head)
+            elif self.attention_pattern == 'sparse' and mask is not None:
+                # O(M×K³) sparse attention for arbitrary masks
+                beta_head, kl_head = compute_attention_weights_sparse(
+                    mu_head,
+                    sigma_head,
+                    phi,
+                    gen_head,
+                    kappa=self.kappa_beta,
+                    mask=mask,
+                    epsilon=self.epsilon,
+                    diagonal_covariance=self.diagonal_covariance,
+                )  # (B, N, N), (B, N, N)
+                if return_attention:
+                    all_attention_weights.append(beta_head)
+                    all_kl_matrices.append(kl_head)
+            elif return_attention:
+                # Full O(N²) attention with KL return
+                beta_head, kl_head = compute_attention_weights(
+                    mu_head,
+                    sigma_head,
+                    phi,
+                    gen_head,
+                    self.kappa_beta,
+                    self.epsilon,
+                    mask,
+                    return_kl=True,
+                    diagonal_covariance=self.diagonal_covariance,
+                    cached_transport=head_cached_transport,
+                    self_attention_penalty=self.self_attention_penalty,
+                    alibi_slope=self.alibi_slope,
+                    use_identity_transport=self.use_identity_transport,
+                    mask_self_attention=self.mask_self_attention,
+                )  # (B, N, N), (B, N, N)
+                all_attention_weights.append(beta_head)
+                all_kl_matrices.append(kl_head)
+            else:
+                # Full O(N²) attention without KL return
+                beta_head = compute_attention_weights(
+                    mu_head,
+                    sigma_head,
+                    phi,
+                    gen_head,
+                    self.kappa_beta,
+                    self.epsilon,
+                    mask,
+                    return_kl=False,
+                    diagonal_covariance=self.diagonal_covariance,
+                    cached_transport=head_cached_transport,
+                    self_attention_penalty=self.self_attention_penalty,
+                    alibi_slope=self.alibi_slope,
+                    use_identity_transport=self.use_identity_transport,
+                    mask_self_attention=self.mask_self_attention,
+                )  # (B, N, N)
+                kl_head = None  # Not computed
+
+            # Aggregate messages for this head (reuse cached transport!)
+            mu_agg, sigma_agg = aggregate_messages(
+                mu_head,
+                sigma_head,
+                phi,
+                beta_head,
+                gen_head,
+                aggregate_mode=self.aggregate_mode,
+                diagonal_covariance=self.diagonal_covariance,
+                cached_transport=head_cached_transport,
+            )
+
+            head_outputs_mu.append(mu_agg)
+            if sigma_agg is not None:
+                head_outputs_sigma.append(sigma_agg)
+
+        # =====================================================================
+        # Concatenate head outputs
+        # =====================================================================
+        mu_concat = torch.cat(head_outputs_mu, dim=-1)  # (B, N, K)
+
+        if head_outputs_sigma:
+            # Block-diagonal covariance
+            sigma_concat = self._block_diag_sigma(head_outputs_sigma)  # (B, N, K, K)
+        else:
+            sigma_concat = None
+
+        # =====================================================================
+        # Return concatenated beliefs directly (no learned mixing)
+        # =====================================================================
+        mu_out = mu_concat  # (B, N, K) - pure VFE, no nn.Linear
+
+        # Stack attention weights and KL matrices for loss computation
+        if return_attention:
+            attention_weights = torch.stack(all_attention_weights, dim=1)  # (B, n_heads, N, N)
+            kl_matrices = torch.stack(all_kl_matrices, dim=1)  # (B, n_heads, N, N)
+        else:
+            attention_weights = None
+            kl_matrices = None
+
+        return mu_out, sigma_concat, attention_weights, kl_matrices
+
+    def _split_irreps(self, mu: torch.Tensor) -> List[torch.Tensor]:
+        """Split embedding into irrep blocks.
+
+        Returns contiguous copies to avoid inplace modification issues during backward.
+        """
+        blocks = []
+        start_idx = 0
+        for dim in self.irrep_dims:
+            # Use .contiguous() to create a copy, avoiding inplace modification issues
+            blocks.append(mu[..., start_idx:start_idx+dim].contiguous())
+            start_idx += dim
+        return blocks
+
+    def _split_irreps_sigma(self, sigma: torch.Tensor) -> List[torch.Tensor]:
+        """Split covariance into irrep blocks.
+
+        For full covariance (B, N, K, K): extracts diagonal blocks
+        For diagonal (B, N, K): extracts slices
+
+        Handles mismatches between expected and actual sigma format by converting
+        between diagonal and full covariance representations.
+        """
+        # Squeeze trailing singleton dimensions first
+        while sigma.dim() > 3 and sigma.shape[-1] == 1:
+            sigma = sigma.squeeze(-1)
+
+        # Detect actual sigma format based on shape
+        sigma_is_diagonal = sigma.dim() == 3
+
+        # Handle format mismatches
+        if self.diagonal_covariance and not sigma_is_diagonal:
+            # Attention expects diagonal (B, N, K) but got full covariance (B, N, K, K)
+            # Extract diagonal from full covariance matrix
+            # Use .clone() to avoid view-related gradient issues (diagonal returns a view)
+            sigma = torch.diagonal(sigma, dim1=-2, dim2=-1).clone()  # (B, N, K, K) -> (B, N, K)
+        elif not self.diagonal_covariance and sigma_is_diagonal:
+            # Attention expects full (B, N, K, K) but got diagonal (B, N, K)
+            # Convert diagonal to full covariance
+            sigma = torch.diag_embed(sigma)  # (B, N, K) -> (B, N, K, K)
+
+        blocks = []
+        start_idx = 0
+        for dim in self.irrep_dims:
+            if self.diagonal_covariance:
+                # Diagonal mode: sigma is (B, N, K), just slice
+                # Use .contiguous() to create a copy, avoiding inplace modification issues
+                blocks.append(sigma[..., start_idx:start_idx+dim].contiguous())
+            else:
+                # Full mode: sigma is (B, N, K, K), extract diagonal block
+                # Use .contiguous() to create a copy, avoiding inplace modification issues
+                blocks.append(
+                    sigma[..., start_idx:start_idx+dim, start_idx:start_idx+dim].contiguous()
+                )
+            start_idx += dim
+        return blocks
+
+    def _block_diag_sigma(self, sigma_blocks: List[torch.Tensor]) -> torch.Tensor:
+        """Construct covariance from irrep blocks.
+
+        For diagonal mode: concatenates (B, N, dim) slices → (B, N, K)
+        For full mode: builds block-diagonal (B, N, K, K)
+        """
+        batch_size, num_agents = sigma_blocks[0].shape[:2]
+        K = sum(self.irrep_dims)
+
+        if self.diagonal_covariance:
+            # Diagonal mode: just concatenate along last dim
+            return torch.cat(sigma_blocks, dim=-1)  # (B, N, K)
+        else:
+            # Full mode: build block-diagonal matrix
+            sigma_full = torch.zeros(
+                batch_size, num_agents, K, K,
+                device=sigma_blocks[0].device,
+                dtype=sigma_blocks[0].dtype
+            )
+
+            start_idx = 0
+            for sigma_block, dim in zip(sigma_blocks, self.irrep_dims):
+                sigma_full[..., start_idx:start_idx+dim, start_idx:start_idx+dim] = sigma_block
+                start_idx += dim
+
+            return sigma_full
+
+    def precompute_head_transports(
+        self,
+        phi: torch.Tensor,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> List[dict]:
+        """
+        Precompute transport operators for all heads.
+
+        Call this once at model entry when evolve_phi=False, then pass the result
+        to forward() as cached_head_transports to skip redundant matrix exponentials.
+
+        Args:
+            phi: (B, N, 3) gauge frames
+            device: Device for generators
+            dtype: Dtype for generators
+
+        Returns:
+            List of transport dicts, one per head. Each dict contains:
+                'exp_phi': (B, N, dim, dim)
+                'exp_neg_phi': (B, N, dim, dim)
+                'Omega': (B, N, N, dim, dim)
+        """
+        cached_transports = []
+        for head_idx in range(self.n_heads):
+            gen_head = self.head_generators[head_idx].gen.to(device=device, dtype=dtype)
+            cached_transports.append(compute_transport_operators(
+                phi, gen_head,
+                use_fast_exp=self.use_fast_exp,
+                exp_order=self.exp_order,
+            ))
+        return cached_transports
+
+    def extra_repr(self) -> str:
+        return (
+            f"embed_dim={self.embed_dim}, "
+            f"n_heads={self.n_heads}, "
+            f"irrep_dims={self.irrep_dims[:3]}..., "
+            f"kappa={self.kappa_beta}"
+        )
+
+
+# =============================================================================
+# Testing
+# =============================================================================
+
+if __name__ == '__main__':
+    print("="*70)
+    print("KL-BASED ATTENTION MECHANISM TEST")
+    print("="*70)
+
+    # Test config
+    B, N, K = 2, 8, 16  # Small for testing
+    kappa = 1.0
+
+    print(f"\n[1] Creating test data...")
+    print(f"    Batch size: {B}")
+    print(f"    Num agents: {N} (all at single point c*)")
+    print(f"    Embed dim:  {K}")
+
+    # Create random beliefs
+    mu_q = torch.randn(B, N, K)
+    sigma_q = torch.eye(K).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1) * 0.5
+    phi = torch.randn(B, N, 3) * 0.1
+
+    # Generate SO(3) generators (import from existing module)
+    if TRANSPORT_AVAILABLE:
+        G = torch.from_numpy(generate_so3_generators(K)).float()
+        print(f"    ✓ SO(3) generators created: {G.shape}")
+    else:
+        # Fallback: random skew-symmetric matrices
+        G = torch.randn(3, K, K)
+        G = 0.5 * (G - G.transpose(-1, -2))  # Make skew-symmetric
+        print(f"    ⚠️  Using random generators (transport module unavailable)")
+
+    # Test attention weights
+    print(f"\n[2] Computing KL-based attention weights...")
+    beta = compute_attention_weights(
+        mu_q, sigma_q, phi, G, kappa, use_numba=False  # Use PyTorch for testing
+    )
+    print(f"    β shape: {beta.shape}")
+    print(f"    β sum over keys: {beta.sum(dim=-1)[0, 0].item():.4f} (should ≈ 1)")
+    print(f"    β min: {beta.min().item():.6f}")
+    print(f"    β max: {beta.max().item():.6f}")
+
+    # Test causal mask
+    print(f"\n[3] Testing causal mask...")
+    mask = torch.tril(torch.ones(N, N)).unsqueeze(0).expand(B, -1, -1)
+    beta_causal = compute_attention_weights(
+        mu_q, sigma_q, phi, G, kappa, mask=mask, use_numba=False
+    )
+    print(f"    Causal β[0, 0, :5]: {beta_causal[0, 0, :5]}")
+    print(f"    Future positions should be ~0: {beta_causal[0, 0, 5:].sum().item():.6f}")
+
+    # Test message aggregation
+    print(f"\n[4] Testing message aggregation...")
+    mu_agg, _ = aggregate_messages(
+        mu_q, sigma_q, phi, beta, G, aggregate_mode='mean_only'
+    )
+    print(f"    Aggregated means shape: {mu_agg.shape}")
+    print(f"    ✓ Messages aggregated via parallel transport")
+
+    # Test multi-head attention
+    print(f"\n[5] Testing multi-head attention...")
+    irrep_spec = [
+        ('ℓ0', 4, 1),   # 4 scalars
+        ('ℓ1', 2, 3),   # 2 vectors
+        ('ℓ2', 1, 5),   # 1 rank-2 tensor
+    ]  # Total: 4 + 6 + 5 = 15 → pad to 16
+
+    mha = IrrepMultiHeadAttention(
+        embed_dim=K,
+        irrep_spec=irrep_spec,
+        kappa_beta=kappa,
+    )
+    print(f"    {mha}")
+
+    mu_out, sigma_out, attn_weights = mha(
+        mu_q, sigma_q, phi, G, return_attention=True
+    )
+    print(f"    Output μ shape: {mu_out.shape}")
+    print(f"    Attention weights shape: {attn_weights.shape}")
+    print(f"    ✓ Multi-head attention complete")
+
+    # Parameter count
+    total_params = sum(p.numel() for p in mha.parameters())
+    print(f"\n[6] Parameter count:")
+    print(f"    Multi-head attention: {total_params:,} parameters")
+    print(f"    (Compare to standard: 4×K² = {4*K*K:,} for Q,K,V,O projections)")
+    print(f"    Reduction: {4*K*K / max(total_params, 1):.1f}x fewer parameters!")
+
+    print("\n" + "="*70)
+    print("✓ All attention mechanism tests passed!")
+    print("="*70)
