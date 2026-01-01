@@ -635,11 +635,157 @@ This is an \emph{interpretive correspondence}, not a formal equivalence. Latané
 
 The Social Impact Theory mapping generates three distinctive predictions. The confidence modulation prediction states that impact should scale with source confidence $\Sigma_q^{-1}$, testable by experimentally manipulating perceived expertise while holding other factors constant. The frame alignment prediction addresses the phenomenon of ``talking past each other'': sources operating in different conceptual frameworks (high $\|\Omega - I\|$) should exert reduced impact even when physically proximate, suggesting that shared language and conceptual alignment matter independently of spatial proximity. The temporal decay prediction states that impact should decline with communication lag according to a specific functional form, with decay rate determined by the attention temperature $\kappa_\beta$.
 
+\section{Derivation 7: Diffusion of Innovations (Solid Approximation)}
+
+\subsection{Classical Formulation}
+
+Rogers (1962) identified a characteristic S-curve pattern in the adoption of innovations across populations, with distinct adopter categories emerging from the distribution of adoption times. Innovators (approximately 2.5\% of the population) adopt first, followed by early adopters (13.5\%), early majority (34\%), late majority (34\%), and finally laggards (16\%). The cumulative adoption curve follows a logistic function:
+\begin{equation}
+N(t) = \frac{K}{1 + e^{-r(t - t_0)}}
+\label{eq:scurve}
+\end{equation}
+where $K$ is the carrying capacity, $r$ the growth rate, and $t_0$ the inflection point. Classical models treat adoption thresholds as fixed individual characteristics, leaving unexplained why the distribution takes this particular form and what determines the critical mass required for takeoff.
+
+\subsection{Derivation from VFE Framework}
+
+\begin{proposition}[S-Curve from Attention Dynamics]
+The logistic adoption curve emerges from the VFE framework when agents decide between two belief states (adopt/reject) based on social attention from prior adopters, with heterogeneous prior precisions determining adoption order.
+\end{proposition}
+
+\begin{proof}[Proof Sketch]
+\textbf{Step 1: Binary belief dynamics.}
+Consider agents with beliefs $\mu_i \in \{0, 1\}$ representing rejection and adoption respectively. The social force toward adoption is proportional to attention-weighted adopter fraction:
+\begin{equation}
+F_i^{\text{adopt}} = \sum_{j: \mu_j = 1} \beta_{ij}
+\end{equation}
+
+Adoption occurs when this force exceeds the agent's resistance threshold, which is determined by their prior precision $\Sigma_{p,i}^{-1}$ anchoring them to the status quo.
+
+\textbf{Step 2: Threshold heterogeneity.}
+If prior precisions are distributed across the population according to some distribution $\rho(\Sigma_p^{-1})$, agents with low precision (innovators) adopt when $F^{\text{adopt}}$ is small, while high-precision agents (laggards) require nearly unanimous adoption. For a log-normal distribution of precisions---empirically reasonable given multiplicative accumulation of confidence---the resulting adoption curve is approximately logistic.
+
+\textbf{Step 3: Positive feedback and critical mass.}
+The attention mechanism creates positive feedback. As more agents adopt, non-adopters receive increased social pressure through the $\beta_{ij}$ terms. Initially, with few adopters, the attention-weighted signal is weak and only the lowest-precision agents adopt. Once adoption crosses a critical threshold, the attention signal becomes strong enough to cascade through the remaining population. The critical mass occurs when:
+\begin{equation}
+\sum_{j: \mu_j = 1} \beta_{ij} > \Sigma_{p,\text{median}}^{-1} \cdot c
+\end{equation}
+for typical agents, where $c$ is a coupling constant. \qed
+\end{proof}
+
+\subsection{Adopter Categories as Mass Distribution}
+
+The Rogers categories emerge naturally from the distribution of epistemic mass $M_i$. Innovators possess low mass (uncertain priors, few social connections anchoring them to the status quo), enabling rapid adoption even against social consensus. Early adopters have moderate mass but occupy network positions that expose them to innovators' attention. The early majority waits until the attention-weighted adopter signal exceeds their threshold. The late majority, with higher mass from both prior precision and social embeddedness, requires near-saturation. Laggards possess the highest mass---whether from extreme prior certainty, isolation from adopter networks, or both---and adopt only under overwhelming social pressure or not at all.
+
+A key prediction distinguishes this framework from classical diffusion models: adopter category membership should be context-dependent rather than a stable individual trait. An innovator in technology adoption (low precision regarding technical matters) might be a laggard in fashion (high precision regarding aesthetic standards). The same agent exhibits different effective mass across domains.
+
+\subsection{The Commitment Trap}
+
+The outgoing social mass term $\sum_j \beta_{ji} \Sigma_{q,i}^{-1}$ generates a novel prediction regarding innovation abandonment. Early adopters who influence others accumulate social mass from those attention connections, making them increasingly resistant to abandoning the innovation even if problems emerge. Opinion leaders become trapped by their followers: the very act of evangelizing an innovation creates epistemic rigidity that prevents acknowledging its failures. This explains the common observation that early advocates are often the last to admit an innovation has failed, not through motivated reasoning but through geometric necessity.
+
+\subsection{Novel Predictions}
+
+The diffusion derivation yields three distinctive predictions. First, adoption thresholds should correlate with measurable prior precision and network centrality, with the interaction between these factors determining adopter category more reliably than either alone. Second, opinion leaders who actively promote innovations should exhibit slower abandonment rates than passive early adopters, controlling for initial enthusiasm---the commitment trap prediction. Third, the critical mass threshold should depend systematically on attention temperature $\kappa_\beta$: highly connected networks with uniform attention (high $\kappa_\beta$) should require smaller critical mass than sparse networks with selective attention (low $\kappa_\beta$).
+
+\section{Derivation 8: Collective Intentionality and We-Intentions (Speculative)}
+
+\subsection{Phenomenon}
+
+Collective intentionality---the capacity for shared intentions, joint attention, and ``we-mode'' cognition---has been extensively analyzed by philosophers including Searle (1990), Bratman (1993), and Tuomela (2005). The central puzzle is that ``we intend to $X$'' appears irreducible to collections of individual intentions ``I intend that we $X$.'' Agents in we-mode share not just aligned goals but a distinct mode of cognition characterized by mutual responsiveness, collective commitment, and group identification. The transition from I-mode to we-mode represents a qualitative shift in social organization that existing models struggle to formalize mathematically.
+
+\subsection{Framework Mapping}
+
+The VFE framework suggests a geometric interpretation of collective intentionality through the interplay of gauge alignment, attention structure, and prior convergence. While this mapping remains speculative, it offers a principled mathematical structure for what has traditionally been a purely philosophical distinction.
+
+\paragraph{Gauge frame alignment.} Individual agents maintain reference frames $\phi_i$ determining how they interpret information. When agents interact superficially, their frames may differ substantially ($\|\Omega_{ij} - I\|$ large), requiring costly translation at each communication. The prior alignment term $\text{KL}(p_i \| \Omega_{ij}[p_j])$ encourages frame convergence over time. We-mode may correspond to a phase where frames have aligned sufficiently ($\Omega_{ij} \approx I$ for in-group members) that agents share a common reference frame for interpreting the world.
+
+\paragraph{Attention density transition.} In I-mode, attention is sparse and transactional---agents attend to specific others for specific purposes. In we-mode, attention becomes dense and persistent---agents continuously monitor group members' beliefs and coordinate their updates. Mathematically, this corresponds to a transition from low to high effective coupling $\lambda_\beta$. Above a critical coupling strength, individual belief dynamics become entrained, and the group behaves as a coherent unit.
+
+\paragraph{Prior convergence.} The deepest aspect of collective intentionality may be shared priors---not merely aligned current beliefs but shared expectations, values, and interpretive frameworks. When the prior alignment term dominates ($\lambda_\gamma$ large), agents' generative models converge, creating genuinely shared cognition rather than merely coordinated individual cognition.
+
+\subsection{Phase Transition Interpretation}
+
+\begin{proposition}[We-Mode as Phase Transition]
+The transition from I-mode to we-mode may correspond to a phase transition in the VFE system, occurring when coupling strength exceeds a critical threshold and gauge frames align.
+\end{proposition}
+
+Consider a group of $N$ agents with pairwise coupling. In the disordered (I-mode) phase, agents maintain distinct frames and update beliefs relatively independently. The order parameter---perhaps the average frame alignment $\langle \|\Omega_{ij} - I\| \rangle$---remains large. As coupling strength increases, a critical point is reached where frames spontaneously align, attention becomes mutually entrained, and the system enters an ordered (we-mode) phase characterized by collective dynamics.
+
+This interpretation explains several features of collective intentionality. The apparent irreducibility of ``we intend'' to ``I intend'' reflects the emergent nature of collective order---just as ferromagnetism cannot be reduced to individual spins, we-mode cannot be reduced to I-mode intentions. The special normative force of collective commitments reflects the epistemic mass accumulated through mutual attention---defection would require overcoming substantial social inertia. The fragility of we-mode under defection reflects proximity to the phase boundary: a single agent reverting to I-mode can trigger a cascade of frame misalignment.
+
+\subsection{Group Identification}
+
+The framework offers a geometric account of group identification. When an agent adopts the group's prior as their own ($p_i \approx p_{\text{group}}$), they inherit the group's inertial mass. The self-coupling term $\alpha \text{KL}(q_i \| p_i)$ then anchors the agent's beliefs to group expectations. Identification is not merely cognitive labeling but geometric restructuring: the agent's belief dynamics become constrained by group-level attractors.
+
+This predicts that strongly identified group members should exhibit slower belief updating in response to individual evidence (higher effective mass from prior coupling), faster updating in response to perceived group consensus (lower barrier to alignment with group prior), and resistance to information that threatens group integrity (the prior itself is at stake, not just current beliefs).
+
+\subsection{Caveat: Speculative Status}
+
+This derivation is the most speculative in the present work. Collective intentionality involves normative and phenomenological dimensions that may resist purely geometric treatment. The framework offers a mathematical vocabulary for describing we-mode but does not explain how or why conscious agents experience collective intentions as they do. Nevertheless, the mapping suggests empirical predictions---phase transition signatures, coupling thresholds, frame alignment measurements---that could lend precision to philosophical debates.
+
+\subsection{Novel Predictions}
+
+Despite its speculative status, the we-intentions mapping generates three testable predictions. First, groups should exhibit measurable frame alignment (operationalized perhaps through semantic similarity in language use or coordination in ambiguous tasks) that increases with interaction density and predicts collective action success. Second, the transition to we-mode should exhibit phase transition signatures: hysteresis (groups that have achieved we-mode should maintain it at coupling levels below the threshold for initial formation), critical slowing (dynamics near the transition should be slower than far from it), and susceptibility peaks (small perturbations should have large effects near the critical point). Third, group identification should correlate with measurable changes in belief updating rates, with strongly identified members showing the mass-enhancement pattern described above.
+
+\section{Derivation 9: Kuhnian Paradigm Shifts (Solid/Interpretive)}
+
+\subsection{Classical Formulation}
+
+Kuhn's \emph{Structure of Scientific Revolutions} (1962) identified a pattern in scientific change that challenged cumulative progress narratives. Science alternates between \emph{normal science}---puzzle-solving within an accepted paradigm---and \emph{revolutionary science}---paradigm competition and replacement. Paradigms provide shared exemplars, methods, and interpretive frameworks that enable efficient research but also create blind spots. Anomalies accumulate until a crisis triggers revolutionary upheaval. Crucially, paradigms are \emph{incommensurable}: scientists working in different paradigms may literally see different things, use the same terms with different meanings, and lack neutral ground for adjudication.
+
+\subsection{Mapping to VFE Framework}
+
+The VFE framework provides a natural geometric interpretation of Kuhnian dynamics. Paradigms correspond to metastable states in belief space---local minima of the free energy landscape separated by barriers. Normal science is overdamped relaxation within a basin of attraction. Revolution is transition between basins, requiring sufficient energy to cross the barrier.
+
+\paragraph{Paradigms as shared priors and frames.}
+A scientific paradigm comprises shared priors $p_{\text{paradigm}}$ (what counts as a good explanation, plausible mechanism, relevant evidence) and shared gauge frames $\Omega_{\text{paradigm}}$ (how concepts map to observations). Scientists within a paradigm share these structures, enabling efficient communication ($\text{KL}$ penalties are small for within-paradigm interaction) and cumulative progress (new results integrate smoothly with existing beliefs).
+
+\paragraph{Incommensurability as gauge mismatch.}
+Scientists in different paradigms operate with different frames. The gauge transformation $\Omega_{AB}$ between paradigm $A$ and paradigm $B$ may be far from identity, creating substantial translation costs:
+\begin{equation}
+\text{KL}(q_A \| \Omega_{AB}[q_B]) \gg \text{KL}(q_A \| q_{A'})
+\end{equation}
+for within-paradigm neighbors $A'$. This geometric distance, not mere disagreement about facts, constitutes incommensurability. Scientists in different paradigms may use identical words (``mass,'' ``gene,'' ``species'') with systematically different meanings, corresponding to different frame rotations applied to shared underlying structure.
+
+\paragraph{Normal science as overdamped dynamics.}
+During normal science, the community operates near equilibrium within a paradigm's basin. Beliefs update incrementally in response to new evidence, following approximately gradient flow:
+\begin{equation}
+\frac{d\mu_i}{dt} = -M_i^{-1} \nabla_{\mu_i} F
+\end{equation}
+Anomalies---observations poorly explained by the paradigm---increase free energy locally but are typically absorbed through auxiliary adjustments rather than paradigm revision. The prior term $\text{KL}(q \| p_{\text{paradigm}})$ creates resistance to fundamental revision.
+
+\paragraph{Crisis and instability.}
+Anomalies accumulate as free energy, but the paradigm's basin structure initially contains them. Crisis occurs when accumulated free energy exceeds the barrier height:
+\begin{equation}
+F_{\text{current}} > F_{\text{barrier}} = \min_{\text{path}} \max_{\text{along path}} F
+\end{equation}
+At this point, the system becomes unstable with respect to paradigm-crossing fluctuations. In the underdamped regime (low friction, young scientists, rapid communication), the system may spontaneously tunnel to an alternative basin.
+
+\paragraph{Revolution as basin transition.}
+Paradigm change corresponds to a collective transition from one basin to another. This requires both an alternative basin (a competing paradigm with lower free energy for the accumulated evidence) and sufficient activation energy to cross the barrier. The mass matrix explains why revolutions are generational: established scientists have high mass (from prior precision and accumulated social attention), making barrier-crossing exponentially unlikely. Young scientists have low mass, enabling exploration of alternative basins.
+
+\subsection{Planck's Principle}
+
+The framework provides a mechanistic account of Planck's observation that ``science advances one funeral at a time.'' Senior scientists accumulate epistemic mass through multiple channels. Their extensive training creates high prior precision $\Sigma_p^{-1}$ for the paradigm's assumptions. Their influence over students, grants, and publications generates substantial outgoing social mass $\sum_j \beta_{ji} \Sigma_{q,i}^{-1}$. Their position atop attention hierarchies means their beliefs shape the field's direction.
+
+This accumulated mass creates a barrier to paradigm change that operates through legitimate epistemic mechanisms rather than irrationality. A senior scientist's resistance to a new paradigm reflects genuine difficulty in revising deeply held priors, real costs of abandoning frameworks that have proven productive, and the weight of responsibilities to students and colleagues working within the existing paradigm. The claim is not that senior scientists are \emph{wrong} to resist but that the geometry of their epistemic position makes resistance inevitable.
+
+Young scientists, by contrast, have low mass: limited prior investment in the old paradigm, few followers whose beliefs they must consider, and positions in the attention network that expose them to frontier developments. They can explore alternative basins that would be inaccessible to high-mass established researchers.
+
+\subsection{Incommensurability and Translation}
+
+The gauge structure provides a precise account of partial incommensurability. Complete incommensurability ($\Omega_{AB}$ arbitrary, no translation possible) is rare; complete commensurability ($\Omega_{AB} = I$, translation trivial) means the paradigms are not genuinely different. Typical cases involve substantial but structured gauge rotations, where translation is possible but costly and imperfect.
+
+This explains why paradigm debates often involve talking past each other: participants are applying different gauge transformations to map concepts onto shared observations. It also explains why some translations succeed (the gauge group has structure that permits certain rotations) while others fail (some conceptual reorganizations are geometrically inaccessible).
+
+\subsection{Novel Predictions}
+
+The Kuhnian derivation yields three distinctive predictions. First, paradigm change rates should correlate with the age-mass distribution of the field: fields dominated by high-mass senior scientists should exhibit slower paradigm change than fields with flatter hierarchies, controlling for evidential pressure. Second, interdisciplinary work should accelerate paradigm change by introducing low-gauge-distance concepts from adjacent fields, effectively providing ``stepping stones'' across the free energy barrier. Third, the framework predicts \emph{hysteresis} in paradigm dynamics: the evidence threshold required to trigger a revolution should be higher than the threshold required to prevent reversion to the old paradigm, since barrier-crossing involves asymmetric costs depending on which basin the community currently occupies.
+
 \section{Summary Table: Derivation Quality}
 
 \begin{table}[h]
 \centering
-\begin{tabular}{@{}lccp{6cm}@{}}
+\begin{tabular}{@{}lccp{5.5cm}@{}}
 \toprule
 \textbf{Model} & \textbf{Rigor} & \textbf{Status} & \textbf{Notes} \\
 \midrule
@@ -649,6 +795,9 @@ Echo Chambers & $\checkmark\checkmark\checkmark$ & Rigorous & Direct consequence
 Bounded Confidence & $\checkmark\checkmark$ & Solid & Soft approximation of hard threshold \\
 Confirmation Bias & $\checkmark\checkmark$ & Solid & Requires natural gradient assumption \\
 Social Impact Theory & $\checkmark\checkmark$ & Interpretive & Qualitative correspondence \\
+Diffusion of Innovations & $\checkmark\checkmark$ & Solid & S-curve from attention dynamics \\
+Collective Intentionality & $\checkmark$ & Speculative & Phase transition interpretation \\
+Kuhnian Paradigm Shifts & $\checkmark\checkmark$ & Solid/Interp. & Metastable basins; gauge incommens. \\
 \bottomrule
 \end{tabular}
 \caption{Quality assessment of each derivation. Rigor levels: $\checkmark\checkmark\checkmark$ = Rigorous (formal proof), $\checkmark\checkmark$ = Solid (strong approximation or additional assumptions), $\checkmark$ = Speculative (preliminary).}
@@ -657,23 +806,29 @@ Social Impact Theory & $\checkmark\checkmark$ & Interpretive & Qualitative corre
 
 \section{Novel Predictions Summary}
 
-Beyond recovering classical models, the VFE framework generates novel empirical predictions that distinguish it from existing theories.
+Beyond recovering classical models, the VFE framework generates novel empirical predictions that distinguish it from existing theories. These predictions fall into several thematic clusters.
 
-The prediction of \emph{dynamic attention} states that influence networks should restructure as beliefs converge or diverge, with $\beta_{ij}(t)$ evolving in measurable ways via longitudinal network data. The \emph{epistemic inertia} prediction asserts that agents receiving high social attention should update their beliefs more slowly than peripheral agents, controlling for prior strength; this is testable via social media data (Twitter, Metaculus) tracking opinion leaders' update rates. The \emph{uncertainty dynamics} prediction states that subjective confidence should increase with consensus and decrease with exposure to diverse views, requiring measurement of confidence intervals rather than point estimates alone.
+\paragraph{Attention and network dynamics.} The prediction of \emph{dynamic attention} states that influence networks should restructure as beliefs converge or diverge, with $\beta_{ij}(t)$ evolving in measurable ways via longitudinal network data. The \emph{epistemic inertia} prediction asserts that agents receiving high social attention should update their beliefs more slowly than peripheral agents, controlling for prior strength; this is testable via social media data tracking opinion leaders' update rates. The \emph{commitment trap} prediction from diffusion theory suggests that early adopters who actively promote innovations should exhibit slower abandonment rates than passive adopters, as influence accumulates as mass.
 
-The \emph{phase transition} prediction draws a direct analogy to thermodynamics: polarization should emerge sharply at a critical attention selectivity $\kappa_\beta^{\text{crit}}$ rather than gradually, exhibiting the hallmarks of a genuine phase transition. The prediction of \emph{context-dependent stubbornness} contradicts trait-based theories by asserting that the same individual should exhibit variable resistance to influence across different contexts and network positions. The \emph{asymmetric influence} prediction states that impact should scale with source precision $\Sigma_q^{-1}$ independently of network centrality, implying that confident sources exert disproportionate influence even when structurally equivalent to uncertain ones.
+\paragraph{Phase transitions and collective phenomena.} The framework predicts multiple phase transitions with characteristic signatures. Polarization should emerge sharply at a critical attention selectivity $\kappa_\beta^{\text{crit}}$, exhibiting hysteresis, critical slowing, and susceptibility peaks. The transition from I-mode to we-mode in collective intentionality should exhibit analogous signatures as gauge frames align. Paradigm shifts should display hysteresis, with revolution thresholds exceeding reversion thresholds due to asymmetric barrier costs.
 
-Finally, the speculative prediction of \emph{underdamped oscillations} suggests that in low-friction environments characteristic of rapid social media discourse, beliefs may overshoot equilibrium and oscillate before settling, a phenomenon potentially measurable via high-frequency polling of opinion dynamics.
+\paragraph{Context-dependence and domain specificity.} The prediction of \emph{context-dependent stubbornness} contradicts trait-based theories: the same individual should exhibit variable resistance to influence across contexts. Similarly, adopter categories (innovator to laggard) should be domain-specific rather than stable personality traits, reflecting context-dependent mass distributions. Scientists' resistance to paradigm change should correlate with field-specific mass accumulation, not general conservatism.
+
+\paragraph{Geometric structure of communication.} The \emph{gauge mismatch} prediction states that communication difficulty should scale with frame rotation $\|\Omega_{ij} - I\|$, independently of belief similarity. This explains why paradigm debates involve ``talking past each other'' and why interdisciplinary translation is costly. Frame alignment should be measurable through semantic similarity in language use and should predict coordination success.
+
+\paragraph{Generational and temporal dynamics.} Planck's principle emerges quantitatively: paradigm change rates should correlate inversely with the age-mass distribution of the field. The \emph{underdamped oscillations} prediction suggests that in low-friction environments, beliefs may overshoot equilibrium, measurable via high-frequency polling. Sudden attention spikes (viral content) should produce temporarily elevated confirmation bias during the peak.
 
 Testing even a subset of these predictions would provide strong empirical validation of the unifying framework, while falsification of any would constrain the parameter regimes where the theory applies.
 
 \section{Conclusion}
 
-We have demonstrated that six major social influence models---DeGroot social learning, Friedkin-Johnsen opinion dynamics, bounded confidence, confirmation bias, Social Impact Theory, and echo chambers---emerge as limiting cases or regimes of the Hamiltonian Variational Free Energy framework. Three derivations are rigorously proven (DeGroot, Friedkin-Johnsen, echo chambers), and three are solid approximations or interpretive mappings (bounded confidence, confirmation bias, Social Impact Theory).
+We have demonstrated that nine major models from sociology, psychology, philosophy, and science studies emerge as limiting cases or regimes of the Hamiltonian Variational Free Energy framework. These include DeGroot social learning, Friedkin-Johnsen opinion dynamics, bounded confidence, echo chambers, confirmation bias, Social Impact Theory, diffusion of innovations, collective intentionality, and Kuhnian paradigm shifts. Three derivations are rigorously proven (DeGroot, Friedkin-Johnsen, echo chambers), four are solid approximations (bounded confidence, confirmation bias, diffusion, Kuhn), and two are interpretive or speculative mappings (Social Impact Theory, collective intentionality).
 
-This unification reveals that classical models differ not in fundamental mechanisms but in \emph{parameter regimes}: friction ($\gamma$), uncertainty ($\Sigma$), attention temperature ($\kappa_\beta$), and self-coupling ($\alpha$). The framework generates novel testable predictions beyond classical theories, particularly regarding dynamic attention, epistemic inertia from social position, and phase transitions in polarization.
+This unification reveals that classical models differ not in fundamental mechanisms but in \emph{parameter regimes}: friction ($\gamma$), uncertainty ($\Sigma$), attention temperature ($\kappa_\beta$), self-coupling ($\alpha$), and gauge alignment ($\Omega$). The framework generates novel testable predictions beyond classical theories, particularly regarding dynamic attention, epistemic inertia from social position, phase transitions in collective phenomena, and the geometric structure of incommensurability.
 
-The key sociological insight is that \emph{social structure creates epistemic consequences through information geometry}. Agents receiving high social attention develop inertial mass that resists belief revision---not through irrationality or motivated reasoning, but as a geometric necessity on the statistical manifold. This provides a mechanistic foundation for phenomena like authority rigidity, influencer confirmation bias, and the ``curse of expertise.''
+The key insight is that \emph{social structure creates epistemic consequences through information geometry}. Agents receiving high social attention develop inertial mass that resists belief revision---not through irrationality or motivated reasoning, but as a geometric necessity on the statistical manifold. This provides a mechanistic foundation for phenomena ranging from confirmation bias to Planck's principle, from the commitment trap in innovation adoption to the fragility of collective intentionality.
+
+The gauge-theoretic component of the framework opens particularly rich territory. Incommensurability between paradigms, the difficulty of interdisciplinary translation, and the costs of frame misalignment in collective action all receive geometric interpretations. The framework suggests that communication is not merely exchange of propositions but alignment of reference frames---a perspective with implications for understanding both everyday miscommunication and fundamental theoretical disagreements.
 
 \appendix
 
