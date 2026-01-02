@@ -68,21 +68,45 @@ THERMO_VARS = {
 # Get Party ID (inertia proxy)
 # =============================================================================
 
+def convert_to_numeric(series):
+    """Convert ANES variable to numeric, handling Stata categories."""
+    # Try direct numeric conversion first
+    vals = pd.to_numeric(series, errors='coerce')
+
+    # If all NaN, try extracting from categorical codes
+    if vals.isna().all():
+        if hasattr(series, 'cat'):
+            # Categorical - use codes
+            vals = series.cat.codes.astype(float)
+            vals[vals < 0] = np.nan  # -1 codes are missing
+        elif series.dtype == object:
+            # String labels - extract leading digits
+            vals = series.astype(str).str.extract(r'^(\d+)')[0].astype(float)
+
+    return vals.values
+
 party_id = None
 for var in PARTY_ID_VARS:
     if var in df.columns:
-        party_id = pd.to_numeric(df[var], errors='coerce').values
-        print(f"Using party ID variable: {var}")
-        break
+        party_id = convert_to_numeric(df[var])
+        valid_count = (~np.isnan(party_id)).sum()
+        print(f"Party ID variable: {var}")
+        print(f"  Valid cases: {valid_count}")
+        print(f"  Sample values: {party_id[~np.isnan(party_id)][:10]}")
+        if valid_count > 100:
+            break
+        else:
+            party_id = None  # Try next variable
 
 if party_id is None:
-    print("No party ID variable found")
-
-# Partisan STRENGTH (distance from center) = inertia proxy
-# Strong partisans have high "belief inertia"
-if party_id is not None:
+    print("No usable party ID variable found")
+    partisan_strength = None
+else:
+    # Partisan STRENGTH (distance from center) = inertia proxy
+    # ANES: 1=Strong Dem, 4=Independent, 7=Strong Rep
     partisan_strength = np.abs(party_id - 4)  # 0 = independent, 3 = strong partisan
-    print(f"Partisan strength range: {np.nanmin(partisan_strength):.0f} to {np.nanmax(partisan_strength):.0f}")
+    valid_ps = partisan_strength[~np.isnan(partisan_strength)]
+    print(f"Partisan strength range: {valid_ps.min():.0f} to {valid_ps.max():.0f}")
 
 # =============================================================================
 # Analysis Functions
@@ -205,8 +229,14 @@ for name, (w1_col, w2_col) in THERMO_VARS.items():
         print(f"Skipping {name}: variables not found")
         continue
 
-    w1 = pd.to_numeric(df[w1_col], errors='coerce').values
-    w2 = pd.to_numeric(df[w2_col], errors='coerce').values
+    w1 = convert_to_numeric(df[w1_col])
+    w2 = convert_to_numeric(df[w2_col])
+
+    print(f"\n{name}: w1 valid={np.sum(~np.isnan(w1))}, w2 valid={np.sum(~np.isnan(w2))}")
+
+    if partisan_strength is None:
+        print("  Skipping: no partisan strength data")
+        continue
 
     result = analyze_with_regression_control(w1, w2, partisan_strength, name, 0, 100)
     if result:
