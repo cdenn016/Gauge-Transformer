@@ -43,6 +43,22 @@ def load_panel_data(path: str) -> 'pd.DataFrame':
 
     path = Path(path)
 
+    # If directory, find data files inside
+    if path.is_dir():
+        candidates = []
+        for ext in ['.dta', '.sav', '.csv']:
+            candidates.extend(path.glob(f'*{ext}'))
+
+        if not candidates:
+            raise ValueError(
+                f"No data files (.dta, .sav, .csv) found in {path}\n"
+                f"Contents: {list(path.iterdir())[:10]}"
+            )
+
+        # Use the first/largest file found
+        path = max(candidates, key=lambda p: p.stat().st_size)
+        print(f"Found data file: {path.name}")
+
     if path.suffix == '.dta':
         return pd.read_stata(path)
     elif path.suffix == '.sav':
@@ -50,7 +66,7 @@ def load_panel_data(path: str) -> 'pd.DataFrame':
     elif path.suffix == '.csv':
         return pd.read_csv(path)
     else:
-        raise ValueError(f"Unsupported format: {path.suffix}")
+        raise ValueError(f"Unsupported format: {path.suffix}. Use .dta, .sav, or .csv")
 
 
 # =============================================================================
