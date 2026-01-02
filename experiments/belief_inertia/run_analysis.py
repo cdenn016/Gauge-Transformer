@@ -243,6 +243,59 @@ for name, (w1_col, w2_col) in THERMO_VARS.items():
         all_results.append(result)
 
 # =============================================================================
+# INDEPENDENT VOTER ANALYSIS
+# =============================================================================
+
+print("\n" + "#"*60)
+print("# INDEPENDENT VOTER DEEP DIVE")
+print("# VFE predicts: low inertia → more susceptible to influence")
+print("#"*60)
+
+# Independents = party_id == 4 (pure independents)
+# Leaners = party_id in [3, 5] (independent but lean D/R)
+pure_independent = (party_id == 4)
+leaner = (party_id == 3) | (party_id == 5)
+strong_partisan = (party_id <= 2) | (party_id >= 6)
+
+print(f"\nGroups:")
+print(f"  Pure independents (PID=4): {pure_independent.sum()}")
+print(f"  Leaners (PID=3,5): {leaner.sum()}")
+print(f"  Strong partisans (PID≤2 or ≥6): {strong_partisan.sum()}")
+
+# For each thermometer, compare change across groups
+for name, (w1_col, w2_col) in THERMO_VARS.items():
+    if w1_col not in df.columns or w2_col not in df.columns:
+        continue
+
+    w1 = convert_to_numeric(df[w1_col])
+    w2 = convert_to_numeric(df[w2_col])
+    change = np.abs(w2 - w1)
+
+    # Valid cases for each group
+    valid = ~np.isnan(w1) & ~np.isnan(w2) & ~np.isnan(party_id)
+
+    change_indep = change[valid & pure_independent]
+    change_leaner = change[valid & leaner]
+    change_partisan = change[valid & strong_partisan]
+
+    if len(change_indep) < 30:
+        continue
+
+    print(f"\n{name}:")
+    print(f"  Pure independents: mean Δ = {np.mean(change_indep):.1f} (n={len(change_indep)})")
+    print(f"  Leaners:           mean Δ = {np.mean(change_leaner):.1f} (n={len(change_leaner)})")
+    print(f"  Strong partisans:  mean Δ = {np.mean(change_partisan):.1f} (n={len(change_partisan)})")
+
+    # Test: independents vs partisans
+    t_stat, p_val = stats.ttest_ind(change_indep, change_partisan)
+    print(f"  Independent vs Partisan: t={t_stat:.2f}, p={p_val:.4f}")
+
+    if np.mean(change_indep) > np.mean(change_partisan) and p_val < 0.05:
+        print(f"  ✓ VFE SUPPORTED: Independents change MORE than partisans")
+    else:
+        print(f"  Result: {'Indep > Partisan' if np.mean(change_indep) > np.mean(change_partisan) else 'Indep ≤ Partisan'}")
+
+# =============================================================================
 # Summary
 # =============================================================================
 
