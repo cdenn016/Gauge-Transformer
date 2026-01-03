@@ -82,6 +82,30 @@ BPE_AVAILABLE = TIKTOKEN_AVAILABLE or TRANSFORMERS_AVAILABLE
 
 
 # =============================================================================
+# Reproducibility: DataLoader Worker Seeding
+# =============================================================================
+# When num_workers > 0, each worker gets an independent RNG state.
+# Without explicit seeding, this breaks reproducibility across runs.
+# This worker_init_fn ensures each worker has a deterministic seed.
+
+def _worker_init_fn(worker_id: int) -> None:
+    """
+    Initialize worker with deterministic seed for reproducibility.
+
+    Each worker gets seed = base_seed + worker_id, ensuring:
+    1. Different workers have different seeds (no duplicate data)
+    2. Same worker_id across runs gets same seed (reproducibility)
+
+    The base seed comes from the initial_seed set by torch.manual_seed().
+    """
+    # Get the base seed from the main process
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    import random
+    random.seed(worker_seed)
+
+
+# =============================================================================
 # Fallback: Download WikiText directly (no datasets package needed)
 # =============================================================================
 # WikiText-2 raw files from multiple sources (fallback chain)
@@ -1130,6 +1154,7 @@ def create_byte_dataloaders(
         num_workers=num_workers,
         pin_memory=True if torch.cuda.is_available() else False,
         drop_last=True,
+        worker_init_fn=_worker_init_fn,  # Reproducibility: seed workers
     )
 
     val_loader = DataLoader(
@@ -1139,6 +1164,7 @@ def create_byte_dataloaders(
         num_workers=num_workers,
         pin_memory=True if torch.cuda.is_available() else False,
         drop_last=False,
+        worker_init_fn=_worker_init_fn,  # Reproducibility: seed workers
     )
 
     print(f"\n{'='*70}")
@@ -1221,6 +1247,7 @@ def create_char_dataloaders(
         num_workers=num_workers,
         pin_memory=True if torch.cuda.is_available() else False,
         drop_last=True,
+        worker_init_fn=_worker_init_fn,  # Reproducibility: seed workers
     )
 
     val_loader = DataLoader(
@@ -1230,6 +1257,7 @@ def create_char_dataloaders(
         num_workers=num_workers,
         pin_memory=True if torch.cuda.is_available() else False,
         drop_last=False,
+        worker_init_fn=_worker_init_fn,  # Reproducibility: seed workers
     )
 
     print(f"\n{'='*70}")
@@ -1359,6 +1387,7 @@ def create_dataloaders(
         num_workers=num_workers,
         pin_memory=True if torch.cuda.is_available() else False,
         drop_last=True,  # Drop incomplete batches for consistent shapes
+        worker_init_fn=_worker_init_fn,  # Reproducibility: seed workers
     )
 
     val_loader = DataLoader(
@@ -1368,6 +1397,7 @@ def create_dataloaders(
         num_workers=num_workers,
         pin_memory=True if torch.cuda.is_available() else False,
         drop_last=False,
+        worker_init_fn=_worker_init_fn,  # Reproducibility: seed workers
     )
 
     print(f"\n{'='*70}")
