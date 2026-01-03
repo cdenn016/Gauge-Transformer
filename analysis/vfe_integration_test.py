@@ -84,7 +84,7 @@ def create_gauge_polarized_system(
         phi_scale=phi_scale,  # Non-zero!
     )
 
-    # System config
+    # System config (trains_phi defaults to True in system.step())
     system_config = SystemConfig(
         lambda_self=1.0,
         lambda_belief_align=1.0,
@@ -93,7 +93,6 @@ def create_gauge_polarized_system(
         kappa_beta=kappa_beta,
         kappa_gamma=1.0,
         overlap_threshold=0.01,
-        trains_phi=True,  # Enable gauge training
     )
 
     # Create agents
