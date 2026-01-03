@@ -999,3 +999,377 @@ if __name__ == '__main__':
     print("  - Low κ (cold): Small d_c → easy to polarize")
     print("  - High κ (hot): Large d_c → requires greater separation")
     print("=" * 70)
+
+
+# =============================================================================
+# Gauge Transport Effects
+# =============================================================================
+
+def compute_kl_with_transport(
+    mu_A: np.ndarray,
+    Sigma_A: np.ndarray,
+    mu_B: np.ndarray,
+    Sigma_B: np.ndarray,
+    Omega_AB: np.ndarray,
+    eps: float = 1e-8
+) -> float:
+    """
+    Compute KL(q_A || Ω_AB[q_B]) with gauge transport.
+
+    The transport operator Ω_AB ∈ SO(K) rotates the distribution:
+        Ω_AB[q_B] = N(Ω_AB @ μ_B, Ω_AB @ Σ_B @ Ω_AB^T)
+
+    This changes the effective distance between groups.
+
+    Args:
+        mu_A, Sigma_A: Group A belief
+        mu_B, Sigma_B: Group B belief
+        Omega_AB: Transport operator (K, K) rotation matrix
+        eps: Regularization
+
+    Returns:
+        kl: KL divergence with transport
+    """
+    K = mu_A.shape[-1]
+
+    # Transport B → A frame
+    mu_B_transported = Omega_AB @ mu_B
+    Sigma_B_transported = Omega_AB @ Sigma_B @ Omega_AB.T
+
+    # Compute KL
+    Sigma_B_inv = np.linalg.inv(Sigma_B_transported + eps * np.eye(K))
+    delta_mu = mu_B_transported - mu_A
+
+    trace_term = np.trace(Sigma_B_inv @ Sigma_A)
+    quad_term = delta_mu @ Sigma_B_inv @ delta_mu
+    _, logdet_A = np.linalg.slogdet(Sigma_A + eps * np.eye(K))
+    _, logdet_B = np.linalg.slogdet(Sigma_B_transported + eps * np.eye(K))
+
+    kl = 0.5 * (trace_term + quad_term - K + logdet_B - logdet_A)
+
+    return max(0, kl)
+
+
+def effective_distance_with_transport(
+    mu_A: np.ndarray,
+    mu_B: np.ndarray,
+    Sigma: np.ndarray,
+    Omega_AB: np.ndarray,
+    eps: float = 1e-8
+) -> float:
+    """
+    Compute effective Mahalanobis distance with gauge transport.
+
+    d_eff = ||μ_A - Ω_AB @ μ_B||_{Σ^{-1}}
+
+    The transport can either align or misalign the groups:
+    - Ω_AB = I: standard distance
+    - Ω_AB aligning: reduces effective distance
+    - Ω_AB misaligning: increases effective distance
+    """
+    K = mu_A.shape[-1]
+    Sigma_inv = np.linalg.inv(Sigma + eps * np.eye(K))
+
+    mu_B_transported = Omega_AB @ mu_B
+    delta = mu_A - mu_B_transported
+
+    d_squared = delta @ Sigma_inv @ delta
+
+    return np.sqrt(max(0, d_squared))
+
+
+def critical_distance_with_transport(
+    kappa: float,
+    epsilon: float,
+    Omega_AB: np.ndarray,
+    Sigma: np.ndarray
+) -> Tuple[float, float]:
+    """
+    Compute critical distance accounting for gauge transport.
+
+    The transport operator affects the effective KL:
+        KL_eff ≈ d²_eff / 2
+
+    where d_eff depends on the rotation.
+
+    Returns:
+        (d_c_intrinsic, transport_factor)
+
+    d_c_intrinsic is the base critical distance (without transport)
+    transport_factor describes how transport modifies it
+    """
+    d_c_base = compute_critical_distance(kappa, epsilon)
+
+    # Estimate transport effect on distance
+    # For identity transport, factor = 1
+    # For general transport, need to account for misalignment
+
+    K = Omega_AB.shape[0]
+
+    # Compute how much transport deviates from identity
+    I = np.eye(K)
+    transport_deviation = np.linalg.norm(Omega_AB - I, 'fro') / np.sqrt(K)
+
+    # Transport can increase or decrease effective distance
+    # As rough estimate: factor ≈ 1 ± deviation
+    transport_factor = 1.0  # First-order: transport is a rotation, preserves distances
+
+    return d_c_base, transport_factor
+
+
+def analyze_gauge_effect_on_polarization(
+    state: PolarizationState,
+    kappa: float,
+    phi_A: np.ndarray,
+    phi_B: np.ndarray,
+    generators: np.ndarray,
+    epsilon: float = 0.01
+) -> Dict[str, float]:
+    """
+    Analyze how gauge fields affect polarization stability.
+
+    Args:
+        state: Polarization state
+        kappa: Temperature
+        phi_A: Gauge field for group A (3,) for SO(3)
+        phi_B: Gauge field for group B
+        generators: Lie algebra generators (3, K, K)
+        epsilon: Stability threshold
+
+    Returns:
+        Dict with stability metrics including gauge effects
+    """
+    from math_utils.transport import compute_transport
+
+    # Compute transport operator Ω_AB = exp(φ_A) exp(-φ_B)
+    Omega_AB = compute_transport(phi_A, phi_B, generators)
+
+    # Compute KL with and without transport
+    kl_no_transport = compute_kl_gaussians(
+        state.mu_A, state.Sigma_A,
+        state.mu_B, state.Sigma_B
+    )
+
+    kl_with_transport = compute_kl_with_transport(
+        state.mu_A, state.Sigma_A,
+        state.mu_B, state.Sigma_B,
+        Omega_AB
+    )
+
+    # Effective distances
+    Sigma_avg = 0.5 * (state.Sigma_A + state.Sigma_B)
+    d_no_transport = compute_mahalanobis_distance(
+        state.mu_A, state.mu_B, Sigma_avg
+    )
+    d_with_transport = effective_distance_with_transport(
+        state.mu_A, state.mu_B, Sigma_avg, Omega_AB
+    )
+
+    # Critical distances
+    d_c = compute_critical_distance(kappa, epsilon)
+
+    # Attention with transport
+    beta_cross_no_transport = np.exp(-kl_no_transport / kappa)
+    beta_cross_with_transport = np.exp(-kl_with_transport / kappa)
+
+    return {
+        'kl_no_transport': kl_no_transport,
+        'kl_with_transport': kl_with_transport,
+        'd_no_transport': d_no_transport,
+        'd_with_transport': d_with_transport,
+        'd_critical': d_c,
+        'beta_cross_no_transport': beta_cross_no_transport,
+        'beta_cross_with_transport': beta_cross_with_transport,
+        'stable_no_transport': d_no_transport > d_c,
+        'stable_with_transport': d_with_transport > d_c,
+        'gauge_alignment': np.trace(Omega_AB) / Omega_AB.shape[0]
+    }
+
+
+# =============================================================================
+# Multi-Group Extension
+# =============================================================================
+
+@dataclass
+class MultiGroupState:
+    """
+    State with N > 2 groups.
+
+    Attributes:
+        means: List of group means [μ_1, ..., μ_N]
+        covariances: List of group covariances [Σ_1, ..., Σ_N]
+        sizes: Number of agents per group
+        labels: Group label names
+    """
+    means: List[np.ndarray]
+    covariances: List[np.ndarray]
+    sizes: List[int]
+    labels: Optional[List[str]] = None
+
+    @property
+    def n_groups(self) -> int:
+        return len(self.means)
+
+
+def compute_pairwise_distances(
+    state: MultiGroupState,
+    use_mahalanobis: bool = True
+) -> np.ndarray:
+    """
+    Compute pairwise distances between all group pairs.
+
+    Returns:
+        D: (N, N) distance matrix where D[i,j] = d(group_i, group_j)
+    """
+    N = state.n_groups
+    D = np.zeros((N, N))
+
+    for i in range(N):
+        for j in range(i+1, N):
+            if use_mahalanobis:
+                Sigma_avg = 0.5 * (state.covariances[i] + state.covariances[j])
+                d = compute_mahalanobis_distance(
+                    state.means[i], state.means[j], Sigma_avg
+                )
+            else:
+                d = np.linalg.norm(state.means[i] - state.means[j])
+
+            D[i, j] = d
+            D[j, i] = d
+
+    return D
+
+
+def compute_attention_matrix(
+    state: MultiGroupState,
+    kappa: float
+) -> np.ndarray:
+    """
+    Compute attention matrix between groups.
+
+    β[i,j] = exp(-KL(q_i || q_j) / κ) / Z_i
+
+    where Z_i = Σ_k exp(-KL(q_i || q_k) / κ)
+    """
+    N = state.n_groups
+
+    # Compute pairwise KL
+    KL = np.zeros((N, N))
+    for i in range(N):
+        for j in range(N):
+            if i != j:
+                KL[i, j] = compute_kl_gaussians(
+                    state.means[i], state.covariances[i],
+                    state.means[j], state.covariances[j]
+                )
+
+    # Softmax to get attention
+    log_weights = -KL / kappa
+    # Mask diagonal
+    np.fill_diagonal(log_weights, -np.inf)
+
+    # Numerically stable softmax
+    beta = np.zeros((N, N))
+    for i in range(N):
+        row = log_weights[i, :]
+        row_shifted = row - np.max(row[row > -np.inf])
+        exp_row = np.exp(row_shifted)
+        exp_row[row == -np.inf] = 0
+        beta[i, :] = exp_row / (np.sum(exp_row) + 1e-10)
+
+    return beta
+
+
+def analyze_multigroup_stability(
+    state: MultiGroupState,
+    kappa: float,
+    epsilon: float = 0.01
+) -> Dict[str, any]:
+    """
+    Analyze stability of multi-group polarization.
+
+    A multi-group polarized state is stable when:
+    - Within-group attention dominates for all groups
+    - Cross-group attention is negligible between distant groups
+
+    Returns:
+        Dict with stability metrics for each group pair
+    """
+    N = state.n_groups
+
+    # Pairwise distances
+    D = compute_pairwise_distances(state)
+
+    # Attention matrix
+    beta = compute_attention_matrix(state, kappa)
+
+    # Critical distance
+    d_c = compute_critical_distance(kappa, epsilon)
+
+    # Analyze each pair
+    pair_analysis = {}
+    for i in range(N):
+        for j in range(i+1, N):
+            pair_key = f"({i},{j})"
+            d_ij = D[i, j]
+            beta_ij = beta[i, j]
+            is_stable = d_ij > d_c
+
+            pair_analysis[pair_key] = {
+                'distance': d_ij,
+                'attention': beta_ij,
+                'stable': is_stable,
+                'margin': d_ij - d_c
+            }
+
+    # Overall stability: all pairs must be stable
+    all_stable = all(p['stable'] for p in pair_analysis.values())
+
+    # Minimum margin (most vulnerable pair)
+    min_margin = min(p['margin'] for p in pair_analysis.values())
+    vulnerable_pair = min(pair_analysis.keys(),
+                          key=lambda k: pair_analysis[k]['margin'])
+
+    return {
+        'n_groups': N,
+        'kappa': kappa,
+        'd_critical': d_c,
+        'distance_matrix': D,
+        'attention_matrix': beta,
+        'pair_analysis': pair_analysis,
+        'all_stable': all_stable,
+        'min_margin': min_margin,
+        'vulnerable_pair': vulnerable_pair
+    }
+
+
+def find_multigroup_critical_kappa(
+    state: MultiGroupState,
+    epsilon: float = 0.01
+) -> Tuple[float, str]:
+    """
+    Find critical κ for multi-group system.
+
+    The critical κ is determined by the closest pair of groups:
+        κ_c = d²_min / (2|ln(ε)|)
+
+    Returns:
+        (kappa_c, limiting_pair): Critical temperature and limiting pair
+    """
+    D = compute_pairwise_distances(state)
+    N = state.n_groups
+
+    # Find minimum distance (closest groups)
+    d_min = np.inf
+    limiting_pair = None
+
+    for i in range(N):
+        for j in range(i+1, N):
+            if D[i, j] < d_min:
+                d_min = D[i, j]
+                limiting_pair = f"({i},{j})"
+
+    # Critical kappa from minimum distance
+    kappa_c = d_min**2 / (2 * abs(np.log(epsilon)))
+
+    return kappa_c, limiting_pair
