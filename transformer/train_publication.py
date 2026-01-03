@@ -205,11 +205,11 @@ DEFAULT_USE_GPU_OPTIMIZED = True  # Set True for RTX 5090 / high-end GPU setting
 STANDARD_TRANSFORMER_CONFIG = {
     # Model architecture - match gauge VFE dimensions
     'vocab_size': 50257,        # Will be overridden by tokenizer
-    'embed_dim': 100,              # Same K as gauge VFE
+    'embed_dim': 128,              # Same K as gauge VFE
     'n_layers': 6,                # Same depth
-    'hidden_dim': 400,            # 4×embed_dim standard ratio
-    'max_seq_len': 64,            # Same context length
-    'n_heads': 50,                 # embed_dim / head_dim (5 heads of dim 5)
+    'hidden_dim': 512,            # 4×embed_dim standard ratio
+    'max_seq_len': 128,            # Same context length
+    'n_heads': 4,                 # embed_dim / head_dim (5 heads of dim 5)
 
     # GPU Training - same as gauge VFE
     'batch_size': 24,
@@ -235,7 +235,7 @@ STANDARD_TRANSFORMER_CONFIG = {
     'attention_window': 24,
 
     # Training
-    'max_steps': 2000000,
+    'max_steps': 20000,
     'warmup_steps': 25,
 
     # Learning rates - standard Adam rates
@@ -287,6 +287,8 @@ STANDARD_TRANSFORMER_CONFIG = {
 #
 #   Realistic for 32GB: B=16, N=64, K=63 → ~2GB for KL matrices
 #
+SEED=6
+
 GPU_OPTIMIZED_CONFIG = {
     # Model architecture - WITH diagonal_covariance=True, can scale up!
     # Diagonal mode: O(N²×K) memory instead of O(N²×K²)
@@ -294,13 +296,13 @@ GPU_OPTIMIZED_CONFIG = {
     # Can't match Vaswani d=512 due to K² memory cost!
     
     'vocab_size': 50257,        # Full byte-level vocab
-    'embed_dim': 150,          # K=63 (ODD for SO(3)) - realistic for memory
+    'embed_dim': 30,          # K=63 (ODD for SO(3)) - realistic for memory
     'n_layers': 1,            # Fewer layers to save memory
     'hidden_dim': 508,        # 4×embed_dim Only for 'learned'
-    'max_seq_len': 64,        # N=64 - attention is O(N²×K²)!
+    'max_seq_len': 128,        # N=64 - attention is O(N²×K²)!
 
     # GPU Training - fits in 32GB
-    'batch_size': 2 ,         # Conservative for memory
+    'batch_size': 6 ,         # Conservative for memory
     'use_amp': False,         # Disabled - Hamiltonian dynamics needs FP32 precision
     'num_workers': 4,         # Parallel data loading
 
@@ -336,8 +338,7 @@ GPU_OPTIMIZED_CONFIG = {
     'use_identity_transport': False,      # Ω = I everywhere (bypasses gauge transport)
     'alibi_slope': None,                 # No ALiBi bias (or -0.1 for recency)
 
-  
-    
+     
     # =========================================================================
     # EMBEDDING MEAN (μ) INITIALIZATION
     # Controls the scale and normalization of belief mean embeddings.
@@ -347,8 +348,7 @@ GPU_OPTIMIZED_CONFIG = {
     'mu_init_std': 7.0,       # Embedding init std (None = use default 1/√K)
     'mu_normalize': False,    # If True, normalize μ to unit sphere after lookup
     'mu_max_norm': None,      # If set, clamp ||μ|| ≤ max_norm (e.g., 20.0)
-    
-  
+     
     # =========================================================================
     # DIAGONAL COVARIANCE MODE (memory optimization)
     # True:  Σ is (B,N,K) diagonal - O(N²×K) memory - can scale to Vaswani size?
@@ -356,8 +356,7 @@ GPU_OPTIMIZED_CONFIG = {
     # Diagonal loses off-diagonal correlations but keeps per-dim uncertainty.
     # =========================================================================
    
-    'diagonal_covariance': True,
-   
+    'diagonal_covariance': True, 
    
     # =========================================================================
     # CHUNKED KL COMPUTATION (Additional Memory Optimization)
@@ -401,11 +400,10 @@ GPU_OPTIMIZED_CONFIG = {
     'use_prior_bank': True,  # Use token-dependent PriorBank (required for language!)
 
 
-
     'gauge_fixed_priors': False,    
 
     # Training (scaled for GPU)
-    'max_steps': 20000 ,         # More steps for convergence
+    'max_steps': 5000 ,         # More steps for convergence
 
     # Learning rates (same natural gradient rates)
     'mu_lr': 0.01,   #decrease as embedding dim and vfe steps increases.  equal to ffn-lr
@@ -422,12 +420,12 @@ GPU_OPTIMIZED_CONFIG = {
 
     # Regularization
     'weight_decay': 0.01,
-    'dropout': 0.1,
+    'dropout': 0.1, 
     'grad_clip': 1.0,
 
     # Logging (less frequent for speed)
-    'log_interval': 50,
-    'eval_interval': 500,
+    'log_interval': 100,
+    'eval_interval': 1000,
     'checkpoint_interval': 5000,
     'patience': 5,
 
@@ -441,7 +439,7 @@ GPU_OPTIMIZED_CONFIG = {
     #      embed_dim = mult * N for direct sums of fundamental
     # =================================================================
     'gauge_group': 'SON',  # 'SO3' or 'SON'
-    'gauge_dim': 2,        # N for SO(N) - only used when gauge_group='SON'
+    'gauge_dim': 10,        # N for SO(N) - only used when gauge_group='SON'
     'use_multi_irrep': True,  # Use block-diagonal generators from irrep_spec
 
 
@@ -456,9 +454,9 @@ GPU_OPTIMIZED_CONFIG = {
       #('ℓ5', 9, 11),
      # ('ℓ6', 1, 13),
      # ('ℓ7', 1, 15),
-      # ('ℓ9', 4, 19),
-      ('fund', 75, 2)  #For SO(8) 
-     # ('fund', 4, 5),   # SO(5)
+      # ('ℓ50', 1, 101),
+     # ('fund', 2, 50)  #For SO(8) 
+      ('fund', 3, 10),   # SO(5)
     ],
 
     # RG Metrics Configuration (meta-agent emergence detection)
@@ -1629,7 +1627,7 @@ def main():
 
     # Set random seed for reproducibility
     # Default to seed=42 if not specified, for consistent results
-    seed = args.seed if args.seed is not None else 42
+    seed = SEED
     import random
     import numpy as np
     random.seed(seed)
