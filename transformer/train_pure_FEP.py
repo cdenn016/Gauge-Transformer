@@ -325,10 +325,18 @@ def main():
                 config['irrep_spec'] = [('fund', n_copies, gauge_dim)]
             print(f"  Auto-generated SO({gauge_dim}) irrep_spec: {config['irrep_spec']}")
 
-    # Set seed
-    torch.manual_seed(config['seed'])
+    # Set seed for full reproducibility
+    seed = config['seed']
+    import random
+    import numpy as np
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
     if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(config['seed'])
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    print(f"Random seed set to: {seed}")
 
     # Device
     if config['device'] == 'auto':
