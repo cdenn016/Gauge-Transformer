@@ -181,6 +181,63 @@ class RGFlowSummary:
             'kl_between_stable': abs(trends['kl_between_trend']) < threshold * 10,
         }
 
+    def detect_phase_transition(self) -> Optional[Dict[str, float]]:
+        """
+        Detect phase transition from RG flow observables.
+
+        Looks for signatures of phase transition:
+        1. Sharp change in modularity (order parameter proxy)
+        2. Peak in effective rank derivative (susceptibility)
+        3. Crossover in KL within/between ratio
+
+        Returns:
+            Dict with transition analysis, or None if no transition detected
+        """
+        if len(self.modularity_history) < 5:
+            return None
+
+        mod = np.array(self.modularity_history)
+        eff_rank = np.array(self.effective_rank_history)
+        kl_within = np.array(self.kl_within_history)
+        kl_between = np.array(self.kl_between_history)
+
+        # Compute derivatives
+        mod_deriv = np.abs(np.diff(mod))
+        eff_rank_deriv = np.abs(np.diff(eff_rank))
+
+        # Find peak in modularity derivative (transition point)
+        if len(mod_deriv) > 0:
+            transition_step = int(np.argmax(mod_deriv))
+            max_mod_change = float(mod_deriv[transition_step])
+        else:
+            transition_step = 0
+            max_mod_change = 0.0
+
+        # Compute KL ratio
+        kl_ratio = kl_within / (kl_between + 1e-10)
+
+        # Detect if transition occurred
+        # Criterion: large modularity change AND decreasing KL ratio
+        transition_detected = (
+            max_mod_change > 0.05 and
+            len(kl_ratio) > 1 and
+            kl_ratio[-1] < kl_ratio[0]
+        )
+
+        if not transition_detected:
+            return None
+
+        # Compute transition metrics
+        return {
+            'transition_step': transition_step,
+            'modularity_at_transition': float(mod[transition_step]) if transition_step < len(mod) else 0.0,
+            'max_modularity_change': max_mod_change,
+            'effective_rank_at_transition': float(eff_rank[transition_step]) if transition_step < len(eff_rank) else 0.0,
+            'kl_ratio_initial': float(kl_ratio[0]) if len(kl_ratio) > 0 else 0.0,
+            'kl_ratio_final': float(kl_ratio[-1]) if len(kl_ratio) > 0 else 0.0,
+            'polarization_emerged': kl_ratio[-1] < 0.5 if len(kl_ratio) > 0 else False
+        }
+
 
 # =============================================================================
 # Core RG Metrics
