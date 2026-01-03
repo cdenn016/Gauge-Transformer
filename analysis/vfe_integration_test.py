@@ -4,7 +4,7 @@ VFE Integration Test: Actual Gauge Transport in Kappa Phase Transitions
 =========================================================================
 
 This module tests kappa phase transitions using the ACTUAL VFE dynamics:
-1. Agents evolve beliefs through system.step()
+1. Agents evolve beliefs through Trainer.step() (proper gradient application)
 2. Gauge fields φ are trained (not set to zero)
 3. Transport operators Ω_ij = exp(φ_i)exp(-φ_j) are computed
 4. Attention weights β_ij use gauge-transported KL divergences
@@ -23,9 +23,10 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from config import AgentConfig, SystemConfig
+from config import AgentConfig, SystemConfig, TrainingConfig
 from agent.agents import Agent
 from agent.system import MultiAgentSystem
+from agent.trainer import Trainer
 from math_utils.transport import compute_transport
 from analysis.kappa_phase_transitions import (
     compute_critical_distance,
@@ -84,7 +85,7 @@ def create_gauge_polarized_system(
         phi_scale=phi_scale,  # Non-zero!
     )
 
-    # System config (trains_phi defaults to True in system.step())
+    # System config
     system_config = SystemConfig(
         lambda_self=1.0,
         lambda_belief_align=1.0,
@@ -259,8 +260,9 @@ def run_vfe_dynamics(
     """
     Run VFE dynamics and track polarization metrics.
 
-    This is the REAL VFE evolution:
-    - system.step() updates beliefs (μ, Σ) and gauge fields (φ)
+    This is the REAL VFE evolution using the Trainer class:
+    - trainer.step() updates beliefs (μ, Σ) and gauge fields (φ)
+    - Uses GradientApplier with proper manifold retractions
     - Agents interact through gauge-transported attention
 
     Returns:
@@ -281,9 +283,19 @@ def run_vfe_dynamics(
         print("VFE DYNAMICS WITH GAUGE TRANSPORT")
         print("=" * 70)
 
+    # Create trainer with proper config
+    train_config = TrainingConfig(
+        n_steps=n_steps,
+        lr_mu_q=0.1,
+        lr_sigma_q=0.05,
+        lr_phi=0.05,
+        save_history=False,
+    )
+    trainer = Trainer(system, train_config)
+
     for step_idx in range(n_steps):
-        # Take VFE step (updates beliefs AND gauge fields)
-        energies = system.step()
+        # Take VFE step using Trainer (proper gradient application)
+        energies = trainer.step()
 
         # Measure attention
         attn = measure_gauge_attention(system, labels, verbose=False)
@@ -293,8 +305,8 @@ def run_vfe_dynamics(
 
         # Record
         history['step'].append(step_idx)
-        history['total_energy'].append(energies.get('total', 0))
-        history['belief_align'].append(energies.get('belief_align', 0))
+        history['total_energy'].append(energies.total)
+        history['belief_align'].append(energies.belief_align)
         history['beta_within'].append(attn['beta_within_avg'])
         history['beta_cross'].append(attn['beta_cross_avg'])
         history['ratio'].append(attn['ratio'])
@@ -302,7 +314,7 @@ def run_vfe_dynamics(
 
         if verbose and (step_idx % 10 == 0 or step_idx == n_steps - 1):
             print(f"\n  Step {step_idx}:")
-            print(f"    Energy: {energies.get('total', 0):.4f}")
+            print(f"    Energy: {energies.total:.4f}")
             print(f"    β_within: {attn['beta_within_avg']:.4f}")
             print(f"    β_cross: {attn['beta_cross_avg']:.4f}")
             print(f"    Ratio: {attn['ratio']:.1f}x")
@@ -437,9 +449,17 @@ def test_phase_transition_with_gauge(
         # Initial state
         attn_init = measure_gauge_attention(system, labels, verbose=False)
 
-        # Run VFE dynamics
+        # Run VFE dynamics using Trainer
+        train_config = TrainingConfig(
+            n_steps=n_steps,
+            lr_mu_q=0.1,
+            lr_sigma_q=0.05,
+            lr_phi=0.05,
+            save_history=False,
+        )
+        trainer = Trainer(system, train_config)
         for _ in range(n_steps):
-            system.step()
+            trainer.step()
 
         # Final state
         attn_final = measure_gauge_attention(system, labels, verbose=False)
