@@ -507,6 +507,7 @@ def _kmeans_simple(
     X: torch.Tensor,  # (N, K) features
     n_clusters: int,
     max_iters: int = 50,
+    seed: int = 42,  # Fixed seed for reproducibility
 ) -> torch.Tensor:
     """
     Simple k-means clustering on GPU.
@@ -515,6 +516,7 @@ def _kmeans_simple(
         X: Feature matrix (N, K)
         n_clusters: Number of clusters
         max_iters: Maximum iterations
+        seed: Random seed for reproducible centroid initialization
 
     Returns:
         labels: Cluster assignments (N,)
@@ -522,8 +524,13 @@ def _kmeans_simple(
     N, K = X.shape
     device = X.device
 
+    # Use a Generator for reproducible k-means++ initialization
+    generator = torch.Generator(device=device)
+    generator.manual_seed(seed)
+
     # Initialize centroids using k-means++ style
-    centroids = [X[torch.randint(N, (1,)).item()]]
+    first_idx = torch.randint(N, (1,), generator=generator, device=device).item()
+    centroids = [X[first_idx]]
 
     for _ in range(n_clusters - 1):
         # Distance to nearest centroid
@@ -534,7 +541,7 @@ def _kmeans_simple(
 
         # Sample proportional to squared distance
         probs = dists / (dists.sum() + 1e-10)
-        idx = torch.multinomial(probs, 1).item()
+        idx = torch.multinomial(probs, 1, generator=generator).item()
         centroids.append(X[idx])
 
     centroids = torch.stack(centroids, dim=0)  # (n_clusters, K)

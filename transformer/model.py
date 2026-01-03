@@ -215,9 +215,18 @@ class GaugeTransformerLM(nn.Module):
                         print(f"[WARNING] SO(N) with N={gauge_dim} but embed_dim={embed_dim}. "
                               f"Consider using multi-irrep mode for embed_dim != N.")
         else:
-            # Fallback: random skew-symmetric matrices
+            # Fallback: random skew-symmetric matrices (should never happen!)
+            # math_utils/generators.py should always be available
+            import warnings
+            warnings.warn(
+                "GENERATORS_AVAILABLE=False: math_utils/generators.py import failed! "
+                "Using random fallback generators. This may indicate a broken installation.",
+                RuntimeWarning
+            )
             n_generators = self.phi_dim
-            generators = np.random.randn(n_generators, embed_dim, embed_dim)
+            # Use a fixed seed for reproducibility even if global seed wasn't set
+            rng = np.random.RandomState(seed=42)
+            generators = rng.randn(n_generators, embed_dim, embed_dim)
             generators = 0.5 * (generators - generators.transpose(0, 2, 1))
 
         self.register_buffer(
