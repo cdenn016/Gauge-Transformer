@@ -97,7 +97,7 @@ def create_polarized_system(
     agents = []
 
     for i in range(n_agents):
-        agent = Agent(agent_config)
+        agent = Agent(agent_id=i, config=agent_config, rng=rng)
 
         # Determine group membership
         if i < n_per_group:
@@ -171,14 +171,14 @@ def create_controlled_pair(
         lambda_belief_align=1.0,
     )
 
-    agents = []
+    rng = np.random.default_rng(42)
 
     # Agent A at origin
-    agent_A = Agent(agent_config)
+    agent_A = Agent(agent_id=0, config=agent_config, rng=rng)
     agent_A.mu_q = np.zeros(K)
 
     # Agent B at distance along first axis
-    agent_B = Agent(agent_config)
+    agent_B = Agent(agent_id=1, config=agent_config, rng=rng)
     agent_B.mu_q = np.zeros(K)
     agent_B.mu_q[0] = distance
 
