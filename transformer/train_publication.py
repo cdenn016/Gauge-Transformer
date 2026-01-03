@@ -186,12 +186,20 @@ def save_experiment_config(
 
 
 # ============================================================================
-# EDIT THESE DEFAULTS TO RUN WITHOUT COMMAND-LINE ARGS
+# EDIT THESE DEFAULTS TO RUN WITHOUT COMMAND-LINE ARGS (just click Run!)
 # ============================================================================
-DEFAULT_FFN_MODE = 'VFE_dynamic'  # 'learned', 'VFE_dynamic', 'variational_gradient_engine', 'hamiltonian', or None
+DEFAULT_FFN_MODE = 'VFE_dynamic'  # 'VFE_dynamic' (gauge VFE) or 'standard' (baseline)
 DEFAULT_RUN_ABLATION = False  # Set True to run all three modes
 DEFAULT_ENABLE_SIGMA_PHI = True   # Set True to enable learning Σ and φ (required for hamiltonian!)
 DEFAULT_USE_GPU_OPTIMIZED = True  # Set True for RTX 5090 / high-end GPU settings
+
+# Pure FEP Mode - Backprop-free learning via prior evolution
+DEFAULT_PURE_FEP = False          # Set True for pure FEP (NO backprop!)
+DEFAULT_PRIOR_LR = 0.1            # Learning rate for prior updates in pure FEP mode
+DEFAULT_EMBED_LR = 0.1            # Learning rate for embedding updates in pure FEP mode
+
+# Dataset
+DEFAULT_DATASET = 'wikitext-103'  # 'wikitext-2' (~2M tokens) or 'wikitext-103' (~103M tokens)
 # ============================================================================
 
 
@@ -1600,12 +1608,12 @@ def main():
                         help='Enable learning covariances (Σ) and gauge frames (φ) - full geometric learning!')
 
     # Pure FEP mode (backprop-free learning)
-    parser.add_argument('--pure_fep', action='store_true', default=False,
+    parser.add_argument('--pure_fep', action='store_true', default=DEFAULT_PURE_FEP,
                         help='Enable pure FEP mode: learning via prior evolution, NO backprop!')
-    parser.add_argument('--prior_lr', type=float, default=0.1,
-                        help='Learning rate for prior updates in pure FEP mode (default: 0.1)')
-    parser.add_argument('--embed_lr', type=float, default=0.1,
-                        help='Learning rate for embedding updates in pure FEP mode (default: 0.1)')
+    parser.add_argument('--prior_lr', type=float, default=DEFAULT_PRIOR_LR,
+                        help='Learning rate for prior updates in pure FEP mode')
+    parser.add_argument('--embed_lr', type=float, default=DEFAULT_EMBED_LR,
+                        help='Learning rate for embedding updates in pure FEP mode')
 
     # GPU optimization
     parser.add_argument('--gpu_optimized', action='store_true', default=DEFAULT_USE_GPU_OPTIMIZED,
@@ -1619,9 +1627,9 @@ def main():
     parser.add_argument('--use_wandb', action='store_true')
     parser.add_argument('--seed', type=int, default=None,
                         help='Random seed for reproducibility (default: 42 for determinism)')
-    parser.add_argument('--dataset', type=str, default='wikitext-103',
+    parser.add_argument('--dataset', type=str, default=DEFAULT_DATASET,
                         choices=['wikitext-2', 'wikitext-103'],
-                        help='Dataset to use: wikitext-2 (~2M tokens) or wikitext-103 (~103M tokens, default)')
+                        help='Dataset to use: wikitext-2 (~2M tokens) or wikitext-103 (~103M tokens)')
 
     args = parser.parse_args()
 
