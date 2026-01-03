@@ -15,6 +15,13 @@ Author: VFE Transformer Team
 Date: January 2026
 """
 
+# Suppress CUDA/cupy/triton warnings
+import warnings
+warnings.filterwarnings('ignore', message='.*CUDA path could not be detected.*')
+warnings.filterwarnings('ignore', message='.*Failed to find.*')
+warnings.filterwarnings('ignore', category=UserWarning, module='cupy')
+warnings.filterwarnings('ignore', category=UserWarning, module='triton')
+
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
