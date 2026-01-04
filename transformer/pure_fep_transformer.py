@@ -2028,6 +2028,9 @@ class PureFEPTransformer(nn.Module):
         # =====================================================================
         if config.embedding_mode == 'prior_bank':
             # PRINCIPLED: PriorBank serves as both embedding AND output
+            # NOTE: gauge_fixed_priors=False for now because P-flow doesn't
+            # update phi_embed yet. Each token gets its own prior_mu that
+            # can be updated via scatter_add in P-flow.
             self.prior_bank = PriorBank(
                 vocab_size=config.vocab_size,
                 embed_dim=config.embed_dim,
@@ -2035,7 +2038,7 @@ class PureFEPTransformer(nn.Module):
                 init_sigma_scale=1.0,  # Scaled to match init_std for O(1) KL
                 learnable_sigma=True,
                 eps=config.eps,
-                gauge_fixed_priors=True,  # Use gauge-covariant priors
+                gauge_fixed_priors=False,  # Per-token priors (P-flow updates each)
                 generators=self.generators,
                 phi_dim=config.phi_dim,
             )
@@ -2050,7 +2053,7 @@ class PureFEPTransformer(nn.Module):
                 init_sigma_scale=1.0,  # Scaled to match init_std for O(1) KL
                 learnable_sigma=True,
                 eps=config.eps,
-                gauge_fixed_priors=True,  # Use gauge-covariant priors
+                gauge_fixed_priors=False,  # Per-token priors (P-flow updates each)
                 generators=self.generators,
                 phi_dim=config.phi_dim,
             )
@@ -2101,7 +2104,7 @@ class PureFEPTransformer(nn.Module):
                     init_sigma_scale=1.0,  # Scaled to match init_std for O(1) KL
                     learnable_sigma=True,
                     eps=config.eps,
-                    gauge_fixed_priors=True,  # Use gauge-covariant priors
+                    gauge_fixed_priors=False,  # Per-token priors (P-flow updates each)
                     generators=self.generators,
                     phi_dim=config.phi_dim,
                 )
@@ -2112,7 +2115,7 @@ class PureFEPTransformer(nn.Module):
                 self.prior_bank = PriorBank(
                     vocab_size=config.vocab_size,
                     embed_dim=config.embed_dim,
-                    gauge_fixed_priors=True,  # Use gauge-covariant priors
+                    gauge_fixed_priors=False,  # Per-token priors (P-flow updates each)
                     generators=self.generators,
                     phi_dim=config.phi_dim,
                 )
