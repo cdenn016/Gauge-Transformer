@@ -2472,6 +2472,7 @@ class PureFEPTransformer(nn.Module):
                 # Store both for prior updates
                 info['prediction_errors'] = per_sample_loss
                 info['per_position_errors'] = per_position_loss
+                info['targets'] = targets  # Need targets for token prior updates
 
             # Update persistent priors - THIS IS WHERE LEARNING HAPPENS!
             self._update_priors_with_prediction_error(info)
@@ -2565,12 +2566,13 @@ class PureFEPTransformer(nn.Module):
 
     def _update_priors_with_prediction_error(self, info: Dict):
         """
-        Update POSITION-DEPENDENT priors using prediction-error-weighted beliefs.
+        Update priors using prediction-error-weighted beliefs.
 
         This is the LEARNING step in pure FEP:
         - Each position's prior evolves based on beliefs at that position
         - Beliefs with lower prediction error have more influence
         - Per-position errors allow fine-grained learning
+        - TOKEN PRIORS (prior_bank) are updated based on which tokens were predicted
 
         Called from train_step() where prediction errors are available.
         """
@@ -2581,6 +2583,7 @@ class PureFEPTransformer(nn.Module):
         prediction_errors = info.get('prediction_errors')  # (B,)
         per_position_errors = info.get('per_position_errors')  # (B, N)
         layer_infos = info.get('layer_infos', [])
+        targets = info.get('targets')  # (B, N) - needed for token prior updates
 
         # Update each layer's persistent prior with position-specific errors
         for i, layer_info in enumerate(layer_infos):
@@ -2590,6 +2593,98 @@ class PureFEPTransformer(nn.Module):
                 prediction_error=prediction_errors,
                 per_position_error=per_position_errors,
             )
+
+        # =====================================================================
+        # CRITICAL FIX: Update TOKEN PRIORS in prior_bank
+        # This is what allows pure FEP to actually learn predictions!
+        # =====================================================================
+        if (self.config.pure_fep_mode and
+            self.prior_bank is not None and
+            targets is not None and
+            layer_infos):
+
+            # Get final layer beliefs (these determine output)
+            final_mu_q, final_sigma_q = layer_infos[-1]['beliefs']  # (B, N, K)
+            B, N, K = final_mu_q.shape
+
+            # Compute per-position weights from prediction errors
+            # Lower error = higher weight (token prior should move toward this belief)
+            if per_position_errors is not None:
+                # Convert errors to weights: exp(-error) gives higher weight to lower errors
+                # Clamp errors to avoid numerical issues
+                errors_clamped = per_position_errors.clamp(max=10.0)  # (B, N)
+                weights = torch.exp(-errors_clamped)  # (B, N)
+                # Normalize weights per token to sum to 1
+                weights = weights / (weights.sum() + 1e-8)
+            else:
+                weights = torch.ones(B, N, device=final_mu_q.device) / (B * N)
+
+            # Check if using gauge-fixed priors or standard per-token priors
+            if self.prior_bank.gauge_fixed_priors:
+                # ===============================================================
+                # GAUGE-FIXED MODE: Update phi_embed (gauge frames) per token
+                # The base_prior_mu is shared; individual tokens differ by rotation
+                # ===============================================================
+                # For now, update base_prior_mu with global average (all tokens share it)
+                # This is a simplification - could also update phi_embed per token
+                global_avg_belief = (weights.view(-1, 1) * final_mu_q.view(-1, K)).sum(dim=0)
+                blend_rate = self.config.prior_lr
+                self.prior_bank.base_prior_mu.data.lerp_(global_avg_belief, blend_rate)
+
+                if self.prior_bank.learnable_sigma:
+                    global_avg_sigma = (weights.view(-1, 1) * final_sigma_q.view(-1, K)).sum(dim=0)
+                    current_sigma = torch.exp(self.prior_bank.base_log_prior_sigma.data)
+                    new_sigma = (1 - blend_rate) * current_sigma + blend_rate * global_avg_sigma
+                    self.prior_bank.base_log_prior_sigma.data = torch.log(new_sigma.clamp(min=1e-6))
+            else:
+                # ===============================================================
+                # STANDARD MODE: Update per-token prior_mu directly
+                # ===============================================================
+                # Update prior_bank.prior_mu for each target token
+                # Use scatter_add to accumulate weighted belief updates per token
+                targets_flat = targets.view(-1)  # (B*N,)
+                mu_flat = final_mu_q.view(-1, K)  # (B*N, K)
+                weights_flat = weights.view(-1, 1)  # (B*N, 1)
+
+                # Compute weighted contribution: weight * (belief - current_prior)
+                weighted_beliefs = weights_flat * mu_flat  # (B*N, K)
+
+                # Accumulate per-token updates
+                # prior_mu shape: (vocab_size, K)
+                token_counts = torch.zeros(self.config.vocab_size, device=final_mu_q.device)
+                token_updates = torch.zeros_like(self.prior_bank.prior_mu.data)
+
+                # Count occurrences and sum weighted beliefs per token
+                token_counts.scatter_add_(0, targets_flat, weights_flat.squeeze(-1))
+                token_updates.scatter_add_(0, targets_flat.unsqueeze(-1).expand(-1, K), weighted_beliefs)
+
+                # Apply EMA update only for tokens that appeared in this batch
+                # prior_lr controls how fast token priors adapt (same as position priors)
+                mask = token_counts > 0
+                if mask.any():
+                    # Normalize by weight sum per token
+                    token_counts_safe = token_counts.clamp(min=1e-8).unsqueeze(-1)  # (V, 1)
+                    avg_beliefs = token_updates / token_counts_safe  # (V, K)
+
+                    # EMA blend: new_prior = (1 - lr) * old_prior + lr * avg_belief
+                    blend_rate = self.config.prior_lr
+                    self.prior_bank.prior_mu.data[mask] = (
+                        (1 - blend_rate) * self.prior_bank.prior_mu.data[mask] +
+                        blend_rate * avg_beliefs[mask]
+                    )
+
+                    # Optionally update prior_sigma too (if learnable)
+                    if self.prior_bank.learnable_sigma:
+                        sigma_flat = final_sigma_q.view(-1, K)  # (B*N, K)
+                        weighted_sigmas = weights_flat * sigma_flat
+                        sigma_updates = torch.zeros_like(self.prior_bank.prior_mu.data)
+                        sigma_updates.scatter_add_(0, targets_flat.unsqueeze(-1).expand(-1, K), weighted_sigmas)
+                        avg_sigmas = sigma_updates / token_counts_safe
+
+                        # Update log_prior_sigma via EMA
+                        current_sigma = torch.exp(self.prior_bank.log_prior_sigma.data)
+                        new_sigma = (1 - blend_rate) * current_sigma[mask] + blend_rate * avg_sigmas[mask]
+                        self.prior_bank.log_prior_sigma.data[mask] = torch.log(new_sigma.clamp(min=1e-6))
 
     # =========================================================================
     # DYNAMIC LAYER EMERGENCE: Spawn/merge layers based on VFE pressure
