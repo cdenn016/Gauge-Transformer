@@ -1102,6 +1102,93 @@ class Trainer:
 # =============================================================================
 
 
+def update_output_embeddings_pflow(
+    model,
+    targets: torch.Tensor,         # (B, N) target token IDs
+    mu_beliefs: torch.Tensor,      # (B, N, K) final beliefs (posteriors)
+    prediction_errors: torch.Tensor,  # (B, N) per-position CE
+    lr: float = 0.1,
+):
+    """
+    P-FLOW: Update OUTPUT embeddings toward beliefs that predict each target.
+
+    CRITICAL FOR LEARNING in pure FEP mode with untied embeddings!
+
+    When embeddings are untied:
+    - Input embeddings (priors) = what we expect for input tokens
+    - Output embeddings (W_out) = what beliefs should look like to predict tokens
+
+    If we only update input embeddings, the output projection never learns
+    which belief patterns correspond to which tokens -> random predictions!
+
+    This function updates W_out[target_v] toward the belief at positions
+    that should predict token v.
+
+    Args:
+        model: GaugeTransformerLM with out_proj
+        targets: (B, N) target token IDs (which tokens to predict)
+        mu_beliefs: (B, N, K) evolved belief means (posteriors)
+        prediction_errors: (B, N) per-position cross-entropy loss
+        lr: Base learning rate for output embedding updates
+    """
+    B, N, K = mu_beliefs.shape
+
+    # Get OUTPUT projection weight
+    if not hasattr(model, 'out_proj') or model.out_proj is None:
+        return {'out_embed_updates': 0, 'out_embed_mode': 'none'}
+
+    out_weight = model.out_proj.weight  # (V, K)
+
+    with torch.no_grad():
+        # Compute weights from prediction errors (low CE = high weight)
+        errors_clamped = prediction_errors.clamp(min=1e-6, max=20.0)
+        weights = 1.0 / (1.0 + errors_clamped)  # (B, N) in range [0.05, 1]
+
+        # Flatten for processing
+        flat_targets = targets.view(-1)  # (B*N,) - TARGET token IDs
+        flat_beliefs = mu_beliefs.view(-1, K)  # (B*N, K)
+        flat_weights = weights.view(-1)  # (B*N,)
+
+        # Mask out padding tokens (typically -100)
+        valid_mask = flat_targets >= 0
+        flat_targets = flat_targets[valid_mask]
+        flat_beliefs = flat_beliefs[valid_mask]
+        flat_weights = flat_weights[valid_mask]
+
+        if len(flat_targets) == 0:
+            return {'out_embed_updates': 0, 'out_embed_mode': 'no_valid_targets'}
+
+        # For each unique TARGET token, compute weighted average posterior
+        unique_tokens = flat_targets.unique()
+        n_updates = 0
+
+        for token_id in unique_tokens:
+            mask = flat_targets == token_id
+            token_beliefs = flat_beliefs[mask]  # (n_occurrences, K)
+            token_weights = flat_weights[mask]  # (n_occurrences,)
+
+            # Weighted average of posteriors for this target token
+            weight_sum = token_weights.sum()
+            if weight_sum > 0:
+                weighted_posterior = (token_beliefs * token_weights.unsqueeze(-1)).sum(dim=0) / weight_sum
+
+                # P-FLOW: output_embed <- (1-lr)*output_embed + lr*posterior
+                # Scale lr by confidence (weight_sum / count)
+                effective_lr = lr * (weight_sum / mask.sum()).item()
+                effective_lr = min(effective_lr, 0.1)  # Cap for stability
+
+                out_weight[token_id] = (
+                    (1.0 - effective_lr) * out_weight[token_id] +
+                    effective_lr * weighted_posterior
+                )
+                n_updates += 1
+
+    return {
+        'out_embed_updates': n_updates,
+        'out_embed_mode': 'out_proj',
+    }
+
+
 def update_input_embeddings_pflow(
     model,
     input_ids: torch.Tensor,       # (B, N) input token IDs
@@ -1262,7 +1349,6 @@ def pure_fep_train_step(
         # P-FLOW: Update INPUT embeddings toward posteriors (beliefs)
         # With untied embeddings:
         # - Input embeddings (priors) get updated here
-        # - Output embeddings (observation anchors) stay fixed
         embed_stats = update_input_embeddings_pflow(
             model=model,
             input_ids=input_ids,
@@ -1270,6 +1356,18 @@ def pure_fep_train_step(
             prediction_errors=ce_per_position,
             lr=0.1,
         )
+
+        # P-FLOW: Update OUTPUT embeddings toward beliefs that predict targets
+        # CRITICAL: With untied embeddings, output projection must also learn!
+        # Otherwise logits stay random because W_out never changes.
+        out_embed_stats = update_output_embeddings_pflow(
+            model=model,
+            targets=targets,
+            mu_beliefs=mu_beliefs,
+            prediction_errors=ce_per_position,
+            lr=0.1,
+        )
+        embed_stats.update(out_embed_stats)
 
     # Compute metrics
     perplexity = torch.exp(ce_loss).item()
