@@ -759,7 +759,7 @@ class PublicationTrainer(FastTrainer):
 
                     im = ax.imshow(attn_plot, cmap='viridis', aspect='auto', vmin=-3, vmax=0)
 
-                    ax.set_title(f'AVERAGED (old method)\n⚠️ Averaging destroys per-head patterns!',
+                    ax.set_title(f'AVERAGED (old method)\n[!] Averaging destroys per-head patterns!',
                                 fontsize=11, fontweight='bold')
                     ax.set_xlabel('Key Position')
                     ax.set_ylabel('Query Position')
