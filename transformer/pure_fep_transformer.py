@@ -2611,13 +2611,26 @@ class PureFEPTransformer(nn.Module):
             B, N, K = final_mu_q.shape
 
             # Compute per-position weights from prediction errors
-            # Lower error = higher weight (token prior should move toward this belief)
+            # =================================================================
+            # PRINCIPLED FEP: Prediction error DRIVES learning!
+            # =================================================================
+            # High error = prior was wrong = needs more updating
+            # Low error = prior was already good = less updating needed
+            #
+            # This is the core FEP insight: surprise (prediction error) is
+            # the learning signal. We learn from mistakes, not successes.
+            # =================================================================
             if per_position_errors is not None:
-                # Convert errors to weights: exp(-error) gives higher weight to lower errors
-                # Clamp errors to avoid numerical issues
-                errors_clamped = per_position_errors.clamp(max=10.0)  # (B, N)
-                weights = torch.exp(-errors_clamped)  # (B, N)
-                # Normalize weights per token to sum to 1
+                # Use error directly as weight (with soft scaling for stability)
+                # Higher error → higher weight → more prior update
+                errors_clamped = per_position_errors.clamp(min=0.1, max=10.0)  # (B, N)
+
+                # Soft error weighting: sqrt(error) gives sublinear scaling
+                # This prevents huge updates from outliers while still
+                # emphasizing high-error positions
+                weights = torch.sqrt(errors_clamped)  # (B, N)
+
+                # Normalize to maintain consistent update magnitude
                 weights = weights / (weights.sum() + 1e-8)
             else:
                 weights = torch.ones(B, N, device=final_mu_q.device) / (B * N)
