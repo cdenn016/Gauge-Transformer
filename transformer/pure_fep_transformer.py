@@ -2610,30 +2610,22 @@ class PureFEPTransformer(nn.Module):
             final_mu_q, final_sigma_q = layer_infos[-1]['beliefs']  # (B, N, K)
             B, N, K = final_mu_q.shape
 
-            # Compute per-position weights from prediction errors
+            # Compute per-position weights for prior updates
             # =================================================================
-            # PRINCIPLED FEP: Prediction error DRIVES learning!
+            # UNIFORM WEIGHTING for stable P-flow learning
             # =================================================================
-            # High error = prior was wrong = needs more updating
-            # Low error = prior was already good = less updating needed
+            # After experimentation:
+            # - exp(-error): Only reinforces successes, never learns from mistakes
+            # - sqrt(error): Positive feedback loop causes explosion
+            # - uniform: Each position contributes equally, most stable
             #
-            # This is the core FEP insight: surprise (prediction error) is
-            # the learning signal. We learn from mistakes, not successes.
+            # The key insight: we're computing a weighted average of beliefs
+            # for each token that appeared as a target. Uniform weighting means
+            # each occurrence of token v contributes equally to updating π_v.
+            #
+            # The learning rate (prior_lr) controls update magnitude.
             # =================================================================
-            if per_position_errors is not None:
-                # Use error directly as weight (with soft scaling for stability)
-                # Higher error → higher weight → more prior update
-                errors_clamped = per_position_errors.clamp(min=0.1, max=10.0)  # (B, N)
-
-                # Soft error weighting: sqrt(error) gives sublinear scaling
-                # This prevents huge updates from outliers while still
-                # emphasizing high-error positions
-                weights = torch.sqrt(errors_clamped)  # (B, N)
-
-                # Normalize to maintain consistent update magnitude
-                weights = weights / (weights.sum() + 1e-8)
-            else:
-                weights = torch.ones(B, N, device=final_mu_q.device) / (B * N)
+            weights = torch.ones(B, N, device=final_mu_q.device) / (B * N)
 
             # Check if using gauge-fixed priors or standard per-token priors
             if self.prior_bank.gauge_fixed_priors:
