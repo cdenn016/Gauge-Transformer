@@ -191,13 +191,14 @@ def save_experiment_config(
 # ============================================================================
 # EDIT THESE DEFAULTS TO RUN WITHOUT COMMAND-LINE ARGS (just click Run!)
 # ============================================================================
-DEFAULT_FFN_MODE = 'VFE_dynamic'  # 'VFE_dynamic' (gauge VFE) or 'standard' (baseline)
-DEFAULT_RUN_ABLATION = False  # Set True to run all three modes
-DEFAULT_ENABLE_SIGMA_PHI = True   # Set True to enable learning Σ and φ (required for hamiltonian!)
-DEFAULT_USE_GPU_OPTIMIZED = True  # Set True for RTX 5090 / high-end GPU settings
+# Three modes available:
+#   'standard'    - Standard transformer baseline (dot-product attention + MLP)
+#   'VFE_dynamic' - VFE with EM-step dynamics (backprop training)
+#   'pure_fep'    - Pure FEP transformer (KL-to-prior output, NO backprop!)
+DEFAULT_MODE = 'VFE_dynamic'      # Which mode to run
+DEFAULT_ENABLE_SIGMA_PHI = True   # Enable learning Σ and φ (full geometric learning)
 
-# Pure FEP Mode - Backprop-free learning via prior evolution
-DEFAULT_PURE_FEP = False          # Set True for pure FEP (NO backprop!)
+# Pure FEP learning rates
 DEFAULT_PRIOR_LR = 0.1            # Learning rate for prior updates in pure FEP mode
 DEFAULT_EMBED_LR = 0.1            # Learning rate for embedding updates in pure FEP mode
 
@@ -208,60 +209,59 @@ DEFAULT_DATASET = 'wikitext-103'  # 'wikitext-2' (~2M tokens) or 'wikitext-103' 
 
 
 # =============================================================================
-# STANDARD TRANSFORMER BASELINE CONFIG
+# CONFIG 1: STANDARD TRANSFORMER (Baseline)
 # =============================================================================
 # Standard dot-product attention + learned MLP for fair comparison.
-# Uses same batch size, seq length, and embedding dim as gauge VFE.
+# This is the BASELINE to beat!
 #
-STANDARD_TRANSFORMER_CONFIG = {
-    # Model architecture - match gauge VFE dimensions
-    'vocab_size': 50257,        # Will be overridden by tokenizer
-    'embed_dim': 128,              # Same K as gauge VFE
-    'n_layers': 6,                # Same depth
-    'hidden_dim': 512,            # 4×embed_dim standard ratio
-    'max_seq_len': 128,            # Same context length
-    'n_heads': 4,                 # embed_dim / head_dim (5 heads of dim 5)
+# Architecture:
+#   - Attention: Q·K^T / √d (standard dot-product softmax)
+#   - FFN: Linear → GELU → Linear (learned MLP)
+#   - Output: Linear projection to vocab
+#   - Learning: Backpropagation (standard)
+#   - Position: Learned positional embeddings
+# =============================================================================
+STANDARD_CONFIG = {
+    # Model architecture
+    'vocab_size': 50257,          # Will be overridden by tokenizer
+    'embed_dim': 128,             # Embedding dimension
+    'n_layers': 6,                # Transformer depth
+    'hidden_dim': 512,            # 4×embed_dim (standard ratio)
+    'max_seq_len': 128,           # Context length
+    'n_heads': 4,                 # Number of attention heads
 
-    # GPU Training - same as gauge VFE
+    # Training
     'batch_size': 24,
     'use_amp': False,
     'num_workers': 4,
-
-    # Standard transformer settings
-    'ffn_mode': 'learned',        # Standard learned MLP
-    'attention_type': 'standard', # Use dot-product attention
-    'pos_encoding_mode': 'learned',
-    'tie_embeddings': True,       # Standard practice
-
-    # Disable gauge-specific features
-    'evolve_sigma': False,
-    'evolve_phi': False,
-    'diagonal_covariance': True,  # Not used but safer
-    'use_positional_embedding': True,
-
-    # Standard attention parameters
-    'kappa_beta': 1.0,            # Not used in standard attention
-    'epsilon': 1e-8,
-    'attention_pattern': 'full',
-    'attention_window': 24,
-
-    # Training
     'max_steps': 20000,
     'warmup_steps': 25,
 
-    # Learning rates - standard Adam rates
-    'mu_lr': 0.001,               # Standard LR for embeddings
+    # Standard transformer settings
+    'ffn_mode': 'learned',        # Learned MLP (NOT VFE)
+    'attention_type': 'standard', # Dot-product attention (NOT KL)
+    'pos_encoding_mode': 'learned',
+    'tie_embeddings': True,
+
+    # Disable gauge features (not used in standard mode)
+    'evolve_sigma': False,
+    'evolve_phi': False,
+    'diagonal_covariance': True,
+    'use_positional_embedding': True,
+
+    # Learning rates (standard Adam rates)
+    'mu_lr': 0.001,
     'sigma_lr': 0.001,
     'phi_lr': 0.001,
-    'ffn_lr': 0.001,              # Standard LR for MLP
+    'ffn_lr': 0.001,
 
-    # Free energy weights (not used in standard mode)
+    # Free energy weights (NOT USED in standard mode)
     'alpha': 0,
     'beta': 0,
     'lambda_gamma': 0,
     'kappa_gamma': 1.0,
 
-    # Regularization - standard
+    # Regularization
     'weight_decay': 0.01,
     'dropout': 0.1,
     'grad_clip': 1.0,
@@ -272,209 +272,237 @@ STANDARD_TRANSFORMER_CONFIG = {
     'checkpoint_interval': 50000,
     'patience': 5,
 
-    # Disable gauge group (not used)
+    # Unused in standard mode
+    'kappa_beta': 1.0,
+    'attention_pattern': 'full',
+    'attention_window': 24,
     'gauge_group': 'SO3',
     'gauge_dim': 3,
     'use_multi_irrep': False,
     'gauge_fixed_priors': True,
-
-    # Irrep spec (not used in standard mode)
-    'irrep_spec': [('ℓ0', 5, 1), ('ℓ1', 0, 3)],  # 5 scalars only
-
-    # RG metrics disabled for standard
+    'irrep_spec': [('ℓ0', 5, 1)],
     'compute_rg_metrics': False,
 }
 
 # =============================================================================
-# GPU-OPTIMIZED CONFIG (RTX 5090 / 32GB VRAM)
+# CONFIG 2: VFE_EM (VFE with EM-step dynamics, uses backprop)
 # =============================================================================
-# MEMORY REALITY CHECK:
-#   Gauge transformer has O(N² × K²) memory for attention KL matrices!
-#   Standard transformer: O(N² × d) for attention
-#   Ours: O(N² × K²) because KL divergence uses full covariance matrices
+# Gauge-equivariant transformer with Variational Free Energy dynamics.
+# Uses EM-step belief updates with backprop for training.
 #
-#   Memory for KL computation: B × N × N × K² × 4 bytes (FP32)
-#   Example: B=32, N=256, K=127 → 32 × 256 × 256 × 127² × 4 = ~134GB (!)
-#
-#   Realistic for 32GB: B=16, N=64, K=63 → ~2GB for KL matrices
-#
-SEED=6
+# Architecture:
+#   - Attention: KL-divergence based (gauge-equivariant)
+#   - FFN: VFE EM-step dynamics (belief inference)
+#   - Output: Linear projection to vocab
+#   - Learning: Backpropagation
+#   - Position: None (emergent from data)
+# =============================================================================
+SEED = 6
 
-GPU_OPTIMIZED_CONFIG = {
-    # Model architecture - WITH diagonal_covariance=True, can scale up!
-    # Diagonal mode: O(N²×K) memory instead of O(N²×K²)
-    # Model architecture (realistic for 32GB VRAM)
-    # Can't match Vaswani d=512 due to K² memory cost!
-    
-    'vocab_size': 50257,        # Full byte-level vocab
-    'embed_dim': 30,          # K=63 (ODD for SO(3)) - realistic for memory
-    'n_layers': 1,            # Fewer layers to save memory
-    'hidden_dim': 508,        # 4×embed_dim Only for 'learned'
-    'max_seq_len': 128,        # N=64 - attention is O(N²×K²)!
+VFE_EM_CONFIG = {
+    # Model architecture
+    'vocab_size': 50257,          # Will be overridden by tokenizer
+    'embed_dim': 30,              # Embedding dimension K
+    'n_layers': 1,                # Transformer depth
+    'hidden_dim': 508,            # Only used if ffn_mode='learned'
+    'max_seq_len': 128,           # Context length N
 
-    # GPU Training - fits in 32GB
-    'batch_size': 6 ,         # Conservative for memory
-    'use_amp': False,         # Disabled - Hamiltonian dynamics needs FP32 precision
-    'num_workers': 4,         # Parallel data loading
+    # Training
+    'batch_size': 6,
+    'use_amp': False,             # FP32 for precision
+    'num_workers': 4,
+    'max_steps': 5000,
+    'warmup_steps': 50,
 
-    'mask_self_attention': True,  # Prevent attention collapse (NEW!)
-   
-    
-    # Gauge transformer parameters
-    # =========================================================================
-    # TEMPERATURE SCALING (κ ∝ K)
-    # Theory: E[D_KL] = Kρ²/σ², so κ must scale with K for stable attention.
-    # When kappa_beta_auto_scale=True, κ is computed as:
-    #   κ = kappa_beta_base × (K / K_ref)
-    # K_ref=11 is the reference dimension where kappa_beta_base=1 works well.
-    # =========================================================================
-    'kappa_beta_auto_scale': True,   # Enable automatic κ scaling with K
-    'kappa_beta_base': 0.25,          # Base temperature at K=K_ref
-    'kappa_beta_k_ref': 11,          # Reference dimension (K=11 works with κ=1)
-    
-  
-    'evolve_sigma': True,     # Full geometric learning
-    'evolve_phi': True,       # Full geometric learning
+    # VFE transformer settings
+    'ffn_mode': 'VFE_dynamic',    # VFE EM-step dynamics
+    'mask_self_attention': True,  # Prevent attention collapse
     'tie_embeddings': False,
-  
-    # Attention pattern
-    'attention_pattern': 'full',   #'full', 'local', 'sparse' 
-    'attention_window': 24,
-    'pos_encoding_scale': 0.3,
-    
-    'use_positional_embedding': False,   # existing
-    
-    # === NEW: Position-invariant attention settings ===
-    'pos_encoding_mode': 'none',         # No positional gauge (was 'learned' 'sinusoidal')
-    'use_identity_transport': False,      # Ω = I everywhere (bypasses gauge transport)
-    'alibi_slope': None,                 # No ALiBi bias (or -0.1 for recency)
 
-     
-    # =========================================================================
-    # EMBEDDING MEAN (μ) INITIALIZATION
-    # Controls the scale and normalization of belief mean embeddings.
-    # Larger init_std creates more variance in pairwise distances, enabling
-    # sharper KL-based attention. Normalization projects to unit sphere.
-    # =========================================================================
-    'mu_init_std': 7.0,       # Embedding init std (None = use default 1/√K)
-    'mu_normalize': False,    # If True, normalize μ to unit sphere after lookup
-    'mu_max_norm': None,      # If set, clamp ||μ|| ≤ max_norm (e.g., 20.0)
-     
-    # =========================================================================
-    # DIAGONAL COVARIANCE MODE (memory optimization)
-    # True:  Σ is (B,N,K) diagonal - O(N²×K) memory - can scale to Vaswani size?
-    # False: Σ is (B,N,K,K) full   - O(N²×K²) memory - limited to small K,N
-    # Diagonal loses off-diagonal correlations but keeps per-dim uncertainty.
-    # =========================================================================
-   
-    'diagonal_covariance': True, 
-   
-    # =========================================================================
-    # CHUNKED KL COMPUTATION (Additional Memory Optimization)
-    # Processes N×N attention matrix in C×C chunks to reduce peak memory.
-    # Set to None for no chunking, or a small value (32-64) for memory savings.
-    # Combines with block-diagonal for maximum efficiency.
-    # =========================================================================
-    'ffn_chunk_size': 64,  # Chunk size for memory-efficient attention (None = no chunking)
+    # Gauge geometry
+    'evolve_sigma': True,         # Learn covariances Σ
+    'evolve_phi': True,           # Learn gauge frames φ
+    'diagonal_covariance': True,  # O(N²×K) memory instead of O(N²×K²)
 
-    # Variational FFN parameters
-    'ffn_mode': 'VFE_dynamic',
-    # NOTE: alpha and kappa are shared between loss and FFN (consolidated)
+    # NO position encoding (principled - let it emerge!)
+    'use_positional_embedding': False,
+    'pos_encoding_mode': 'none',
+    'use_identity_transport': False,
+    'alibi_slope': None,
+
+    # Temperature scaling (κ ∝ K for stable attention)
+    'kappa_beta_auto_scale': True,
+    'kappa_beta_base': 0.25,
+    'kappa_beta_k_ref': 11,
+
+    # Embedding initialization
+    'mu_init_std': 7.0,
+    'mu_normalize': False,
+    'mu_max_norm': None,
+
+    # VFE dynamics
     'ffn_n_iterations': 1,
     'ffn_learnable_lr': True,
+    'ffn_chunk_size': 64,
 
-    # =========================================================================
-    # PURE FEP MODE (Backprop-Free Learning)
-    # When enabled, learning happens through prior evolution, not backprop.
-    # - CE (cross-entropy) is INSIDE the VFE during forward pass
-    # - Beliefs adjust to minimize prediction error
-    # - Priors update toward successful (low-error) beliefs
-    # This is the BELIEF paradigm: Backprop-free Evolving Local Inference via Free Energy
-    # =========================================================================
-    'ffn_pure_fep_mode': False,   # Enable backprop-free learning
-    'ffn_prior_lr': 0.01,         # Learning rate for prior updates
-
-    # =========================================================================
-    # PRIORBANK POSITIONING (Token-Dependent vs Position-Dependent)
-    # CRITICAL FOR LANGUAGE MODELING!
-    # =========================================================================
-    # When ffn_pure_fep_mode=True, priors can be:
-    # - Token-dependent (use_prior_bank=True):  prior[token_id] - CORRECT for language!
-    # - Position-dependent (use_prior_bank=False): prior[position] - BROKEN for language!
-    #
-    # For language modeling, you MUST use token-dependent priors because:
-    # - Token "bank" should have the same prior regardless of position
-    # - Position 5 could be any token, so position-dependent priors make no sense
-    #
-    # Set this to True to fix pure FEP learning!
-    # =========================================================================
-    'use_prior_bank': True,  # Use token-dependent PriorBank (required for language!)
-
-
-    'gauge_fixed_priors': False,    
-
-    # Training (scaled for GPU)
-    'max_steps': 5000 ,         # More steps for convergence
-
-    # Learning rates (same natural gradient rates)
-    'mu_lr': 0.01,   #decrease as embedding dim and vfe steps increases.  equal to ffn-lr
+    # Learning rates
+    'mu_lr': 0.01,
     'sigma_lr': 0.005,
     'phi_lr': 0.005,
     'ffn_lr': 0.01,
-    'warmup_steps': 50,
 
     # Free energy weights
-    'alpha': 1,
-    'beta': 1,
-    'lambda_gamma': 0,
+    'alpha': 1,                   # Self-consistency
+    'beta': 1,                    # Belief alignment
+    'lambda_gamma': 0,            # Model alignment
     'kappa_gamma': 1.0,
 
     # Regularization
     'weight_decay': 0.01,
-    'dropout': 0.1, 
+    'dropout': 0.1,
     'grad_clip': 1.0,
 
-    # Logging (less frequent for speed)
+    # Logging
     'log_interval': 100,
     'eval_interval': 1000,
     'checkpoint_interval': 5000,
     'patience': 5,
 
-    # =================================================================
-    # GAUGE GROUP SELECTION
-    # =================================================================
-    # SO3: Standard SO(3) gauge group with 3 generators
-    #      Requires embed_dim = sum(mult * dim) for irrep_spec or odd embed_dim
-    # SON: SO(N) gauge group with N(N-1)/2 generators
-    #      More flexible - can use N-dimensional fundamental representation
-    #      embed_dim = mult * N for direct sums of fundamental
-    # =================================================================
-    'gauge_group': 'SON',  # 'SO3' or 'SON'
-    'gauge_dim': 10,        # N for SO(N) - only used when gauge_group='SON'
-    'use_multi_irrep': True,  # Use block-diagonal generators from irrep_spec
+    # Gauge group
+    'gauge_group': 'SON',
+    'gauge_dim': 10,
+    'use_multi_irrep': True,
+    'gauge_fixed_priors': False,
+    'irrep_spec': [('fund', 3, 10)],  # SO(10) fundamental
+
+    # Attention
+    'attention_pattern': 'full',
+    'attention_window': 24,
+    'pos_encoding_scale': 0.3,
+    'use_prior_bank': True,
+
+    # Not used in VFE_EM mode
+    'ffn_pure_fep_mode': False,
+    'ffn_prior_lr': 0.01,
+
+    # RG metrics (optional)
+    'compute_rg_metrics': False,
+    'rg_metrics_interval': 25,
+    'rg_auto_cluster': True,
+    'rg_n_clusters': None,
+}
 
 
-    # Irrep structure (for K=255)
-    # 75×1 + 30×3 + 18×5 = 75 + 90 + 90 = 255 ✓
-    'irrep_spec': [
-      # ('ℓ0', 1, 1),   # 75 dimensions (scalars)
-      # ('ℓ1', 1, 3),   # 90 dimensions (vectors)
-     #  ('ℓ2', 1, 5),   # 90 dimensions (rank-2 tensors)
-     #  ('ℓ3', 1, 7),
-      # ('ℓ4', 1, 9),
-      #('ℓ5', 9, 11),
-     # ('ℓ6', 1, 13),
-     # ('ℓ7', 1, 15),
-      # ('ℓ50', 1, 101),
-     # ('fund', 2, 50)  #For SO(8) 
-      ('fund', 3, 10),   # SO(5)
-    ],
+# =============================================================================
+# CONFIG 3: PURE_FEP (Pure Free Energy Principle, NO backprop!)
+# =============================================================================
+# The most theoretically principled mode!
+# Learning happens through prior evolution (P-flow), not gradients.
+#
+# Architecture:
+#   - Attention: KL-divergence based (gauge-equivariant)
+#   - FFN: VFE dynamics with CE inside (beliefs minimize prediction error)
+#   - Output: -KL(q||π_v)/τ (KL-to-prior, most principled!)
+#   - Learning: P-flow only (priors ← EMA of successful beliefs)
+#   - Position: None (emergent from data)
+#
+# Key insight: Cross-entropy is INSIDE the VFE, not a separate loss!
+# Priors evolve toward beliefs that minimize prediction error.
+# =============================================================================
+PURE_FEP_CONFIG = {
+    # Model architecture (same as VFE_EM for fair comparison)
+    'vocab_size': 50257,          # Will be overridden by tokenizer
+    'embed_dim': 30,              # Embedding dimension K
+    'n_layers': 1,                # Transformer depth
+    'hidden_dim': 508,            # Not used in pure FEP
+    'max_seq_len': 128,           # Context length N
 
-    # RG Metrics Configuration (meta-agent emergence detection)
-    'compute_rg_metrics': False,           # Enable RG metrics computation
-    'rg_metrics_interval': 25,            # Compute RG metrics every N steps
-    'rg_auto_cluster': True,              # Auto-detect clusters via spectral clustering
-    'rg_n_clusters': None,                # Fixed number of clusters (None = auto)
+    # Training
+    'batch_size': 6,
+    'use_amp': False,             # FP32 for precision
+    'num_workers': 4,
+    'max_steps': 5000,
+    'warmup_steps': 0,            # No warmup for P-flow
+
+    # Pure FEP transformer settings
+    'ffn_mode': 'VFE_dynamic',    # VFE dynamics (but with pure_fep_mode=True)
+    'mask_self_attention': True,
+    'tie_embeddings': False,
+
+    # Gauge geometry
+    'evolve_sigma': True,
+    'evolve_phi': True,
+    'diagonal_covariance': True,
+
+    # NO position encoding (let it emerge from data!)
+    'use_positional_embedding': False,
+    'pos_encoding_mode': 'none',
+    'use_identity_transport': False,
+    'alibi_slope': None,
+
+    # Temperature scaling
+    'kappa_beta_auto_scale': True,
+    'kappa_beta_base': 0.25,
+    'kappa_beta_k_ref': 11,
+
+    # Embedding initialization
+    'mu_init_std': 7.0,
+    'mu_normalize': False,
+    'mu_max_norm': None,
+
+    # VFE dynamics (more iterations for belief convergence)
+    'ffn_n_iterations': 10,       # More belief updates per step
+    'ffn_learnable_lr': False,    # Fixed learning rates
+    'ffn_chunk_size': 64,
+
+    # PURE FEP: Learning rates for P-flow (scaled conservatively)
+    # These are BASE rates - will be scaled in run_single_experiment
+    'prior_lr': 0.1,              # Base prior learning rate
+    'mu_lr': 0.05,                # Belief mean update (slower)
+    'sigma_lr': 0.01,             # Belief variance (much slower)
+    'phi_lr': 0.01,               # Gauge frame (slow)
+    'ffn_lr': 0.01,               # Not used in pure FEP
+
+    # Free energy weights (used inside VFE dynamics)
+    'alpha': 0.1,                 # Self-consistency (lower for stability)
+    'beta': 1.0,                  # Belief alignment
+    'lambda_gamma': 0,
+    'kappa_gamma': 1.0,
+    'lambda_obs': 1.0,            # Observation term weight
+
+    # Regularization
+    'weight_decay': 0.0,          # No weight decay for P-flow
+    'dropout': 0.0,               # No dropout for P-flow
+    'grad_clip': 1.0,
+
+    # Logging
+    'log_interval': 100,
+    'eval_interval': 1000,
+    'checkpoint_interval': 5000,
+    'patience': 10,               # More patience for P-flow
+
+    # Gauge group
+    'gauge_group': 'SON',
+    'gauge_dim': 10,
+    'use_multi_irrep': True,
+    'gauge_fixed_priors': False,  # CRITICAL: Each token has its own prior_mu!
+    'irrep_spec': [('fund', 3, 10)],
+
+    # Attention
+    'attention_pattern': 'full',
+    'attention_window': 24,
+    'pos_encoding_scale': 0.3,
+    'use_prior_bank': True,       # Token-dependent priors
+
+    # PURE FEP MODE FLAGS
+    'ffn_pure_fep_mode': True,    # Enable pure FEP in VFE dynamics
+    'ffn_prior_lr': 0.1,          # Prior update rate
+
+    # RG metrics
+    'compute_rg_metrics': False,
+    'rg_metrics_interval': 25,
+    'rg_auto_cluster': True,
+    'rg_n_clusters': None,
 }
 
 
@@ -1699,40 +1727,47 @@ def run_single_experiment(
 def main():
     parser = argparse.ArgumentParser(description='Publication Training Script')
 
-    # FFN mode (uses defaults from top of file)
-    parser.add_argument('--ffn_mode', type=str, default=DEFAULT_FFN_MODE,
+    # Mode selection (three distinct modes)
+    parser.add_argument('--mode', type=str, default=DEFAULT_MODE,
+                        choices=['standard', 'VFE_dynamic', 'pure_fep'],
+                        help='Training mode: standard (baseline), VFE_dynamic (EM-step), pure_fep (no backprop)')
+
+    # Legacy alias for backwards compatibility
+    parser.add_argument('--ffn_mode', type=str, default=None,
                         choices=['VFE_dynamic', 'standard'],
-                        help='FFN mode: VFE_dynamic (gauge VFE) or standard (baseline transformer)')
+                        help='DEPRECATED: Use --mode instead')
+    parser.add_argument('--pure_fep', action='store_true', default=False,
+                        help='DEPRECATED: Use --mode pure_fep instead')
 
     # Enable full geometric learning (Σ and φ)
     parser.add_argument('--enable_sigma_phi', action='store_true', default=DEFAULT_ENABLE_SIGMA_PHI,
-                        help='Enable learning covariances (Σ) and gauge frames (φ) - full geometric learning!')
+                        help='Enable learning covariances (Σ) and gauge frames (φ)')
 
-    # Pure FEP mode (backprop-free learning)
-    parser.add_argument('--pure_fep', action='store_true', default=DEFAULT_PURE_FEP,
-                        help='Enable pure FEP mode: learning via prior evolution, NO backprop!')
+    # Pure FEP learning rates
     parser.add_argument('--prior_lr', type=float, default=DEFAULT_PRIOR_LR,
                         help='Learning rate for prior updates in pure FEP mode')
     parser.add_argument('--embed_lr', type=float, default=DEFAULT_EMBED_LR,
                         help='Learning rate for embedding updates in pure FEP mode')
-
-    # GPU optimization
-    parser.add_argument('--gpu_optimized', action='store_true', default=DEFAULT_USE_GPU_OPTIMIZED,
-                        help='Use GPU-optimized config for high-end GPUs')
-    parser.add_argument('--no_gpu_optimized', action='store_true',
-                        help='Force use of smaller config even on GPU')
 
     # System
     parser.add_argument('--device', type=str, default='auto')
     parser.add_argument('--checkpoint_dir', type=str, default='checkpoints_publication')
     parser.add_argument('--use_wandb', action='store_true')
     parser.add_argument('--seed', type=int, default=None,
-                        help='Random seed for reproducibility (default: 42 for determinism)')
+                        help='Random seed for reproducibility')
     parser.add_argument('--dataset', type=str, default=DEFAULT_DATASET,
                         choices=['wikitext-2', 'wikitext-103'],
                         help='Dataset to use: wikitext-2 (~2M tokens) or wikitext-103 (~103M tokens)')
 
     args = parser.parse_args()
+
+    # Handle legacy --ffn_mode and --pure_fep arguments
+    if args.ffn_mode is not None:
+        print("⚠ WARNING: --ffn_mode is deprecated. Use --mode instead.")
+        args.mode = args.ffn_mode
+    if args.pure_fep:
+        print("⚠ WARNING: --pure_fep is deprecated. Use --mode pure_fep instead.")
+        args.mode = 'pure_fep'
 
     # Set random seed for reproducibility
     # Default to seed=42 if not specified, for consistent results
@@ -1762,63 +1797,83 @@ def main():
 
     checkpoint_dir = Path(args.checkpoint_dir)
 
-    # Run single mode
-    if args.ffn_mode is None:
-        print("\nError: Must specify --ffn_mode")
-        print("Edit DEFAULT_FFN_MODE at top of train_publication.py or use command-line args")
+    # =================================================================
+    # SELECT CONFIG BASED ON MODE
+    # =================================================================
+    # Three distinct configs for clarity:
+    #   STANDARD_CONFIG  - Baseline transformer (dot-product + MLP)
+    #   VFE_EM_CONFIG    - VFE with EM-step dynamics (backprop)
+    #   PURE_FEP_CONFIG  - Pure FEP (KL-to-prior output, NO backprop)
+    # =================================================================
+
+    mode = args.mode
+    is_pure_fep = (mode == 'pure_fep')
+
+    if mode == 'standard':
+        print("\n" + "="*70)
+        print("MODE: STANDARD TRANSFORMER (Baseline)")
+        print("="*70)
+        print("   Attention: Q·K^T / √d (dot-product softmax)")
+        print("   FFN: Linear → GELU → Linear (learned MLP)")
+        print("   Output: Linear projection")
+        print("   Learning: Backpropagation")
+        print("="*70 + "\n")
+        config = STANDARD_CONFIG.copy()
+        ffn_mode = 'standard'
+
+    elif mode == 'VFE_dynamic':
+        print("\n" + "="*70)
+        print("MODE: VFE_EM (VFE with EM-step dynamics)")
+        print("="*70)
+        print("   Attention: KL-divergence based (gauge-equivariant)")
+        print("   FFN: VFE EM-step dynamics")
+        print("   Output: Linear projection")
+        print("   Learning: Backpropagation")
+        print("   Position: None (emergent)")
+        print("="*70 + "\n")
+        config = VFE_EM_CONFIG.copy()
+        ffn_mode = 'VFE_dynamic'
+
+    elif mode == 'pure_fep':
+        print("\n" + "="*70)
+        print("MODE: PURE FEP (Free Energy Principle, NO backprop!)")
+        print("="*70)
+        print("   Attention: KL-divergence based (gauge-equivariant)")
+        print("   FFN: VFE dynamics (CE inside!)")
+        print("   Output: -KL(q||π_v)/τ (most principled!)")
+        print("   Learning: P-flow only (priors ← beliefs)")
+        print("   Position: None (emergent)")
+        print(f"   Prior LR: {args.prior_lr}")
+        print("="*70 + "\n")
+        config = PURE_FEP_CONFIG.copy()
+        ffn_mode = 'VFE_dynamic'  # Uses VFE internally but with pure_fep_mode=True
+
+    else:
+        print(f"\nError: Unknown mode '{mode}'")
+        print("Valid modes: standard, VFE_dynamic, pure_fep")
         return
 
-    # Select config based on mode
-    if args.ffn_mode == 'standard':
-        print("\n" + "="*70)
-        print("STANDARD TRANSFORMER BASELINE")
-        print("="*70)
-        print("   Using dot-product attention + learned MLP")
-        print("   This is the comparison baseline!")
-        print("="*70 + "\n")
-        base_config = STANDARD_TRANSFORMER_CONFIG.copy()
-    else:
-        base_config = GPU_OPTIMIZED_CONFIG.copy()
-
-    config = base_config.copy()
-    config['ffn_mode'] = args.ffn_mode
     config['dataset'] = args.dataset
 
-    # Enable full geometric learning if requested
-    if args.enable_sigma_phi:
-        print("\n" + "="*70)
-        print("FULL GEOMETRIC LEARNING ENABLED")
-        print("="*70)
-        print("   Learning: μ (means), Σ (covariances), φ (gauge frames)")
-        print("   This tests the FULL natural gradient framework!")
-        print("="*70 + "\n")
+    # Enable full geometric learning if requested (for non-standard modes)
+    if args.enable_sigma_phi and mode != 'standard':
         config['evolve_sigma'] = True
         config['evolve_phi'] = True
 
-    # Pure FEP mode announcement
-    if args.pure_fep:
-        print("\n" + "="*70)
-        print("PURE FEP MODE (BELIEF: Backprop-free Evolving Local Inference)")
-        print("="*70)
-        print("   Learning via prior evolution - NO backprop!")
-        print(f"   Prior learning rate: {args.prior_lr}")
-        print("="*70 + "\n")
-
     result = run_single_experiment(
         config=config,
-        ffn_mode=args.ffn_mode,
+        ffn_mode=ffn_mode,
         device=device,
         checkpoint_dir=checkpoint_dir,
         use_wandb=args.use_wandb,
         args=args,
-        pure_fep=args.pure_fep,
+        pure_fep=is_pure_fep,
         prior_lr=args.prior_lr,
     )
 
     if result is not None:
         # Save result
-        mode_suffix = "pure_fep" if args.pure_fep else args.ffn_mode
-        result_file = checkpoint_dir / f"result_{mode_suffix}.json"
+        result_file = checkpoint_dir / f"result_{mode}.json"
         result_file.parent.mkdir(parents=True, exist_ok=True)
         with open(result_file, 'w') as f:
             json.dump(result, f, indent=2)
