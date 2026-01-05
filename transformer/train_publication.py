@@ -1402,11 +1402,12 @@ def run_single_experiment(
             lambda_obs=config.get('lambda_obs', 1.0),
             kappa=config.get('kappa_beta_base', 0.1),
 
-            # CONSERVATIVE learning rates to prevent NaN
-            mu_lr=prior_lr * 0.5,       # Belief mean update (slower)
-            sigma_lr=prior_lr * 0.1,    # Belief variance update (much slower)
-            prior_lr=prior_lr * 0.1,    # Prior update (slow for stability)
-            phi_lr=prior_lr * 0.1,      # Gauge frame update (slow)
+            # Learning rates - less conservative to allow actual learning
+            # The error-scaled update already provides stability
+            mu_lr=prior_lr * 0.5,       # Belief mean update
+            sigma_lr=prior_lr * 0.1,    # Belief variance update
+            prior_lr=prior_lr,          # Prior update (NO 0.1x scaling - let error scaling handle it)
+            phi_lr=prior_lr * 0.1,      # Gauge frame update
 
             # VFE dynamics
             belief_steps=config.get('ffn_n_iterations', 10),
