@@ -1223,17 +1223,17 @@ class PureFEPLayer(nn.Module):
                     ce_for_grad = F.cross_entropy(
                         logits_grad.view(-1, self.config.vocab_size),
                         targets.view(-1),
-                        reduction='mean'  # Use mean instead of sum - avoids double normalization
+                        reduction='sum'  # Sum - normalize per token below
                     )
                     grad_mu_ce = torch.autograd.grad(ce_for_grad, mu_q_grad, retain_graph=True)[0]
 
                     # Also get sigma gradient for KL-based output (affects logits!)
                     if self.config.output_mode == 'kl_to_prior' and self.prior_bank is not None:
                         grad_sigma_ce = torch.autograd.grad(ce_for_grad, sigma_q_grad)[0]
-                        grad_sigma = grad_sigma + lambda_obs * grad_sigma_ce  # No division - already mean
+                        grad_sigma = grad_sigma + lambda_obs * grad_sigma_ce / (B * N)
 
-                # Add CE gradient with lambda_obs weight (no division - already mean)
-                grad_mu = grad_mu + lambda_obs * grad_mu_ce
+                # Add CE gradient with lambda_obs weight, normalized per token
+                grad_mu = grad_mu + lambda_obs * grad_mu_ce / (B * N)
 
                 # Debug logging: Monitor gradient magnitudes
                 if self.config.debug_gradient_logging and step_idx == 0:
@@ -2798,8 +2798,9 @@ class PureFEPTransformer(nn.Module):
                             correct_targets = targets_flat_for_disc[correct_mask]  # (num_correct,)
                             correct_beliefs = mu_flat[correct_mask]  # (num_correct, K)
 
-                            # Attraction learning rate: same as discriminative for balance
-                            attr_lr = base_blend * 0.5
+                            # Attraction learning rate: conservative (2× original, not 50×)
+                            # base_blend ≈ 0.01, so attr_lr ≈ 0.0005
+                            attr_lr = base_blend * 0.05
 
                             # Accumulate updates per token
                             correct_counts = torch.zeros(self.config.vocab_size, device=final_mu_q.device)
@@ -2838,10 +2839,9 @@ class PureFEPTransformer(nn.Module):
                             # Clip per-dimension to prevent explosion
                             diff = diff.clamp(-0.5, 0.5)
 
-                            # Discriminative learning rate - comparable to generative updates
-                            # Make it meaningful: 50% of base prior lr for stability
-                            # base_blend ≈ 0.01, so disc_lr ≈ 0.005
-                            disc_lr = base_blend * 0.5
+                            # Discriminative learning rate: conservative (10× original, not 50×)
+                            # base_blend ≈ 0.01, so disc_lr ≈ 0.001
+                            disc_lr = base_blend * 0.1
 
                             # Push target prior AWAY from predicted prior
                             new_target_priors = target_priors + disc_lr * diff
@@ -2868,10 +2868,14 @@ class PureFEPTransformer(nn.Module):
 
                             if target_mask.any():
                                 avg_target_update = target_updates[target_mask] / target_counts[target_mask].unsqueeze(-1)
+                                # Clip updates to prevent explosion
+                                avg_target_update = avg_target_update.clamp(-0.1, 0.1)
                                 self.prior_bank.prior_mu.data[target_mask] += avg_target_update
 
                             if pred_mask.any():
                                 avg_pred_update = pred_updates[pred_mask] / pred_counts[pred_mask].unsqueeze(-1)
+                                # Clip updates to prevent explosion
+                                avg_pred_update = avg_pred_update.clamp(-0.1, 0.1)
                                 self.prior_bank.prior_mu.data[pred_mask] += avg_pred_update
 
                     # Optionally update prior_sigma too (if learnable)
