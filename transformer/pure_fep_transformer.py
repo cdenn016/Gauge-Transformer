@@ -680,6 +680,9 @@ class PureFEPConfig:
     use_torch_compile: bool = False       # Enable torch.compile (experimental)
     compile_mode: str = "reduce-overhead" # "default", "reduce-overhead", or "max-autotune"
 
+    # Debugging
+    debug_gradient_logging: bool = False  # Log gradient magnitudes for debugging
+
     def __post_init__(self):
         """Validate configuration."""
         # Validate gauge group
@@ -1220,17 +1223,31 @@ class PureFEPLayer(nn.Module):
                     ce_for_grad = F.cross_entropy(
                         logits_grad.view(-1, self.config.vocab_size),
                         targets.view(-1),
-                        reduction='sum'
+                        reduction='mean'  # Use mean instead of sum - avoids double normalization
                     )
                     grad_mu_ce = torch.autograd.grad(ce_for_grad, mu_q_grad, retain_graph=True)[0]
 
                     # Also get sigma gradient for KL-based output (affects logits!)
                     if self.config.output_mode == 'kl_to_prior' and self.prior_bank is not None:
                         grad_sigma_ce = torch.autograd.grad(ce_for_grad, sigma_q_grad)[0]
-                        grad_sigma = grad_sigma + lambda_obs * grad_sigma_ce / (B * N)
+                        grad_sigma = grad_sigma + lambda_obs * grad_sigma_ce  # No division - already mean
 
-                # Add CE gradient with lambda_obs weight
-                grad_mu = grad_mu + lambda_obs * grad_mu_ce / (B * N)
+                # Add CE gradient with lambda_obs weight (no division - already mean)
+                grad_mu = grad_mu + lambda_obs * grad_mu_ce
+
+                # Debug logging: Monitor gradient magnitudes
+                if self.config.debug_gradient_logging and step_idx == 0:
+                    # Compute individual gradient component magnitudes
+                    grad_mu_self_mag = (alpha * delta_mu / sigma_p_safe).abs().mean().item() if is_diagonal else 0.0
+                    grad_mu_ce_mag = grad_mu_ce.abs().mean().item()
+                    grad_mu_total_mag = grad_mu.abs().mean().item()
+
+                    print(f"  [Gradient Debug] Step {step_idx}")
+                    print(f"    Self-coupling grad: {grad_mu_self_mag:.6f}")
+                    print(f"    Observation grad:   {grad_mu_ce_mag:.6f}")
+                    print(f"    Total grad:         {grad_mu_total_mag:.6f}")
+                    if grad_mu_self_mag > 0:
+                        print(f"    Ratio CE/Self:      {grad_mu_ce_mag / grad_mu_self_mag:.3f}")
         else:
             # Differentiable mode (for hybrid training)
             grad_enabled = torch.is_grad_enabled() and mu_q.requires_grad
@@ -2759,12 +2776,10 @@ class PureFEPTransformer(nn.Module):
                     # )
 
                     # =========================================================
-                    # DISCRIMINATIVE UPDATE: Push confused priors apart
+                    # CONTRASTIVE PRIOR UPDATE: Attract correct, repel incorrect
                     # =========================================================
-                    # When model predicts P instead of target T:
-                    # - π_P and π_T are confused (both close to belief q)
-                    # - Push π_T AWAY from π_P (increase their distance)
-                    # - This is more direct than pushing relative to beliefs
+                    # CORRECT predictions: Pull token prior toward belief (reinforcement)
+                    # INCORRECT predictions: Push confused priors apart (discrimination)
                     # =========================================================
                     with torch.no_grad():
                         # Get logits and predictions
@@ -2772,9 +2787,40 @@ class PureFEPTransformer(nn.Module):
                         predictions = logits.argmax(dim=-1).view(-1)  # (B*N,)
                         targets_flat_for_disc = targets.view(-1)  # (B*N,)
 
-                        # Find wrong predictions
-                        wrong_mask = predictions != targets_flat_for_disc  # (B*N,)
+                        # Split into correct and incorrect predictions
+                        correct_mask = predictions == targets_flat_for_disc  # (B*N,)
+                        wrong_mask = ~correct_mask  # (B*N,)
 
+                        # =========================================================
+                        # ATTRACTION: Correct predictions reinforce token priors
+                        # =========================================================
+                        if correct_mask.any():
+                            correct_targets = targets_flat_for_disc[correct_mask]  # (num_correct,)
+                            correct_beliefs = mu_flat[correct_mask]  # (num_correct, K)
+
+                            # Attraction learning rate: same as discriminative for balance
+                            attr_lr = base_blend * 0.5
+
+                            # Accumulate updates per token
+                            correct_counts = torch.zeros(self.config.vocab_size, device=final_mu_q.device)
+                            correct_updates = torch.zeros_like(self.prior_bank.prior_mu.data)
+
+                            correct_counts.scatter_add_(0, correct_targets, torch.ones_like(correct_targets, dtype=torch.float))
+                            correct_updates.scatter_add_(0, correct_targets.unsqueeze(-1).expand(-1, K), correct_beliefs)
+
+                            # Average and apply: π_correct ← π_correct + lr·(belief - π_correct)
+                            correct_token_mask = correct_counts > 0
+                            if correct_token_mask.any():
+                                avg_correct_beliefs = correct_updates[correct_token_mask] / correct_counts[correct_token_mask].unsqueeze(-1)
+                                current_priors = self.prior_bank.prior_mu.data[correct_token_mask]
+                                # EMA-style update: move prior toward average belief
+                                self.prior_bank.prior_mu.data[correct_token_mask] = (
+                                    (1.0 - attr_lr) * current_priors + attr_lr * avg_correct_beliefs
+                                )
+
+                        # =========================================================
+                        # REPULSION: Incorrect predictions push confused priors apart
+                        # =========================================================
                         if wrong_mask.any():
                             # Get the confused pairs (predicted, target)
                             wrong_predictions = predictions[wrong_mask]  # (num_wrong,)
@@ -2792,9 +2838,10 @@ class PureFEPTransformer(nn.Module):
                             # Clip per-dimension to prevent explosion
                             diff = diff.clamp(-0.5, 0.5)
 
-                            # VERY small learning rate for stability
-                            # base_blend ≈ 0.1, so disc_lr ≈ 0.001
-                            disc_lr = base_blend * 0.01
+                            # Discriminative learning rate - comparable to generative updates
+                            # Make it meaningful: 50% of base prior lr for stability
+                            # base_blend ≈ 0.01, so disc_lr ≈ 0.005
+                            disc_lr = base_blend * 0.5
 
                             # Push target prior AWAY from predicted prior
                             new_target_priors = target_priors + disc_lr * diff
