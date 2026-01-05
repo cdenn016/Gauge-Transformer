@@ -2610,22 +2610,17 @@ class PureFEPTransformer(nn.Module):
             final_mu_q, final_sigma_q = layer_infos[-1]['beliefs']  # (B, N, K)
             B, N, K = final_mu_q.shape
 
-            # Compute per-position weights for prior updates
-            # =================================================================
-            # UNIFORM WEIGHTING for stable P-flow learning
-            # =================================================================
-            # After experimentation:
-            # - exp(-error): Only reinforces successes, never learns from mistakes
-            # - sqrt(error): Positive feedback loop causes explosion
-            # - uniform: Each position contributes equally, most stable
-            #
-            # The key insight: we're computing a weighted average of beliefs
-            # for each token that appeared as a target. Uniform weighting means
-            # each occurrence of token v contributes equally to updating π_v.
-            #
-            # The learning rate (prior_lr) controls update magnitude.
-            # =================================================================
-            weights = torch.ones(B, N, device=final_mu_q.device) / (B * N)
+            # Compute per-position weights from prediction errors
+            # Lower error = higher weight (token prior should move toward this belief)
+            if per_position_errors is not None:
+                # Convert errors to weights: exp(-error) gives higher weight to lower errors
+                # Clamp errors to avoid numerical issues
+                errors_clamped = per_position_errors.clamp(max=10.0)  # (B, N)
+                weights = torch.exp(-errors_clamped)  # (B, N)
+                # Normalize weights per token to sum to 1
+                weights = weights / (weights.sum() + 1e-8)
+            else:
+                weights = torch.ones(B, N, device=final_mu_q.device) / (B * N)
 
             # Check if using gauge-fixed priors or standard per-token priors
             if self.prior_bank.gauge_fixed_priors:
