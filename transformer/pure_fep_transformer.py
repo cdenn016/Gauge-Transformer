@@ -909,8 +909,27 @@ class PureFEPLayer(nn.Module):
         #   - Position-specific patterns (e.g., "The" often starts sentences)
         #   - Sequential dependencies via prior evolution
         #   - Context-dependent expectations
-        self.register_buffer('prior_mu', torch.zeros(config.seq_length, embed_dim))
-        self.register_buffer('prior_sigma', torch.ones(config.seq_length, embed_dim))
+        #
+        # PRINCIPLED INITIALIZATION: Start from token prior statistics
+        # This avoids artificial mismatch between position priors (at origin)
+        # and beliefs (initialized from token priors at non-zero locations).
+        if prior_bank is not None:
+            with torch.no_grad():
+                if prior_bank.gauge_fixed_priors:
+                    # Use base prior (all tokens are rotations of this)
+                    init_mu = prior_bank.base_prior_mu.detach().clone()
+                    init_sigma = prior_bank.base_prior_sigma.detach().clone()
+                else:
+                    # Use mean of all token priors
+                    init_mu = prior_bank.prior_mu.detach().mean(dim=0)
+                    init_sigma = prior_bank.prior_sigma.detach().mean(dim=0)
+            # Broadcast to all positions
+            self.register_buffer('prior_mu', init_mu.unsqueeze(0).expand(config.seq_length, -1).clone())
+            self.register_buffer('prior_sigma', init_sigma.unsqueeze(0).expand(config.seq_length, -1).clone())
+        else:
+            # Fallback: zeros (ad-hoc, but prior_bank=None is already ad-hoc)
+            self.register_buffer('prior_mu', torch.zeros(config.seq_length, embed_dim))
+            self.register_buffer('prior_sigma', torch.ones(config.seq_length, embed_dim))
 
         # Prior update statistics (for adaptive learning rate)
         self.register_buffer('prior_update_count', torch.zeros(config.seq_length))
@@ -989,8 +1008,6 @@ class PureFEPLayer(nn.Module):
             if self.config.differentiable_vfe and not mu_q.requires_grad:
                 mu_q.requires_grad_(True)
 
-        sigma_q = torch.ones(B, N, K, device=device) * 0.1  # Small initial variance
-
         # =====================================================================
         # POSITION-DEPENDENT PRIORS - broadcast across batch only
         # =====================================================================
@@ -1003,11 +1020,18 @@ class PureFEPLayer(nn.Module):
 
         # Pad if input sequence is longer than stored priors
         if N > N_prior:
-            # Use zero mean, unit variance for new positions
-            mu_p_pad = torch.zeros(B, N - N_prior, K, device=device)
-            sigma_p_pad = torch.ones(B, N - N_prior, K, device=device)
+            # PRINCIPLED: Use mean of existing position priors for new positions
+            # This maintains consistency rather than introducing artificial zeros
+            mu_p_mean = self.prior_mu[:N_prior, :].mean(dim=0, keepdim=True)  # (1, K)
+            sigma_p_mean = self.prior_sigma[:N_prior, :].mean(dim=0, keepdim=True)  # (1, K)
+            mu_p_pad = mu_p_mean.expand(B, N - N_prior, K).clone()
+            sigma_p_pad = sigma_p_mean.expand(B, N - N_prior, K).clone()
             mu_p = torch.cat([mu_p, mu_p_pad], dim=1)
             sigma_p = torch.cat([sigma_p, sigma_p_pad], dim=1)
+
+        # PRINCIPLED: Initialize belief variance from prior variance
+        # Beliefs should inherit uncertainty from priors, not use magic numbers
+        sigma_q = sigma_p.clone()
 
         # Gauge frames start at identity
         # phi_dim = 3 for SO(3), N(N-1)/2 for SO(N)
@@ -2180,15 +2204,22 @@ class PureFEPTransformer(nn.Module):
             # Returns (mu, sigma, phi) - token phi from gauge-fixed priors
             x, sigma_init, phi_token = self.prior_bank.encode(input_ids)
         elif self.config.embedding_mode == 'hybrid':
-            # HYBRID: Learned embedding for μ
+            # HYBRID: Learned embedding for μ, but sigma from prior_bank
             x = self.embedding(input_ids)  # (B, N, K)
-            sigma_init = torch.ones(B, N, K, device=device) * 0.1
-            phi_token = torch.zeros(B, N, phi_dim, device=device)
+            # Use prior_bank sigma if available (principled), else use config
+            if self.prior_bank is not None:
+                _, sigma_init, phi_token = self.prior_bank.encode(input_ids)
+            else:
+                sigma_init = torch.ones(B, N, K, device=device)
+                phi_token = torch.zeros(B, N, phi_dim, device=device)
         else:  # 'learned'
-            # AD HOC: Standard embedding
+            # AD HOC: Standard embedding (but at least use prior_bank sigma if available)
             x = self.embedding(input_ids)  # (B, N, K)
-            sigma_init = torch.ones(B, N, K, device=device) * 0.1
-            phi_token = torch.zeros(B, N, phi_dim, device=device)
+            if self.prior_bank is not None:
+                _, sigma_init, phi_token = self.prior_bank.encode(input_ids)
+            else:
+                sigma_init = torch.ones(B, N, K, device=device)
+                phi_token = torch.zeros(B, N, phi_dim, device=device)
 
         # =====================================================================
         # POSITION ENCODING: Add to μ and/or φ
