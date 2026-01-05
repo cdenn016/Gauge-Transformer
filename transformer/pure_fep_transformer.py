@@ -2623,21 +2623,8 @@ class PureFEPTransformer(nn.Module):
             final_mu_q, final_sigma_q = layer_infos[-1]['beliefs']  # (B, N, K)
             B, N, K = final_mu_q.shape
 
-            # Compute per-position weights for prior updates
-            # =================================================================
-            # UNIFORM WEIGHTING for stable P-flow learning
-            # =================================================================
-            # After experimentation:
-            # - exp(-error): Only reinforces successes, never learns from mistakes
-            # - sqrt(error): Positive feedback loop causes explosion
-            # - uniform: Each position contributes equally, most stable
-            #
-            # The key insight: we're computing a weighted average of beliefs
-            # for each token that appeared as a target. Uniform weighting means
-            # each occurrence of token v contributes equally to updating π_v.
-            #
-            # The learning rate (prior_lr) controls update magnitude.
-            # =================================================================
+            # Uniform weighting for stable P-flow learning
+            # Each position contributes equally to updating its target token's prior
             weights = torch.ones(B, N, device=final_mu_q.device) / (B * N)
 
             # Check if using gauge-fixed priors or standard per-token priors
