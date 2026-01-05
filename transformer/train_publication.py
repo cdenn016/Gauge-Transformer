@@ -368,13 +368,35 @@ VFE_EM_CONFIG = {
     'checkpoint_interval': 5000,
     'patience': 5,
 
-    # Gauge group
-    'gauge_group': 'SON',
-    'gauge_dim': 10,
-    'use_multi_irrep': True,
-    'gauge_fixed_priors': False,
-    'irrep_spec': [('fund', 3, 10)],  # SO(10) fundamental
+        # =================================================================
+    # GAUGE GROUP SELECTION
+    # =================================================================
+    # SO3: Standard SO(3) gauge group with 3 generators
+    #      Requires embed_dim = sum(mult * dim) for irrep_spec or odd embed_dim
+    # SON: SO(N) gauge group with N(N-1)/2 generators
+    #      More flexible - can use N-dimensional fundamental representation
+    #      embed_dim = mult * N for direct sums of fundamental
+    # =================================================================
+    'gauge_group': 'SON',  # 'SO3' or 'SON'
+    'gauge_dim': 10,        # N for SO(N) - only used when gauge_group='SON'
+    'use_multi_irrep': True,  # Use block-diagonal generators from irrep_spec
 
+
+    # Irrep structure (for K=255)
+    # 75×1 + 30×3 + 18×5 = 75 + 90 + 90 = 255 ✓
+    'irrep_spec': [
+      # ('ℓ0', 50, 1),   # 75 dimensions (scalars)
+      # ('ℓ1', 1, 3),   # 90 dimensions (vectors)
+      # ('ℓ2', 2, 5),   # 90 dimensions (rank-2 tensors)
+     #  ('ℓ3', 1, 7),
+      # ('ℓ4', 1, 9),
+      #('ℓ5', 9, 11),
+     # ('ℓ6', 1, 13),
+     # ('ℓ7', 1, 15),
+      # ('ℓ50', 1, 101),
+      ('fund', 3, 10)  #For SO(8) 
+     # ('fund', 10, 5),   # SO(5)
+    ],
     # Attention
     'attention_pattern': 'full',
     'attention_window': 24,
@@ -481,12 +503,35 @@ PURE_FEP_CONFIG = {
     'checkpoint_interval': 5000,
     'patience': 10,               # More patience for P-flow
 
-    # Gauge group
-    'gauge_group': 'SON',
-    'gauge_dim': 10,
-    'use_multi_irrep': True,
-    'gauge_fixed_priors': False,  # CRITICAL: Each token has its own prior_mu!
-    'irrep_spec': [('fund', 3, 10)],
+        # =================================================================
+    # GAUGE GROUP SELECTION
+    # =================================================================
+    # SO3: Standard SO(3) gauge group with 3 generators
+    #      Requires embed_dim = sum(mult * dim) for irrep_spec or odd embed_dim
+    # SON: SO(N) gauge group with N(N-1)/2 generators
+    #      More flexible - can use N-dimensional fundamental representation
+    #      embed_dim = mult * N for direct sums of fundamental
+    # =================================================================
+    'gauge_group': 'SON',  # 'SO3' or 'SON'
+    'gauge_dim': 10,        # N for SO(N) - only used when gauge_group='SON'
+    'use_multi_irrep': True,  # Use block-diagonal generators from irrep_spec
+
+
+    # Irrep structure (for K=255)
+    # 75×1 + 30×3 + 18×5 = 75 + 90 + 90 = 255 ✓
+    'irrep_spec': [
+      # ('ℓ0', 50, 1),   # 75 dimensions (scalars)
+      # ('ℓ1', 1, 3),   # 90 dimensions (vectors)
+      # ('ℓ2', 2, 5),   # 90 dimensions (rank-2 tensors)
+     #  ('ℓ3', 1, 7),
+      # ('ℓ4', 1, 9),
+      #('ℓ5', 9, 11),
+     # ('ℓ6', 1, 13),
+     # ('ℓ7', 1, 15),
+      # ('ℓ50', 1, 101),
+      ('fund', 3, 10)  #For SO(8) 
+     # ('fund', 10, 5),   # SO(5)
+    ],
 
     # Attention
     'attention_pattern': 'full',
@@ -1887,3 +1932,4 @@ def main():
 if __name__ == '__main__':
 
     main()
+
