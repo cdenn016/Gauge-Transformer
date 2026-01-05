@@ -1826,18 +1826,32 @@ class PureFEPLayer(nn.Module):
         # =====================================================================
         # ERROR-SCALED LEARNING RATE (per-position)
         # =====================================================================
-        # Prediction error modulates learning rate, not the target.
-        # This gives learning signal without destabilizing the target.
+        # FEP principle: prediction error DRIVES learning magnitude.
+        # High error = more surprise = MORE total learning (not just redistribution)
+        #
+        # Two-level scaling:
+        # 1. Mean error scales BASE learning rate (more error → more total learning)
+        # 2. Per-position error redistributes within batch (optional refinement)
+        # =====================================================================
         if per_position_error is not None and per_position_error.numel() > 0:
-            # Average error across batch for each position
+            # Mean error across all positions and batch
+            mean_error = per_position_error[:, :N_prior].mean()
+
+            # Scale base learning rate by error magnitude
+            # Use sqrt to prevent extreme scaling while maintaining signal
+            # Typical CE for random = ln(vocab) ≈ 10, good model ≈ 2-3
+            # sqrt(10) ≈ 3.2, sqrt(2) ≈ 1.4, so ~2x difference
+            error_magnitude_scale = torch.sqrt(mean_error.clamp(min=0.1))
+
+            # Per-position redistribution (optional: relative to mean)
             pos_error = per_position_error[:, :N_prior].mean(dim=0)  # (N,)
-            # Normalize to [0, 1] range using sigmoid-like scaling
-            # error_scale = sigmoid(error - median) gives ~0.5 for median error
-            error_median = pos_error.median()
-            error_scale = torch.sigmoid(pos_error - error_median)  # (N,)
-            # Scale learning rate: base_lr * (0.5 to 1.5) based on error
-            # High error positions learn faster, low error slower
-            lr_scale = 0.5 + error_scale  # Range [0.5, 1.5]
+            # Relative error: how much more/less than mean
+            relative_error = pos_error / mean_error.clamp(min=0.1)  # (N,)
+            # Soft scaling: sqrt for stability, clamp for bounds
+            lr_scale = torch.sqrt(relative_error.clamp(min=0.25, max=4.0))  # Range [0.5, 2.0]
+
+            # Combine: base_lr * error_magnitude * per_position_redistribution
+            lr_scale = error_magnitude_scale * lr_scale
         else:
             lr_scale = torch.ones(N_prior, device=mu_q_batch.device)
 
@@ -2710,20 +2724,26 @@ class PureFEPTransformer(nn.Module):
                     # =========================================================
                     # ERROR-SCALED LEARNING RATE (per-token)
                     # =========================================================
-                    # Compute per-token average prediction error
+                    # FEP principle: error DRIVES learning magnitude
+                    # High error = more surprise = MORE total learning
                     base_blend = self.config.prior_lr
                     if per_position_errors is not None:
+                        # Mean error scales base learning rate
+                        mean_error = per_position_errors.mean()
+                        error_magnitude_scale = torch.sqrt(mean_error.clamp(min=0.1))
+
+                        # Per-token error for redistribution
                         errors_flat = per_position_errors.view(-1)  # (B*N,)
                         token_error_sum = torch.zeros(self.config.vocab_size, device=final_mu_q.device)
                         token_error_sum.scatter_add_(0, targets_flat, errors_flat)
-                        # Average error per token
                         avg_token_error = token_error_sum / token_counts.clamp(min=1e-8)  # (V,)
-                        # Normalize using sigmoid relative to median
-                        error_median = avg_token_error[mask].median()
-                        error_scale = torch.sigmoid(avg_token_error - error_median)
-                        # Scale learning rate: base_lr * (0.5 to 1.5)
-                        lr_scale = 0.5 + error_scale  # (V,)
-                        blend_rate = (base_blend * lr_scale[mask]).unsqueeze(-1)  # (num_tokens, 1)
+
+                        # Relative error scaling with sqrt for stability
+                        relative_error = avg_token_error / mean_error.clamp(min=0.1)
+                        token_lr_scale = torch.sqrt(relative_error.clamp(min=0.25, max=4.0))
+
+                        # Combine: error_magnitude * per_token_redistribution
+                        blend_rate = (base_blend * error_magnitude_scale * token_lr_scale[mask]).unsqueeze(-1)
                     else:
                         blend_rate = base_blend
 

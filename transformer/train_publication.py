@@ -1594,13 +1594,16 @@ def run_single_experiment(
                     else:
                         print(msg)
 
-                # Validation
+                # Validation (limit batches to avoid long waits)
                 if (step + 1) % eval_interval == 0:
                     model.eval()
                     val_loss = 0.0
                     val_tokens = 0
+                    max_val_batches = 50  # Limit validation to 50 batches
                     with torch.no_grad():
-                        for val_batch in val_loader:
+                        for batch_idx, val_batch in enumerate(val_loader):
+                            if batch_idx >= max_val_batches:
+                                break
                             v_input, v_targets = val_batch
                             v_input = v_input.to(device)
                             v_targets = v_targets.to(device)
@@ -1613,7 +1616,7 @@ def run_single_experiment(
                             val_loss += loss.item()
                             val_tokens += v_targets.numel()
 
-                    val_ce = val_loss / val_tokens
+                    val_ce = val_loss / val_tokens if val_tokens > 0 else float('inf')
                     val_ppl = math.exp(min(val_ce, 20))
 
                     print(f"\n  Validation @ step {step+1}:")
