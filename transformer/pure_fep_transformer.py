@@ -1786,37 +1786,19 @@ class PureFEPLayer(nn.Module):
         # Handle sequence length mismatch
         N_prior = min(N, self.prior_mu.shape[0])
 
-        if per_position_error is not None and per_position_error.numel() > 0:
-            # POSITION-LEVEL PREDICTION-ERROR WEIGHTING
-            # Each position is weighted by how well beliefs at that position predicted
-            # Lower error = higher weight
-
-            # per_position_error: (B, N) -> weights: (B, N)
-            temperature = 1.0
-            # Softmax over batch dimension for each position
-            weights = F.softmax(-per_position_error / temperature, dim=0)  # (B, N)
-
-            # Weighted average across batch for each position
-            # weights: (B, N) -> (B, N, 1) for broadcasting
-            weights_expanded = weights.unsqueeze(-1)  # (B, N, 1)
-            mu_p_new = (mu_q_batch[:, :N_prior, :] * weights_expanded[:, :N_prior, :]).sum(dim=0)  # (N, K)
-            sigma_p_new = (sigma_q_batch[:, :N_prior, :] * weights_expanded[:, :N_prior, :]).sum(dim=0)  # (N, K)
-
-        elif prediction_error is not None and prediction_error.numel() > 0:
-            # BATCH-LEVEL PREDICTION-ERROR WEIGHTING
-            # Use per-sample error (same weight for all positions in a sample)
-            temperature = 1.0
-            weights = F.softmax(-prediction_error / temperature, dim=0)  # (B,)
-
-            # Weighted average across batch for each position
-            weights_expanded = weights.view(B, 1, 1)  # (B, 1, 1)
-            mu_p_new = (mu_q_batch[:, :N_prior, :] * weights_expanded).sum(dim=0)  # (N, K)
-            sigma_p_new = (sigma_q_batch[:, :N_prior, :] * weights_expanded).sum(dim=0)  # (N, K)
-
-        else:
-            # Fallback: simple average across batch for each position
-            mu_p_new = mu_q_batch[:, :N_prior, :].mean(dim=0)  # (N, K)
-            sigma_p_new = sigma_q_batch[:, :N_prior, :].mean(dim=0)  # (N, K)
+        # =====================================================================
+        # UNIFORM WEIGHTING for stable position-dependent prior learning
+        # =====================================================================
+        # After experimentation (see commit 0dd34fd for token priors):
+        # - softmax(-error): Exponentially favors low-error positions → explosion
+        # - sqrt(error): Positive feedback loop → explosion
+        # - uniform: Each position contributes equally → stable
+        #
+        # The same principle applies to position priors as token priors:
+        # uniform averaging is most stable. Learning rate controls magnitude.
+        # =====================================================================
+        mu_p_new = mu_q_batch[:, :N_prior, :].mean(dim=0)  # (N, K)
+        sigma_p_new = sigma_q_batch[:, :N_prior, :].mean(dim=0)  # (N, K)
 
         # =====================================================================
         # Apply update to persistent priors
