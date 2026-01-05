@@ -2710,187 +2710,83 @@ class PureFEPTransformer(nn.Module):
                     self.prior_bank.base_log_prior_sigma.data = torch.log(new_sigma.clamp(min=1e-6))
             else:
                 # ===============================================================
-                # STANDARD MODE: Update per-token prior_mu directly
+                # PURE FEP: Token priors updated via VFE gradient descent
                 # ===============================================================
-                # Update prior_bank.prior_mu for each target token
-                # Use scatter_add to accumulate weighted belief updates per token
-                targets_flat = targets.view(-1)  # (B*N,)
-                mu_flat = final_mu_q.view(-1, K)  # (B*N, K)
-                weights_flat = weights.view(-1, 1)  # (B*N, 1)
+                # d(π_v)/dt = -∂F/∂π_v
+                # where F includes observation term: E_q[-log p(y|z, π)]
+                #
+                # This replaces ALL hand-crafted updates (EMA, discriminative, etc.)
+                # Contrastive behavior emerges naturally from VFE minimization!
+                # ===============================================================
+                if self.config.gradient_prior_updates:
+                    # Gradient-based update: ∂F/∂π_v from observation term
+                    with torch.enable_grad():
+                        # Detach beliefs (already converged via VFE)
+                        # But keep token priors differentiable
+                        mu_q_detached = final_mu_q.detach()
+                        sigma_q_detached = final_sigma_q.detach()
 
-                # Compute weighted contribution: weight * (belief - current_prior)
-                weighted_beliefs = weights_flat * mu_flat  # (B*N, K)
+                        # Ensure token priors require gradients
+                        if not self.prior_bank.prior_mu.requires_grad:
+                            self.prior_bank.prior_mu.requires_grad_(True)
 
-                # Accumulate per-token updates
-                # prior_mu shape: (vocab_size, K)
-                token_counts = torch.zeros(self.config.vocab_size, device=final_mu_q.device)
-                token_updates = torch.zeros_like(self.prior_bank.prior_mu.data)
+                        # Compute observation loss (differentiable w.r.t. token priors)
+                        logits = self.prior_bank.decode(
+                            mu_q_detached,
+                            sigma_q_detached,
+                            tau=getattr(self.config, 'output_tau', 1.0)
+                        )
 
-                # Count occurrences and sum weighted beliefs per token
-                token_counts.scatter_add_(0, targets_flat, weights_flat.squeeze(-1))
-                token_updates.scatter_add_(0, targets_flat.unsqueeze(-1).expand(-1, K), weighted_beliefs)
+                        ce_loss = F.cross_entropy(
+                            logits.view(-1, self.config.vocab_size),
+                            targets.view(-1),
+                            reduction='sum'
+                        ) / (B * N)
 
-                # Apply EMA update only for tokens that appeared in this batch
-                # prior_lr controls how fast token priors adapt (same as position priors)
-                mask = token_counts > 0
-                if mask.any():
-                    # Normalize by weight sum per token
-                    token_counts_safe = token_counts.clamp(min=1e-8).unsqueeze(-1)  # (V, 1)
-                    avg_beliefs = token_updates / token_counts_safe  # (V, K)
+                        # Backprop to token priors
+                        grad_token_mu = torch.autograd.grad(
+                            ce_loss,
+                            self.prior_bank.prior_mu,
+                            retain_graph=False,
+                            create_graph=False
+                        )[0]
 
-                    # =========================================================
-                    # ERROR-SCALED LEARNING RATE (per-token)
-                    # =========================================================
-                    # FEP principle: error DRIVES learning magnitude
-                    # High error = more surprise = MORE total learning
-                    base_blend = self.config.prior_lr
-                    if per_position_errors is not None:
-                        # Mean error scales base learning rate
-                        mean_error = per_position_errors.mean()
-                        error_magnitude_scale = torch.sqrt(mean_error.clamp(min=0.1))
+                        # Clip gradient for stability
+                        grad_norm = grad_token_mu.norm()
+                        if grad_norm > self.config.grad_clip:
+                            grad_token_mu = grad_token_mu * (self.config.grad_clip / grad_norm)
 
-                        # Per-token error for redistribution
-                        errors_flat = per_position_errors.view(-1)  # (B*N,)
-                        token_error_sum = torch.zeros(self.config.vocab_size, device=final_mu_q.device)
-                        token_error_sum.scatter_add_(0, targets_flat, errors_flat)
-                        avg_token_error = token_error_sum / token_counts.clamp(min=1e-8)  # (V,)
-
-                        # Relative error scaling with sqrt for stability
-                        relative_error = avg_token_error / mean_error.clamp(min=0.1)
-                        token_lr_scale = torch.sqrt(relative_error.clamp(min=0.25, max=4.0))
-
-                        # Combine: error_magnitude * per_token_redistribution
-                        blend_rate = (base_blend * error_magnitude_scale * token_lr_scale[mask]).unsqueeze(-1)
-                    else:
-                        blend_rate = base_blend
-
-                    # EMA blend: new_prior = (1 - lr) * old_prior + lr * avg_belief
-                    # This PULLS the correct token's prior toward the beliefs
-                    # BUT: if beliefs ≈ input token prior, this makes target more like input!
-                    # Only do this update when accuracy is reasonable (otherwise it hurts)
-                    #
-                    # DISABLED for now - this update makes priors converge together
-                    # self.prior_bank.prior_mu.data[mask] = (
-                    #     (1 - blend_rate) * self.prior_bank.prior_mu.data[mask] +
-                    #     blend_rate * avg_beliefs[mask]
-                    # )
-
-                    # =========================================================
-                    # CONTRASTIVE PRIOR UPDATE: Attract correct, repel incorrect
-                    # =========================================================
-                    # CORRECT predictions: Pull token prior toward belief (reinforcement)
-                    # INCORRECT predictions: Push confused priors apart (discrimination)
-                    # =========================================================
+                    # Gradient descent: π ← π - lr·∂F/∂π
                     with torch.no_grad():
-                        # Get logits and predictions
-                        logits = self.prior_bank.decode(final_mu_q, final_sigma_q, tau=1.0)  # (B, N, V)
-                        predictions = logits.argmax(dim=-1).view(-1)  # (B*N,)
-                        targets_flat_for_disc = targets.view(-1)  # (B*N,)
+                        self.prior_bank.prior_mu.sub_(
+                            self.config.prior_grad_lr * grad_token_mu
+                        )
 
-                        # Split into correct and incorrect predictions
-                        correct_mask = predictions == targets_flat_for_disc  # (B*N,)
-                        wrong_mask = ~correct_mask  # (B*N,)
+                else:
+                    # Fallback: Simple EMA (if gradient updates disabled)
+                    # This is NOT pure FEP - just for backward compatibility
+                    targets_flat = targets.view(-1)
+                    mu_flat = final_mu_q.view(-1, K)
+                    weights_flat = weights.view(-1, 1)
 
-                        # =========================================================
-                        # ATTRACTION: Correct predictions reinforce token priors
-                        # =========================================================
-                        if correct_mask.any():
-                            correct_targets = targets_flat_for_disc[correct_mask]  # (num_correct,)
-                            correct_beliefs = mu_flat[correct_mask]  # (num_correct, K)
+                    weighted_beliefs = weights_flat * mu_flat
+                    token_counts = torch.zeros(self.config.vocab_size, device=final_mu_q.device)
+                    token_updates = torch.zeros_like(self.prior_bank.prior_mu.data)
 
-                            # Attraction learning rate: conservative (2× original, not 50×)
-                            # base_blend ≈ 0.01, so attr_lr ≈ 0.0005
-                            attr_lr = base_blend * 0.05
+                    token_counts.scatter_add_(0, targets_flat, weights_flat.squeeze(-1))
+                    token_updates.scatter_add_(0, targets_flat.unsqueeze(-1).expand(-1, K), weighted_beliefs)
 
-                            # Accumulate updates per token
-                            correct_counts = torch.zeros(self.config.vocab_size, device=final_mu_q.device)
-                            correct_updates = torch.zeros_like(self.prior_bank.prior_mu.data)
+                    mask = token_counts > 0
+                    if mask.any():
+                        token_counts_safe = token_counts.clamp(min=1e-8).unsqueeze(-1)
+                        avg_beliefs = token_updates / token_counts_safe
 
-                            correct_counts.scatter_add_(0, correct_targets, torch.ones_like(correct_targets, dtype=torch.float))
-                            correct_updates.scatter_add_(0, correct_targets.unsqueeze(-1).expand(-1, K), correct_beliefs)
-
-                            # Average and apply: π_correct ← π_correct + lr·(belief - π_correct)
-                            correct_token_mask = correct_counts > 0
-                            if correct_token_mask.any():
-                                avg_correct_beliefs = correct_updates[correct_token_mask] / correct_counts[correct_token_mask].unsqueeze(-1)
-                                current_priors = self.prior_bank.prior_mu.data[correct_token_mask]
-                                # EMA-style update: move prior toward average belief
-                                self.prior_bank.prior_mu.data[correct_token_mask] = (
-                                    (1.0 - attr_lr) * current_priors + attr_lr * avg_correct_beliefs
-                                )
-
-                        # =========================================================
-                        # REPULSION: Incorrect predictions push confused priors apart
-                        # =========================================================
-                        if wrong_mask.any():
-                            # Get the confused pairs (predicted, target)
-                            wrong_predictions = predictions[wrong_mask]  # (num_wrong,)
-                            wrong_targets = targets_flat_for_disc[wrong_mask]  # (num_wrong,)
-
-                            # Get priors for confused tokens
-                            pred_priors = self.prior_bank.prior_mu.data[wrong_predictions]  # (num_wrong, K)
-                            target_priors = self.prior_bank.prior_mu.data[wrong_targets]  # (num_wrong, K)
-
-                            # Direction to push apart: target away from predicted
-                            # Use RAW difference (not normalized) so nearby priors
-                            # get pushed more than distant ones
-                            diff = target_priors - pred_priors  # (num_wrong, K)
-
-                            # Clip per-dimension to prevent explosion
-                            diff = diff.clamp(-0.5, 0.5)
-
-                            # Discriminative learning rate: conservative (10× original, not 50×)
-                            # base_blend ≈ 0.01, so disc_lr ≈ 0.001
-                            disc_lr = base_blend * 0.1
-
-                            # Push target prior AWAY from predicted prior
-                            new_target_priors = target_priors + disc_lr * diff
-
-                            # Also push predicted prior in opposite direction
-                            new_pred_priors = pred_priors - disc_lr * diff
-
-                            # Apply updates using scatter (handles duplicates)
-                            # For targets
-                            target_counts = torch.zeros(self.config.vocab_size, device=final_mu_q.device)
-                            target_updates = torch.zeros_like(self.prior_bank.prior_mu.data)
-                            target_counts.scatter_add_(0, wrong_targets, torch.ones_like(wrong_targets, dtype=torch.float))
-                            target_updates.scatter_add_(0, wrong_targets.unsqueeze(-1).expand(-1, K), new_target_priors - target_priors)
-
-                            # For predictions
-                            pred_counts = torch.zeros(self.config.vocab_size, device=final_mu_q.device)
-                            pred_updates = torch.zeros_like(self.prior_bank.prior_mu.data)
-                            pred_counts.scatter_add_(0, wrong_predictions, torch.ones_like(wrong_predictions, dtype=torch.float))
-                            pred_updates.scatter_add_(0, wrong_predictions.unsqueeze(-1).expand(-1, K), new_pred_priors - pred_priors)
-
-                            # Apply averaged updates
-                            target_mask = target_counts > 0
-                            pred_mask = pred_counts > 0
-
-                            if target_mask.any():
-                                avg_target_update = target_updates[target_mask] / target_counts[target_mask].unsqueeze(-1)
-                                # Clip updates to prevent explosion
-                                avg_target_update = avg_target_update.clamp(-0.1, 0.1)
-                                self.prior_bank.prior_mu.data[target_mask] += avg_target_update
-
-                            if pred_mask.any():
-                                avg_pred_update = pred_updates[pred_mask] / pred_counts[pred_mask].unsqueeze(-1)
-                                # Clip updates to prevent explosion
-                                avg_pred_update = avg_pred_update.clamp(-0.1, 0.1)
-                                self.prior_bank.prior_mu.data[pred_mask] += avg_pred_update
-
-                    # Optionally update prior_sigma too (if learnable)
-                    # Use base_blend (not error-scaled) for sigma updates
-                    if self.prior_bank.learnable_sigma:
-                        sigma_flat = final_sigma_q.view(-1, K)  # (B*N, K)
-                        weighted_sigmas = weights_flat * sigma_flat
-                        sigma_updates = torch.zeros_like(self.prior_bank.prior_mu.data)
-                        sigma_updates.scatter_add_(0, targets_flat.unsqueeze(-1).expand(-1, K), weighted_sigmas)
-                        avg_sigmas = sigma_updates / token_counts_safe
-
-                        # Update log_prior_sigma via EMA (use base_blend, not error-scaled)
-                        current_sigma = torch.exp(self.prior_bank.log_prior_sigma.data)
-                        new_sigma = (1 - base_blend) * current_sigma[mask] + base_blend * avg_sigmas[mask]
-                        self.prior_bank.log_prior_sigma.data[mask] = torch.log(new_sigma.clamp(min=1e-6))
+                        # Simple EMA update
+                        base_blend = self.config.prior_lr
+                        self.prior_bank.prior_mu.data[mask] = (
+                            (1 - base_blend) * self.prior_bank.prior_mu.data[mask] +
+                            base_blend * avg_beliefs[mask]
+                        )
 
     # =========================================================================
     # DYNAMIC LAYER EMERGENCE: Spawn/merge layers based on VFE pressure
