@@ -2749,62 +2749,81 @@ class PureFEPTransformer(nn.Module):
 
                     # EMA blend: new_prior = (1 - lr) * old_prior + lr * avg_belief
                     # This PULLS the correct token's prior toward the beliefs
-                    self.prior_bank.prior_mu.data[mask] = (
-                        (1 - blend_rate) * self.prior_bank.prior_mu.data[mask] +
-                        blend_rate * avg_beliefs[mask]
-                    )
+                    # BUT: if beliefs ≈ input token prior, this makes target more like input!
+                    # Only do this update when accuracy is reasonable (otherwise it hurts)
+                    #
+                    # DISABLED for now - this update makes priors converge together
+                    # self.prior_bank.prior_mu.data[mask] = (
+                    #     (1 - blend_rate) * self.prior_bank.prior_mu.data[mask] +
+                    #     blend_rate * avg_beliefs[mask]
+                    # )
 
                     # =========================================================
-                    # CONTRASTIVE UPDATE: Push wrong predictions away
+                    # DISCRIMINATIVE UPDATE: Push confused priors apart
                     # =========================================================
-                    # Without this, all priors converge to similar values.
-                    # We need to push the PREDICTED token's prior AWAY from beliefs
-                    # when the prediction was wrong.
-                    #
-                    # For each position:
-                    #   - If predicted ≠ target: push π_predicted away from q
-                    #   - This increases KL(q || π_predicted), making wrong predictions less likely
+                    # When model predicts P instead of target T:
+                    # - π_P and π_T are confused (both close to belief q)
+                    # - Push π_T AWAY from π_P (increase their distance)
+                    # - This is more direct than pushing relative to beliefs
                     # =========================================================
                     with torch.no_grad():
                         # Get logits and predictions
                         logits = self.prior_bank.decode(final_mu_q, final_sigma_q, tau=1.0)  # (B, N, V)
                         predictions = logits.argmax(dim=-1).view(-1)  # (B*N,)
-                        targets_flat_for_contrast = targets.view(-1)  # (B*N,)
+                        targets_flat_for_disc = targets.view(-1)  # (B*N,)
 
                         # Find wrong predictions
-                        wrong_mask = predictions != targets_flat_for_contrast  # (B*N,)
+                        wrong_mask = predictions != targets_flat_for_disc  # (B*N,)
 
                         if wrong_mask.any():
-                            # Get beliefs at wrong positions
-                            wrong_beliefs = mu_flat[wrong_mask]  # (num_wrong, K)
+                            # Get the confused pairs (predicted, target)
                             wrong_predictions = predictions[wrong_mask]  # (num_wrong,)
+                            wrong_targets = targets_flat_for_disc[wrong_mask]  # (num_wrong,)
 
-                            # Accumulate push updates per wrongly-predicted token
-                            wrong_token_counts = torch.zeros(self.config.vocab_size, device=final_mu_q.device)
-                            wrong_token_beliefs = torch.zeros_like(self.prior_bank.prior_mu.data)
+                            # Get priors for confused tokens
+                            pred_priors = self.prior_bank.prior_mu.data[wrong_predictions]  # (num_wrong, K)
+                            target_priors = self.prior_bank.prior_mu.data[wrong_targets]  # (num_wrong, K)
 
-                            ones = torch.ones(wrong_mask.sum(), device=final_mu_q.device)
-                            wrong_token_counts.scatter_add_(0, wrong_predictions, ones)
-                            wrong_token_beliefs.scatter_add_(0, wrong_predictions.unsqueeze(-1).expand(-1, K), wrong_beliefs)
+                            # Direction to push apart: target away from predicted
+                            push_direction = target_priors - pred_priors  # (num_wrong, K)
+                            # Normalize
+                            push_norm = push_direction.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+                            push_direction = push_direction / push_norm
 
-                            wrong_mask_tokens = wrong_token_counts > 0
-                            if wrong_mask_tokens.any():
-                                wrong_counts_safe = wrong_token_counts[wrong_mask_tokens].clamp(min=1).unsqueeze(-1)
-                                avg_wrong_beliefs = wrong_token_beliefs[wrong_mask_tokens] / wrong_counts_safe
+                            # Learning rate scaled by error
+                            disc_lr = base_blend * error_magnitude_scale
 
-                                # PUSH away: prior moves in opposite direction
-                                # Use smaller learning rate for stability (0.5x)
-                                push_rate = base_blend * error_magnitude_scale * 0.5
-                                current_priors = self.prior_bank.prior_mu.data[wrong_mask_tokens]
-                                # Push direction: current - avg_beliefs (away from beliefs)
-                                push_direction = current_priors - avg_wrong_beliefs
-                                # Normalize to prevent explosion
-                                push_norm = push_direction.norm(dim=-1, keepdim=True).clamp(min=1e-6)
-                                push_direction = push_direction / push_norm
-                                # Apply push (move prior away from beliefs)
-                                self.prior_bank.prior_mu.data[wrong_mask_tokens] = (
-                                    current_priors + push_rate * push_direction
-                                )
+                            # Push target prior AWAY from predicted prior
+                            # (move target in direction away from predicted)
+                            new_target_priors = target_priors + disc_lr * push_direction
+
+                            # Also push predicted prior in opposite direction
+                            new_pred_priors = pred_priors - disc_lr * push_direction
+
+                            # Apply updates using scatter (handles duplicates)
+                            # For targets
+                            target_counts = torch.zeros(self.config.vocab_size, device=final_mu_q.device)
+                            target_updates = torch.zeros_like(self.prior_bank.prior_mu.data)
+                            target_counts.scatter_add_(0, wrong_targets, torch.ones_like(wrong_targets, dtype=torch.float))
+                            target_updates.scatter_add_(0, wrong_targets.unsqueeze(-1).expand(-1, K), new_target_priors - target_priors)
+
+                            # For predictions
+                            pred_counts = torch.zeros(self.config.vocab_size, device=final_mu_q.device)
+                            pred_updates = torch.zeros_like(self.prior_bank.prior_mu.data)
+                            pred_counts.scatter_add_(0, wrong_predictions, torch.ones_like(wrong_predictions, dtype=torch.float))
+                            pred_updates.scatter_add_(0, wrong_predictions.unsqueeze(-1).expand(-1, K), new_pred_priors - pred_priors)
+
+                            # Apply averaged updates
+                            target_mask = target_counts > 0
+                            pred_mask = pred_counts > 0
+
+                            if target_mask.any():
+                                avg_target_update = target_updates[target_mask] / target_counts[target_mask].unsqueeze(-1)
+                                self.prior_bank.prior_mu.data[target_mask] += avg_target_update
+
+                            if pred_mask.any():
+                                avg_pred_update = pred_updates[pred_mask] / pred_counts[pred_mask].unsqueeze(-1)
+                                self.prior_bank.prior_mu.data[pred_mask] += avg_pred_update
 
                     # Optionally update prior_sigma too (if learnable)
                     # Use base_blend (not error-scaled) for sigma updates
