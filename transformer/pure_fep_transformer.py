@@ -2785,20 +2785,22 @@ class PureFEPTransformer(nn.Module):
                             target_priors = self.prior_bank.prior_mu.data[wrong_targets]  # (num_wrong, K)
 
                             # Direction to push apart: target away from predicted
-                            push_direction = target_priors - pred_priors  # (num_wrong, K)
-                            # Normalize
-                            push_norm = push_direction.norm(dim=-1, keepdim=True).clamp(min=1e-6)
-                            push_direction = push_direction / push_norm
+                            # Use RAW difference (not normalized) so nearby priors
+                            # get pushed more than distant ones
+                            diff = target_priors - pred_priors  # (num_wrong, K)
 
-                            # Learning rate scaled by error
-                            disc_lr = base_blend * error_magnitude_scale
+                            # Clip per-dimension to prevent explosion
+                            diff = diff.clamp(-0.5, 0.5)
+
+                            # VERY small learning rate for stability
+                            # base_blend ≈ 0.1, so disc_lr ≈ 0.001
+                            disc_lr = base_blend * 0.01
 
                             # Push target prior AWAY from predicted prior
-                            # (move target in direction away from predicted)
-                            new_target_priors = target_priors + disc_lr * push_direction
+                            new_target_priors = target_priors + disc_lr * diff
 
                             # Also push predicted prior in opposite direction
-                            new_pred_priors = pred_priors - disc_lr * push_direction
+                            new_pred_priors = pred_priors - disc_lr * diff
 
                             # Apply updates using scatter (handles duplicates)
                             # For targets
