@@ -1813,21 +1813,38 @@ class PureFEPLayer(nn.Module):
         # =====================================================================
         # UNIFORM WEIGHTING for stable position-dependent prior learning
         # =====================================================================
-        # After experimentation (see commit 0dd34fd for token priors):
-        # - softmax(-error): Exponentially favors low-error positions → explosion
-        # - sqrt(error): Positive feedback loop → explosion
-        # - uniform: Each position contributes equally → stable
+        # Uniform averaging computes stable TARGET beliefs.
+        # Prediction error scales LEARNING RATE (how much to update).
         #
-        # The same principle applies to position priors as token priors:
-        # uniform averaging is most stable. Learning rate controls magnitude.
+        # This is the FEP principle: prediction error IS the learning signal.
+        # High error = surprise = model wrong = learn more
+        # Low error = expected = model good = learn less
         # =====================================================================
         mu_p_new = mu_q_batch[:, :N_prior, :].mean(dim=0)  # (N, K)
         sigma_p_new = sigma_q_batch[:, :N_prior, :].mean(dim=0)  # (N, K)
 
         # =====================================================================
+        # ERROR-SCALED LEARNING RATE (per-position)
+        # =====================================================================
+        # Prediction error modulates learning rate, not the target.
+        # This gives learning signal without destabilizing the target.
+        if per_position_error is not None and per_position_error.numel() > 0:
+            # Average error across batch for each position
+            pos_error = per_position_error[:, :N_prior].mean(dim=0)  # (N,)
+            # Normalize to [0, 1] range using sigmoid-like scaling
+            # error_scale = sigmoid(error - median) gives ~0.5 for median error
+            error_median = pos_error.median()
+            error_scale = torch.sigmoid(pos_error - error_median)  # (N,)
+            # Scale learning rate: base_lr * (0.5 to 1.5) based on error
+            # High error positions learn faster, low error slower
+            lr_scale = 0.5 + error_scale  # Range [0.5, 1.5]
+        else:
+            lr_scale = torch.ones(N_prior, device=mu_q_batch.device)
+
+        # =====================================================================
         # Apply update to persistent priors
         # =====================================================================
-        blend = self.config.prior_lr
+        base_blend = self.config.prior_lr
 
         if self.config.gradient_prior_updates:
             # GRADIENT-BASED PRIOR UPDATE
@@ -1874,12 +1891,19 @@ class PureFEPLayer(nn.Module):
             # Gradient descent on prior
             self.prior_mu[:N_prior, :].sub_(self.config.prior_grad_lr * grad_mu_p)
 
-            # EMA for sigma
-            self.prior_sigma[:N_prior, :].lerp_(sigma_p_new, blend)
+            # EMA for sigma (use base blend, not error-scaled)
+            self.prior_sigma[:N_prior, :].lerp_(sigma_p_new, base_blend)
         else:
-            # EXPONENTIAL MOVING AVERAGE
-            self.prior_mu[:N_prior, :].lerp_(mu_p_new, blend)
-            self.prior_sigma[:N_prior, :].lerp_(sigma_p_new, blend)
+            # EXPONENTIAL MOVING AVERAGE with per-position error-scaled learning rate
+            # blend_per_pos: (N,) -> (N, 1) for broadcasting with (N, K)
+            blend_per_pos = (base_blend * lr_scale).unsqueeze(-1)  # (N, 1)
+            # Manual lerp: prior = (1 - blend) * prior + blend * target
+            self.prior_mu[:N_prior, :] = (
+                (1 - blend_per_pos) * self.prior_mu[:N_prior, :] +
+                blend_per_pos * mu_p_new
+            )
+            # Sigma uses base blend (uncertainty shouldn't scale with error)
+            self.prior_sigma[:N_prior, :].lerp_(sigma_p_new, base_blend)
 
         # Track update statistics
         self.prior_update_count[:N_prior] += 1
@@ -2625,18 +2649,14 @@ class PureFEPTransformer(nn.Module):
 
             # Compute per-position weights for prior updates
             # =================================================================
-            # UNIFORM WEIGHTING for stable P-flow learning
+            # UNIFORM WEIGHTING + ERROR-SCALED LEARNING RATE
             # =================================================================
-            # After experimentation:
-            # - exp(-error): Only reinforces successes, never learns from mistakes
-            # - sqrt(error): Positive feedback loop causes explosion
-            # - uniform: Each position contributes equally, most stable
+            # Uniform weighting computes stable TARGET beliefs.
+            # Prediction error scales the LEARNING RATE per token.
             #
-            # The key insight: we're computing a weighted average of beliefs
-            # for each token that appeared as a target. Uniform weighting means
-            # each occurrence of token v contributes equally to updating π_v.
-            #
-            # The learning rate (prior_lr) controls update magnitude.
+            # This is the FEP principle: prediction error IS the learning signal.
+            # High error = surprise = model wrong = learn more
+            # Low error = expected = model good = learn less
             # =================================================================
             weights = torch.ones(B, N, device=final_mu_q.device) / (B * N)
 
@@ -2687,14 +2707,34 @@ class PureFEPTransformer(nn.Module):
                     token_counts_safe = token_counts.clamp(min=1e-8).unsqueeze(-1)  # (V, 1)
                     avg_beliefs = token_updates / token_counts_safe  # (V, K)
 
+                    # =========================================================
+                    # ERROR-SCALED LEARNING RATE (per-token)
+                    # =========================================================
+                    # Compute per-token average prediction error
+                    base_blend = self.config.prior_lr
+                    if per_position_errors is not None:
+                        errors_flat = per_position_errors.view(-1)  # (B*N,)
+                        token_error_sum = torch.zeros(self.config.vocab_size, device=final_mu_q.device)
+                        token_error_sum.scatter_add_(0, targets_flat, errors_flat)
+                        # Average error per token
+                        avg_token_error = token_error_sum / token_counts.clamp(min=1e-8)  # (V,)
+                        # Normalize using sigmoid relative to median
+                        error_median = avg_token_error[mask].median()
+                        error_scale = torch.sigmoid(avg_token_error - error_median)
+                        # Scale learning rate: base_lr * (0.5 to 1.5)
+                        lr_scale = 0.5 + error_scale  # (V,)
+                        blend_rate = (base_blend * lr_scale[mask]).unsqueeze(-1)  # (num_tokens, 1)
+                    else:
+                        blend_rate = base_blend
+
                     # EMA blend: new_prior = (1 - lr) * old_prior + lr * avg_belief
-                    blend_rate = self.config.prior_lr
                     self.prior_bank.prior_mu.data[mask] = (
                         (1 - blend_rate) * self.prior_bank.prior_mu.data[mask] +
                         blend_rate * avg_beliefs[mask]
                     )
 
                     # Optionally update prior_sigma too (if learnable)
+                    # Use base_blend (not error-scaled) for sigma updates
                     if self.prior_bank.learnable_sigma:
                         sigma_flat = final_sigma_q.view(-1, K)  # (B*N, K)
                         weighted_sigmas = weights_flat * sigma_flat
@@ -2702,9 +2742,9 @@ class PureFEPTransformer(nn.Module):
                         sigma_updates.scatter_add_(0, targets_flat.unsqueeze(-1).expand(-1, K), weighted_sigmas)
                         avg_sigmas = sigma_updates / token_counts_safe
 
-                        # Update log_prior_sigma via EMA
+                        # Update log_prior_sigma via EMA (use base_blend, not error-scaled)
                         current_sigma = torch.exp(self.prior_bank.log_prior_sigma.data)
-                        new_sigma = (1 - blend_rate) * current_sigma[mask] + blend_rate * avg_sigmas[mask]
+                        new_sigma = (1 - base_blend) * current_sigma[mask] + base_blend * avg_sigmas[mask]
                         self.prior_bank.log_prior_sigma.data[mask] = torch.log(new_sigma.clamp(min=1e-6))
 
     # =========================================================================
