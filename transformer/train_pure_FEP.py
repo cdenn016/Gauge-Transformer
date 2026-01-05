@@ -100,16 +100,18 @@ CONFIG = {
     # ADVANCED FEP FEATURES (experimental)
     # =========================================================================
     # Prior coupling: priors learn from each other via KL(p_i || Ω_ij·p_j)
-    'prior_coupling_enabled': False,
+    # CRITICAL: Must be True for gauge evolution! (∂F/∂φ includes prior term)
+    'prior_coupling_enabled': True,  # Was False - MUST be True!
     'lambda_prior': 0.1,
 
     # Gradient-based prior updates: use VFE gradient instead of EMA
     'gradient_prior_updates': True,
     'prior_grad_lr': 0.01,
 
-    # Gauge field evolution: learn gauge frames via gradient descent
+    # Gauge field evolution: φ evolves via dφ/dt = -∂F/∂φ (pure VFE!)
     'gauge_evolution_enabled': True,
     'gauge_lr': 0.01,
+    'phi_max_norm': 3.14159,  # Max norm for φ (π radians)
 
     # Dynamic layers: spawn/merge layers based on VFE (experimental)
     'dynamic_layers_enabled': False,

@@ -619,8 +619,9 @@ class PureFEPConfig:
     # Prior coupling: λ_γ term for priors learning from each other
     # Implements F_prior = λ_γ · Σ_ij KL(p_i || Ω_ij · p_j)
     # This allows priors to form consistent world model across positions
-    prior_coupling_enabled: bool = False
-    lambda_prior: float = 0.1         # Weight for prior-prior coupling
+    # CRITICAL: Must be True for dφ/dt! (∂F/∂φ includes prior coupling term)
+    prior_coupling_enabled: bool = True  # Was False - MUST be True for gauge evolution!
+    lambda_prior: float = 0.1            # Weight for prior-prior coupling
 
     # Gradient-based prior updates: use VFE gradient to update priors
     # Instead of simple EMA, update priors via: p ← p - η_p · ∂F/∂p
@@ -629,8 +630,10 @@ class PureFEPConfig:
 
     # Gauge field evolution: evolve gauge frames φ over time
     # Updates φ via: φ ← φ - η_φ · ∂F/∂φ
-    gauge_evolution_enabled: bool = False
-    gauge_lr: float = 0.01            # Learning rate for gauge frame evolution
+    # CRITICAL: Pure VFE requires this! φ is a dynamical field, not encoded
+    gauge_evolution_enabled: bool = True  # Was False - TRUE for pure VFE!
+    gauge_lr: float = 0.01               # Learning rate for gauge frame evolution
+    phi_max_norm: float = 3.14159        # Max norm for φ (π radians = 180° rotation)
 
     # Dynamic layer emergence: allow layers to spawn/merge based on VFE
     # When enabled, monitors VFE gradients to detect when new layers needed
@@ -934,6 +937,15 @@ class PureFEPLayer(nn.Module):
             self.register_buffer('prior_mu', torch.zeros(config.seq_length, embed_dim))
             self.register_buffer('prior_sigma', torch.ones(config.seq_length, embed_dim))
 
+        # =====================================================================
+        # GAUGE FRAMES φ: Persistent connection on principal bundle
+        # =====================================================================
+        # CRITICAL: φ is NOT "position encoded" - it's a dynamical field!
+        # Each position has φ_i ∈ so(N) that evolves via dφ/dt = -∂F/∂φ
+        # Position structure EMERGES from minimizing VFE, not imposed by encoding
+        phi_dim = getattr(config, '_phi_dim', config.phi_dim)
+        self.phi = nn.Parameter(torch.randn(config.seq_length, phi_dim) * 0.1)
+
         # Prior update statistics (for adaptive learning rate)
         self.register_buffer('prior_update_count', torch.zeros(config.seq_length))
         self.register_buffer('prior_prediction_error', torch.zeros(config.seq_length))
@@ -1036,13 +1048,27 @@ class PureFEPLayer(nn.Module):
         # Beliefs should inherit uncertainty from priors, not use magic numbers
         sigma_q = sigma_p.clone()
 
-        # Gauge frames start at identity
-        # phi_dim = 3 for SO(3), N(N-1)/2 for SO(N)
+        # =====================================================================
+        # GAUGE FRAMES φ: Use persistent learned field (not zeros!)
+        # =====================================================================
+        # φ is a dynamical parameter that evolves via dφ/dt = -∂F/∂φ
+        # NOT initialized to zeros - use learned persistent state
         phi_dim = getattr(self, '_phi_dim', 3)
-        phi = torch.zeros(B, N, phi_dim, device=device)
-        # Enable gradients for phi if gauge evolution is enabled
-        if self.config.gauge_evolution_enabled:
-            phi.requires_grad_(True)
+        N_phi = min(N, self.phi.shape[0])
+
+        # Get persistent phi (slice to sequence length, expand across batch)
+        phi = self.phi[:N_phi].unsqueeze(0).expand(B, -1, -1).clone()
+
+        # Pad if input sequence longer than stored phi
+        if N > N_phi:
+            # Use mean of existing phi for new positions (principled)
+            phi_mean = self.phi[:N_phi].mean(dim=0, keepdim=True)
+            phi_pad = phi_mean.expand(B, N - N_phi, -1).clone()
+            phi = torch.cat([phi, phi_pad], dim=1)
+
+        # Enable gradients for VFE descent (always! not just if evolution enabled)
+        # Gradient flows through VFE, then we update persistent self.phi
+        phi = phi.detach().requires_grad_(True)
 
         return mu_q, sigma_q, mu_p, sigma_p, phi
 
@@ -2024,6 +2050,27 @@ class PureFEPLayer(nn.Module):
         # Aggregate metrics
         final_metrics = {k: sum(m[k] for m in all_metrics) / len(all_metrics)
                         for k in all_metrics[0].keys()}
+
+        # ==================================================================
+        # UPDATE PERSISTENT φ via dφ/dt = -∂F/∂φ
+        # ==================================================================
+        # CRITICAL: φ is a learned parameter that evolves via VFE gradients!
+        # After VFE steps, update the persistent self.phi (per-position)
+        if self.config.gauge_evolution_enabled and phi.grad is not None:
+            with torch.no_grad():
+                # Average gradient across batch (positions have shared φ)
+                grad_phi_batch = phi.grad.mean(dim=0)  # (N, phi_dim)
+
+                # Update persistent phi: dφ/dt = -∂F/∂φ
+                N_phi = min(N, self.phi.shape[0])
+                self.phi.data[:N_phi] -= self.config.gauge_lr * grad_phi_batch[:N_phi]
+
+                # Normalize to prevent explosion (optional)
+                # Max norm prevents φ from growing unbounded
+                if hasattr(self.config, 'phi_max_norm') and self.config.phi_max_norm > 0:
+                    phi_norm = self.phi.data.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+                    scale = torch.clamp(self.config.phi_max_norm / phi_norm, max=1.0)
+                    self.phi.data = self.phi.data * scale
 
         info = {
             'metrics': final_metrics,
