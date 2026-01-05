@@ -2748,10 +2748,63 @@ class PureFEPTransformer(nn.Module):
                         blend_rate = base_blend
 
                     # EMA blend: new_prior = (1 - lr) * old_prior + lr * avg_belief
+                    # This PULLS the correct token's prior toward the beliefs
                     self.prior_bank.prior_mu.data[mask] = (
                         (1 - blend_rate) * self.prior_bank.prior_mu.data[mask] +
                         blend_rate * avg_beliefs[mask]
                     )
+
+                    # =========================================================
+                    # CONTRASTIVE UPDATE: Push wrong predictions away
+                    # =========================================================
+                    # Without this, all priors converge to similar values.
+                    # We need to push the PREDICTED token's prior AWAY from beliefs
+                    # when the prediction was wrong.
+                    #
+                    # For each position:
+                    #   - If predicted ≠ target: push π_predicted away from q
+                    #   - This increases KL(q || π_predicted), making wrong predictions less likely
+                    # =========================================================
+                    with torch.no_grad():
+                        # Get logits and predictions
+                        logits = self.prior_bank.decode(final_mu_q, final_sigma_q, tau=1.0)  # (B, N, V)
+                        predictions = logits.argmax(dim=-1).view(-1)  # (B*N,)
+                        targets_flat_for_contrast = targets.view(-1)  # (B*N,)
+
+                        # Find wrong predictions
+                        wrong_mask = predictions != targets_flat_for_contrast  # (B*N,)
+
+                        if wrong_mask.any():
+                            # Get beliefs at wrong positions
+                            wrong_beliefs = mu_flat[wrong_mask]  # (num_wrong, K)
+                            wrong_predictions = predictions[wrong_mask]  # (num_wrong,)
+
+                            # Accumulate push updates per wrongly-predicted token
+                            wrong_token_counts = torch.zeros(self.config.vocab_size, device=final_mu_q.device)
+                            wrong_token_beliefs = torch.zeros_like(self.prior_bank.prior_mu.data)
+
+                            ones = torch.ones(wrong_mask.sum(), device=final_mu_q.device)
+                            wrong_token_counts.scatter_add_(0, wrong_predictions, ones)
+                            wrong_token_beliefs.scatter_add_(0, wrong_predictions.unsqueeze(-1).expand(-1, K), wrong_beliefs)
+
+                            wrong_mask_tokens = wrong_token_counts > 0
+                            if wrong_mask_tokens.any():
+                                wrong_counts_safe = wrong_token_counts[wrong_mask_tokens].clamp(min=1).unsqueeze(-1)
+                                avg_wrong_beliefs = wrong_token_beliefs[wrong_mask_tokens] / wrong_counts_safe
+
+                                # PUSH away: prior moves in opposite direction
+                                # Use smaller learning rate for stability (0.5x)
+                                push_rate = base_blend * error_magnitude_scale * 0.5
+                                current_priors = self.prior_bank.prior_mu.data[wrong_mask_tokens]
+                                # Push direction: current - avg_beliefs (away from beliefs)
+                                push_direction = current_priors - avg_wrong_beliefs
+                                # Normalize to prevent explosion
+                                push_norm = push_direction.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+                                push_direction = push_direction / push_norm
+                                # Apply push (move prior away from beliefs)
+                                self.prior_bank.prior_mu.data[wrong_mask_tokens] = (
+                                    current_priors + push_rate * push_direction
+                                )
 
                     # Optionally update prior_sigma too (if learnable)
                     # Use base_blend (not error-scaled) for sigma updates
