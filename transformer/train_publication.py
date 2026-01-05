@@ -1432,6 +1432,12 @@ def run_single_experiment(
 
         model = PureFEPTransformer(pure_fep_model_config)
 
+        # Verify gauge_fixed_priors setting
+        if model.prior_bank is not None:
+            print(f"    gauge_fixed_priors: {model.prior_bank.gauge_fixed_priors}")
+        print(f"    embedding_mode: {pure_fep_model_config.embedding_mode}")
+        print(f"    output_mode: {pure_fep_model_config.output_mode}")
+
     # =====================================================================
     # MODE 3: VFE_DYNAMIC TRANSFORMER (EM-step, uses backprop)
     # =====================================================================
