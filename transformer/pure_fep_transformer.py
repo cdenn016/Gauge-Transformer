@@ -2610,17 +2610,9 @@ class PureFEPTransformer(nn.Module):
             final_mu_q, final_sigma_q = layer_infos[-1]['beliefs']  # (B, N, K)
             B, N, K = final_mu_q.shape
 
-            # Compute per-position weights from prediction errors
-            # Lower error = higher weight (token prior should move toward this belief)
-            if per_position_errors is not None:
-                # Convert errors to weights: exp(-error) gives higher weight to lower errors
-                # Clamp errors to avoid numerical issues
-                errors_clamped = per_position_errors.clamp(max=10.0)  # (B, N)
-                weights = torch.exp(-errors_clamped)  # (B, N)
-                # Normalize weights per token to sum to 1
-                weights = weights / (weights.sum() + 1e-8)
-            else:
-                weights = torch.ones(B, N, device=final_mu_q.device) / (B * N)
+            # Uniform weighting for stable P-flow learning
+            # Each position contributes equally to updating its target token's prior
+            weights = torch.ones(B, N, device=final_mu_q.device) / (B * N)
 
             # Check if using gauge-fixed priors or standard per-token priors
             if self.prior_bank.gauge_fixed_priors:
