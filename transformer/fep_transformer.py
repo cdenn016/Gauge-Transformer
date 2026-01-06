@@ -210,14 +210,22 @@ def rodrigues_so3(phi: torch.Tensor) -> torch.Tensor:
     """
     Rodrigues formula for SO(3) - efficient closed form.
 
-    exp(φ) = I + (sin θ / θ) φ̂ + ((1 - cos θ) / θ²) φ̂²
+    exp(φ) = I + (sin θ / θ) A + ((1 - cos θ) / θ²) A²
 
-    where θ = ||φ|| and φ̂ is the skew-symmetric matrix.
+    where θ = ||φ|| and A is the Lie algebra element (skew-symmetric matrix).
+
+    IMPORTANT: Uses the same generator basis as so_n_generators(3):
+        T_0: (0,1)=1, (1,0)=-1  (xy-plane rotation)
+        T_1: (0,2)=1, (2,0)=-1  (xz-plane rotation)
+        T_2: (1,2)=1, (2,1)=-1  (yz-plane rotation)
+
+    So A = φ_0 T_0 + φ_1 T_1 + φ_2 T_2 gives:
+        A = [[0, φ_0, φ_1], [-φ_0, 0, φ_2], [-φ_1, -φ_2, 0]]
 
     Only valid for SO(3) (dim_g = 3)!
 
     Args:
-        phi: (..., 3) axis-angle representation
+        phi: (..., 3) Lie algebra coefficients
 
     Returns:
         R: (..., 3, 3) rotation matrix
@@ -225,17 +233,16 @@ def rodrigues_so3(phi: torch.Tensor) -> torch.Tensor:
     theta = torch.norm(phi, dim=-1, keepdim=True).unsqueeze(-1)  # (..., 1, 1)
     theta = theta.clamp(min=1e-8)  # Avoid division by zero
 
-    # Skew-symmetric matrix [φ]_×
-    # For φ = (φ_1, φ_2, φ_3):
-    # [φ]_× = [[0, -φ_3, φ_2], [φ_3, 0, -φ_1], [-φ_2, φ_1, 0]]
+    # Skew-symmetric matrix A = φ^a T_a matching so_n_generators(3) basis
+    # A = [[0, φ_0, φ_1], [-φ_0, 0, φ_2], [-φ_1, -φ_2, 0]]
     batch_shape = phi.shape[:-1]
-    phi_hat = torch.zeros(*batch_shape, 3, 3, device=phi.device, dtype=phi.dtype)
-    phi_hat[..., 0, 1] = -phi[..., 2]
-    phi_hat[..., 0, 2] = phi[..., 1]
-    phi_hat[..., 1, 0] = phi[..., 2]
-    phi_hat[..., 1, 2] = -phi[..., 0]
-    phi_hat[..., 2, 0] = -phi[..., 1]
-    phi_hat[..., 2, 1] = phi[..., 0]
+    A = torch.zeros(*batch_shape, 3, 3, device=phi.device, dtype=phi.dtype)
+    A[..., 0, 1] = phi[..., 0]
+    A[..., 0, 2] = phi[..., 1]
+    A[..., 1, 0] = -phi[..., 0]
+    A[..., 1, 2] = phi[..., 2]
+    A[..., 2, 0] = -phi[..., 1]
+    A[..., 2, 1] = -phi[..., 2]
 
     I = torch.eye(3, device=phi.device, dtype=phi.dtype).expand(*batch_shape, 3, 3)
 
@@ -243,8 +250,8 @@ def rodrigues_so3(phi: torch.Tensor) -> torch.Tensor:
     sin_theta = torch.sin(theta)
     cos_theta = torch.cos(theta)
 
-    R = I + (sin_theta / theta) * phi_hat + \
-        ((1 - cos_theta) / (theta ** 2)) * torch.einsum('...ij,...jk->...ik', phi_hat, phi_hat)
+    R = I + (sin_theta / theta) * A + \
+        ((1 - cos_theta) / (theta ** 2)) * torch.einsum('...ij,...jk->...ik', A, A)
 
     return R
 
