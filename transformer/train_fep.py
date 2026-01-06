@@ -340,6 +340,60 @@ def main():
 
     print(f"\nTraining complete! Best validation PPL: {best_val_ppl:.1f}")
 
+    # Run inference examples
+    if tokenizer is not None:
+        print("\n" + "=" * 60)
+        print("GENERATION EXAMPLES")
+        print("=" * 60)
+        run_inference_examples(model, tokenizer, device)
+
+
+def run_inference_examples(model, tokenizer, device, num_examples=5):
+    """Generate text samples from the trained model."""
+    model.eval()
+
+    prompts = [
+        "The meaning of life is",
+        "In the beginning",
+        "Scientists have discovered",
+        "The president announced",
+        "Once upon a time",
+    ]
+
+    for prompt in prompts[:num_examples]:
+        print(f"\nPrompt: {prompt}")
+        print("-" * 40)
+
+        # Tokenize prompt
+        input_ids = tokenizer.encode(prompt, return_tensors='pt').to(device)
+
+        # Generate
+        with torch.no_grad():
+            output_ids = model.generate(
+                input_ids,
+                max_new_tokens=30,
+                temperature=0.8
+            )
+
+        # Decode
+        generated = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+        print(f"Generated: {generated}")
+
+    # Also show attention pattern for one example
+    print("\n" + "=" * 60)
+    print("ATTENTION ANALYSIS")
+    print("=" * 60)
+
+    input_ids = tokenizer.encode("The cat sat on the", return_tensors='pt').to(device)
+    with torch.no_grad():
+        outputs = model(input_ids[:, :-1], input_ids[:, 1:], return_components=True)
+
+    if 'attention' in outputs and outputs['attention'] is not None:
+        attn = outputs['attention'][0]  # First batch
+        print(f"Attention shape: {attn.shape}")
+        print(f"Attention (last token attending to all):")
+        print(attn[-1, :].cpu().numpy().round(3))
+
 
 if __name__ == '__main__':
     main()
