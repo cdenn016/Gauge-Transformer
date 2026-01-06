@@ -61,6 +61,7 @@ DEFAULT_CONFIG = {
     'log_interval': 100,
     'eval_interval': 500,
     'save_interval': 1000,
+    'sample_interval': 500,   # Show random generation sample every N batches
 }
 
 
@@ -134,12 +135,48 @@ class RandomDataset(torch.utils.data.Dataset):
 # TRAINING LOOP
 # =============================================================================
 
-def train_epoch(model, dataloader, optimizer, config, device, epoch):
+import random
+
+SAMPLE_PROMPTS = [
+    "The dog",
+    "In the morning",
+    "Scientists believe",
+    "The president",
+    "Once upon a time",
+    "The weather",
+    "According to",
+    "Many people",
+    "The new",
+    "After the",
+]
+
+
+@torch.no_grad()
+def quick_sample(model, tokenizer, device, temperature=0.8, max_tokens=20):
+    """Generate a quick sample from a random prompt."""
+    model.eval()
+    prompt = random.choice(SAMPLE_PROMPTS)
+    input_ids = tokenizer.encode(prompt, return_tensors='pt').to(device)
+
+    output_ids = model.generate(
+        input_ids,
+        max_new_tokens=max_tokens,
+        temperature=temperature
+    )
+
+    generated = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+    model.train()
+    return prompt, generated
+
+
+def train_epoch(model, dataloader, optimizer, config, device, epoch, tokenizer=None):
     """Train for one epoch."""
     model.train()
     total_loss = 0
     total_ce = 0
     n_batches = 0
+
+    sample_interval = config.get('sample_interval', 500)  # Show sample every N batches
 
     pbar = tqdm(dataloader, desc=f'Epoch {epoch}')
     for batch_idx, batch in enumerate(pbar):
@@ -179,6 +216,11 @@ def train_epoch(model, dataloader, optimizer, config, device, epoch):
                 'CE': f'{avg_ce:.4f}',
                 'PPL': f'{ppl:.1f}'
             })
+
+        # Periodic sample generation
+        if tokenizer is not None and batch_idx > 0 and batch_idx % sample_interval == 0:
+            prompt, generated = quick_sample(model, tokenizer, device)
+            tqdm.write(f"\n  [Sample] \"{prompt}\" → {generated}\n")
 
     return total_loss / n_batches, total_ce / n_batches
 
@@ -315,7 +357,7 @@ def main():
         start_time = time.time()
 
         train_loss, train_ce = train_epoch(
-            model, train_loader, optimizer, config, device, epoch
+            model, train_loader, optimizer, config, device, epoch, tokenizer
         )
 
         val_loss, val_ce, val_ppl = evaluate(model, val_loader, device)
