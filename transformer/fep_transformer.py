@@ -1069,6 +1069,40 @@ class FEPTransformer(nn.Module):
         if tie_embeddings:
             self.output_proj.weight = self.belief_embed.mu.weight
 
+    def _run_q_flow(self, beliefs: GaussianBelief, priors: GaussianBelief,
+                    mask: torch.Tensor) -> Tuple[GaussianBelief, torch.Tensor, torch.Tensor]:
+        """
+        Run Q-flow iterations to optimize beliefs.
+
+        Returns updated beliefs, final vfe_internal, and attention weights.
+        """
+        for q_iter in range(self.q_flow.n_iterations):
+            # Ensure gradients can be computed
+            beliefs.mu.requires_grad_(True)
+            beliefs.sigma.requires_grad_(True)
+
+            f_self = self.vfe.f_self(beliefs)
+            f_align, attn = self.vfe.f_align(beliefs, mask)
+            f_prior = self.vfe.f_prior(beliefs, priors)
+
+            # Internal VFE for optimization (NO f_obs!)
+            vfe_internal = (self.vfe.alpha * f_self +
+                           self.vfe.beta * f_align +
+                           self.vfe.gamma * f_prior)
+
+            # Compute gradients w.r.t. beliefs
+            grads = torch.autograd.grad(
+                vfe_internal,
+                [beliefs.mu, beliefs.sigma],
+                create_graph=self.training,
+                retain_graph=True
+            )
+
+            # Update beliefs via natural gradient
+            beliefs = self.q_flow.step(beliefs, grads[0], grads[1])
+
+        return beliefs, vfe_internal, attn
+
     def forward(self,
                 input_ids: torch.Tensor,
                 targets: Optional[torch.Tensor] = None,
@@ -1096,36 +1130,23 @@ class FEPTransformer(nn.Module):
         # Q-flow: iterative belief updates
         # CRITICAL: Do NOT include targets during Q-flow to prevent label leakage
         # The model must optimize beliefs based ONLY on self-consistency and priors
-        for q_iter in range(self.q_flow.n_iterations):
-            # Compute BLIND VFE (no observation term - no peeking at targets!)
-            beliefs.mu.requires_grad_(True)
-            beliefs.sigma.requires_grad_(True)
 
-            f_self = self.vfe.f_self(beliefs)
-            f_align, attn = self.vfe.f_align(beliefs, mask)
-            f_prior = self.vfe.f_prior(beliefs, priors)
+        # Check if we're in inference mode (no gradients available)
+        inference_mode = not torch.is_grad_enabled()
 
-            # Internal VFE for optimization (NO f_obs!)
-            vfe_internal = (self.vfe.alpha * f_self +
-                           self.vfe.beta * f_align +
-                           self.vfe.gamma * f_prior)
-
-            # Compute gradients w.r.t. beliefs
-            grads = torch.autograd.grad(
-                vfe_internal,
-                [beliefs.mu, beliefs.sigma],
-                create_graph=self.training,
-                retain_graph=True
-            )
-
-            # Update beliefs via natural gradient
-            beliefs = self.q_flow.step(beliefs, grads[0], grads[1])
+        if inference_mode:
+            # During inference, run Q-flow with gradient computation enabled
+            with torch.enable_grad():
+                beliefs, vfe_internal, attn = self._run_q_flow(beliefs, priors, mask)
+        else:
+            # During training, run normally
+            beliefs, vfe_internal, attn = self._run_q_flow(beliefs, priors, mask)
 
         # Output logits (AFTER Q-flow has finished)
         logits = self.output_proj(beliefs.mu)
 
-        # Now compute observation loss for training (only AFTER belief optimization)
-        components = {'attention': attn, 'f_self': f_self.item(), 'f_align': f_align.item(), 'f_prior': f_prior.item()}
+        # Components for logging
+        components = {'attention': attn, 'vfe_internal': vfe_internal.item()}
 
         result = {'logits': logits}
 
