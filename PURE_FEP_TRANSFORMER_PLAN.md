@@ -1,4 +1,4 @@
-# Pure FEP Transformer: Ground-Up Implementation Plan (REVISED)
+# Pure FEP Transformer: Ground-Up Implementation Plan (REVISED v2)
 
 ## Executive Summary
 
@@ -6,11 +6,14 @@ This document provides a detailed plan to implement a **Pure Free Energy Princip
 
 **Key Design Decisions:**
 1. **Gauge Frames for Semantic Encoding**: φ encodes semantic/feature structure, NOT position
-2. **Full Transport Operators**: Ω_ij = exp(φ_i)·exp(-φ_j) is used in ALL KL terms
-3. **Complete VFE with Prior Coupling**: Includes the γ_ij·KL(p_i||Ω_ij·p_j) term
-4. **Position via Priors Only**: Position-dependent priors (μ_p, σ_p), NO position in φ
-5. **Two Timescales**: Q-flow (beliefs), P-flow (priors), and **φ-flow** (gauge frames)
-6. **No Neural Networks**: Zero MLPs, zero learned projection matrices, zero activation functions
+2. **Full Transport via BCH**: Ω_ij computed using Baker-Campbell-Hausdorff formula, NOT naive subtraction
+3. **SO(N) Compatible**: Works with fundamental and higher irreps of any SO(N)
+4. **Block-Diagonal Covariance**: Preserves correlations within irrep blocks
+5. **Complete VFE with Prior Coupling**: Includes the γ_ij·KL(p_i||Ω_ij·p_j) term
+6. **Position via Priors Only**: Position-dependent priors (μ_p, σ_p), NO position in φ
+7. **Haar Initialization**: Break symmetry with proper group-theoretic initialization
+8. **Ouroboros Tower**: Optional Phase 2 extension for long-range memory
+9. **No Neural Networks**: Zero MLPs, zero learned projection matrices, zero activation functions
 
 ---
 
@@ -26,6 +29,7 @@ F[{q_i}, {p_i}, {φ_i}] =
   + λ_β · Σ_ij β_ij · KL(q_i || Ω_ij·q_j)           [Belief alignment with transport]
   + λ_γ · Σ_ij γ_ij · KL(p_i || Ω_ij·p_j)           [Prior coupling with transport]
   - Σ_i E_{q_i}[log p(y_i | z_i)]                    [Observation likelihood]
+  + Σ_i Σ_d decay^d · KL(p_i || h_i^d)              [Ouroboros Tower - PHASE 2]
 ```
 
 where:
@@ -33,6 +37,7 @@ where:
 - **β_ij** are belief attention weights
 - **γ_ij** are prior (model) attention weights
 - **φ_i ∈ 𝔤** are gauge frames in the Lie algebra
+- **h_i^d** are hyperpriors from ancestor depth d (Ouroboros)
 
 ### 1.2 Why Gauge Frames are ESSENTIAL
 
@@ -41,348 +46,619 @@ The gauge frames φ_i encode the **semantic reference frame** of each agent/toke
 1. **Semantic Orientation**: φ encodes HOW a token "sees" the embedding space
 2. **Feature Encoding**: Different tokens have different φ, encoding their semantic role
 3. **Transport = Communication**: Ω_ij transforms j's beliefs into i's frame for comparison
-4. **Multi-Head from Lie Algebra**: For SO(3), dim(𝔤) = 3 gives 3 natural heads
+4. **Multi-Head from Lie Algebra**: For SO(N), dim(𝔤) = N(N-1)/2 gives natural heads
 
 **Critical Distinction**:
 - **φ encodes WHAT** (semantic features, token identity)
 - **Position priors encode WHERE** (sequence position)
 
-### 1.3 The Transport Operator
+### 1.3 Multi-Head: The Geometry IS Multi-Headed
 
-For gauge group G (typically SO(3) or SO(N)), with generators {G_a}:
+**Important**: We do NOT treat generators as separate "heads" with separate β matrices.
 
-```
-φ_i = Σ_a φ_i^(a) · G_a    ∈ 𝔤 (Lie algebra)
-
-Ω_ij = exp(φ_i) · exp(-φ_j)  ∈ G (Lie group)
-```
-
-The transport acts on Gaussian statistics:
-```
-Ω_ij · N(μ_j, Σ_j) = N(Ω_ij · μ_j, Ω_ij · Σ_j · Ω_ij^T)
-```
-
-For diagonal covariances with efficient transport:
-```
-(Ω · diag(σ) · Ω^T)_kk = Σ_l Ω_kl² · σ_l
-```
-
-### 1.4 Attention as Transported Belief Alignment
-
-Attention weights emerge from KL divergence **after transport**:
+The VFE is a **single scalar**. The gradient ∂F/∂φ naturally decomposes:
 
 ```
-β_ij = softmax_j(-KL(q_i || Ω_ij·q_j) / κ_β)
-γ_ij = softmax_j(-KL(p_i || Ω_ij·p_j) / κ_γ)
+∂F/∂φ_i = Σ_a (∂F/∂φ_i^(a)) · e_a
 ```
 
-**Why transport matters for attention:**
-- Without transport: comparing apples to oranges
-- With transport: align j's frame to i's frame, THEN compare
-- Tokens with aligned frames (small ||φ_i - φ_j||) have easier communication
-
-### 1.5 Multi-Head Attention from Lie Algebra
-
-For G = SO(3), the Lie algebra 𝔤 = so(3) has dimension 3:
-```
-Number of heads H = dim(𝔤) = 3
-```
-
-Each generator G_a defines a rotation axis, creating 3 natural attention heads:
-- Head 1: Rotations around x-axis
-- Head 2: Rotations around y-axis
-- Head 3: Rotations around z-axis
-
-The embedding space decomposes via irreducible representations (irreps):
-```
-K = n_0·1 + n_1·3 + n_2·5 + ...
-    [scalars] [vectors] [rank-2 tensors]
-```
-
-For K=64: could use 10 scalars + 18 vectors = 10·1 + 18·3 = 64
+where e_a are basis vectors in ℝ^{dim(𝔤)}. Each generator component captures a different axis of semantic variation automatically.
 
 ---
 
-## II. Core Architecture
+## II. Efficient Transport via Baker-Campbell-Hausdorff
 
-### 2.1 Agent Representation (Complete)
+### 2.1 Why Naive Subtraction is WRONG
 
-Each token position i has a **full section** of the bundle:
-
+For non-abelian groups like SO(N):
 ```
-Agent i = (q_i, p_i, φ_i)
-
-where:
-  q_i = N(μ_qi, σ_qi²)   - belief (posterior)
-  p_i = N(μ_pi, σ_pi²)   - prior (generative model)
-  φ_i ∈ ℝ^{phi_dim}      - gauge frame (semantic orientation)
+exp(φ_i) · exp(-φ_j) ≠ exp(φ_i - φ_j)   ← WRONG!
 ```
 
-**Shapes:**
+The group is non-commutative. We MUST use the BCH formula.
+
+### 2.2 The BCH Formula
+
 ```
-μ_q:    (batch, seq_len, embed_dim)  - belief means
-σ_q:    (batch, seq_len, embed_dim)  - belief stds
-μ_p:    (seq_len, embed_dim)         - position prior means
-σ_p:    (seq_len, embed_dim)         - position prior stds
-φ:      (batch, seq_len, phi_dim)    - gauge frames
+exp(X) · exp(Y) = exp(X + Y + ½[X,Y] + 1/12[X,[X,Y]] - 1/12[Y,[X,Y]] + ...)
 ```
 
-For SO(3): phi_dim = 3
-For SO(N): phi_dim = N(N-1)/2
+For Ω_ij = exp(X_i) · exp(-X_j) where X_i = φ_i^(a) G_a:
 
-### 2.2 Token Prior Bank (with Gauge Frames!)
+```
+Ω_ij = exp(φ_ij · G)
 
-Each vocabulary token v has a **complete prior section**:
+where φ_ij = φ_i - φ_j - ½[φ_i, φ_j]_𝔤 + O(φ³)
+```
+
+### 2.3 Structure Constants for SO(N)
+
+The Lie bracket in coordinates uses structure constants f_abc:
+
+```
+[G_a, G_b] = Σ_c f_abc G_c
+```
+
+For SO(N), the generators are antisymmetric N×N matrices indexed by pairs (p,q) with p < q:
+```
+(G_pq)_ij = δ_pi δ_qj - δ_pj δ_qi
+```
+
+The structure constants are:
+```
+f_{(pq)(rs)(tu)} = δ_qr δ_pt δ_su - δ_qr δ_ps δ_tu - δ_pr δ_qt δ_su + δ_pr δ_qs δ_tu + ...
+```
 
 ```python
-class TokenPriorBank:
+def compute_soN_structure_constants(N):
     """
-    Each token v has: π_v = (μ_v, σ_v, φ_v)
+    Compute structure constants f_abc for so(N).
 
-    The gauge frame φ_v encodes the token's SEMANTIC orientation.
-    Different tokens "see" the embedding space from different angles.
-    """
-    μ_tokens: (vocab_size, embed_dim)   # semantic content
-    σ_tokens: (vocab_size, embed_dim)   # uncertainty
-    φ_tokens: (vocab_size, phi_dim)     # semantic frame
-```
-
-**Encoding**: Initialize agent from token prior:
-```
-q_i ← N(μ_{token[i]}, σ_{token[i]})
-φ_i ← φ_{token[i]}
-```
-
-**Decoding**: Output via transported KL:
-```
-logits_v = -KL(q_i || Ω_{iv}·π_v) / τ
-
-where Ω_{iv} = exp(φ_i)·exp(-φ_v) transports token prior to agent's frame
-```
-
-### 2.3 Position-Dependent Priors (NO φ for position!)
-
-Position is encoded in priors, NOT in gauge frames:
-
-```python
-class PositionPriors:
-    """
-    Position structure in (μ_p, σ_p) only.
-    Gauge frames φ are for SEMANTIC encoding.
-    """
-    μ_p: (max_seq_len, embed_dim)   # position-dependent means
-    σ_p: (max_seq_len, embed_dim)   # position-dependent stds
-    # NO φ_position!
-```
-
-**Why this separation?**
-- φ should be **shift-invariant** (same token → same φ regardless of position)
-- Position structure emerges from (μ_p, σ_p) learning different patterns
-- Transport Ω_ij depends on semantic frames, not position
-
-### 2.4 Single Layer Structure
-
-```
-Input: (μ_q, σ_q, φ) from previous layer or token encoding
-       (μ_p, σ_p) position priors for this layer
-
-1. COMPUTE TRANSPORT OPERATORS:
-   For all pairs (i,j):
-     Ω_ij = exp(φ_i·G) · exp(-φ_j·G)
-
-2. COMPUTE ATTENTION (from transported beliefs):
-   KL_ij = KL(q_i || Ω_ij·q_j)
-   β_ij = softmax_j(-KL_ij / κ_β)
-
-3. VFE GRADIENT DESCENT (Q-flow):
-   for step in range(n_vfe_steps):
-     F = α·Σ KL(q||p) + λ_β·Σ β·KL(q||Ω·q) + λ_γ·Σ γ·KL(p||Ω·p) - log p(y|q)
-
-     # Natural gradient updates
-     μ_q ← μ_q - η_μ · σ_q² · ∂F/∂μ_q
-     σ_q ← σ_q · exp(-η_σ · ∂F/∂log_σ_q)
-     φ ← φ - η_φ · ∂F/∂φ
-
-     # Optionally recompute β (dynamic attention)
-     β_ij = softmax(-KL(q_i||Ω_ij·q_j) / κ_β)
-
-Output: (μ_q, σ_q, φ) updated beliefs and frames
-```
-
----
-
-## III. The VFE Components in Detail
-
-### 3.1 Self-Coupling: KL(q_i || p_i)
-
-Standard diagonal Gaussian KL (no transport needed - same agent):
-
-```python
-def kl_self_coupling(μ_q, σ_q, μ_p, σ_p, eps=1e-6):
-    """KL(q || p) for diagonal Gaussians."""
-    var_q = σ_q.square() + eps
-    var_p = σ_p.square() + eps
-
-    kl = 0.5 * (
-        torch.log(var_p / var_q)
-        + var_q / var_p
-        + (μ_q - μ_p).square() / var_p
-        - 1.0
-    )
-    return kl.sum(dim=-1)  # (B, N)
-```
-
-### 3.2 Belief Alignment: Σ β_ij · KL(q_i || Ω_ij·q_j)
-
-**WITH GAUGE TRANSPORT**:
-
-```python
-def compute_transport_operators(phi, generators):
-    """
-    Compute Ω_ij = exp(φ_i·G)·exp(-φ_j·G) for all pairs.
-
-    Args:
-        phi: (B, N, phi_dim) gauge frames
-        generators: (phi_dim, K, K) Lie algebra generators
+    dim(so(N)) = N(N-1)/2
 
     Returns:
-        Ω: (B, N, N, K, K) transport operators
+        f: (dim_g, dim_g, dim_g) antisymmetric tensor
     """
-    B, N, phi_dim = phi.shape
-    K = generators.shape[1]
+    dim_g = N * (N - 1) // 2
+    f = torch.zeros(dim_g, dim_g, dim_g)
 
-    # Compute exp(φ·G) for each agent
-    phi_dot_G = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
-    R = torch.linalg.matrix_exp(phi_dot_G)  # (B, N, K, K)
+    # Index mapping: (p,q) with p<q -> linear index
+    def pair_to_idx(p, q):
+        # Row-major upper triangular indexing
+        return p * N - p * (p + 1) // 2 + (q - p - 1)
 
-    # Ω_ij = R_i @ R_j^T
-    Omega = torch.einsum('bnik,bnjk->bnijk', R, R)  # (B, N, N, K, K)
-    # Note: R_j^T = inv(R_j) for orthogonal matrices
+    def idx_to_pair(k):
+        # Inverse mapping
+        p = 0
+        while pair_to_idx(p, N-1) < k:
+            p += 1
+        if p > 0:
+            p -= 1
+        while pair_to_idx(p, p+1) + (N - p - 2) < k:
+            p += 1
+        q = k - pair_to_idx(p, p+1) + p + 1
+        return p, q
 
-    return Omega
+    # Compute [G_ab, G_cd] for all pairs
+    for k1 in range(dim_g):
+        a, b = idx_to_pair(k1)  # G_ab
+        for k2 in range(dim_g):
+            c, d = idx_to_pair(k2)  # G_cd
 
-def kl_transported(μ_q, σ_q, Omega, eps=1e-6):
+            # [G_ab, G_cd] = δ_bc G_ad - δ_ac G_bd - δ_bd G_ac + δ_ad G_bc
+            contributions = []
+
+            if b == c and a != d:
+                p, q = (a, d) if a < d else (d, a)
+                sign = 1.0 if a < d else -1.0
+                contributions.append((pair_to_idx(p, q), sign))
+
+            if a == c and b != d:
+                p, q = (b, d) if b < d else (d, b)
+                sign = -1.0 if b < d else 1.0
+                contributions.append((pair_to_idx(p, q), sign))
+
+            if b == d and a != c:
+                p, q = (a, c) if a < c else (c, a)
+                sign = -1.0 if a < c else 1.0
+                contributions.append((pair_to_idx(p, q), sign))
+
+            if a == d and b != c:
+                p, q = (b, c) if b < c else (c, b)
+                sign = 1.0 if b < c else -1.0
+                contributions.append((pair_to_idx(p, q), sign))
+
+            for idx, sign in contributions:
+                f[k1, k2, idx] += sign
+
+    return f
+```
+
+### 2.4 BCH Combination in Lie Algebra Coordinates
+
+```python
+def bch_combine(phi_i, phi_j, structure_constants, order=2):
     """
-    KL(q_i || Ω_ij·q_j) for all pairs.
+    Compute φ_ij such that exp(φ_ij·G) ≈ exp(φ_i·G)·exp(-φ_j·G)
 
-    Transported belief: Ω_ij·q_j = N(Ω_ij·μ_j, Ω_ij·Σ_j·Ω_ij^T)
+    Uses BCH formula in Lie algebra coordinates - NO matrix exponentials!
+
+    Args:
+        phi_i: (B, N, dim_g) - source gauge frames
+        phi_j: (B, N, dim_g) - target gauge frames
+        structure_constants: (dim_g, dim_g, dim_g) - f_abc
+        order: BCH truncation (1=naive, 2=first commutator, 3=second order)
+
+    Returns:
+        phi_ij: (B, N, N, dim_g) - combined Lie algebra elements
     """
-    B, N, K = μ_q.shape
-    var_q = σ_q.square() + eps  # (B, N, K)
+    B, N, dim_g = phi_i.shape
 
-    # Transport means: Ω_ij @ μ_j
-    μ_transported = torch.einsum('bnijk,bjk->bnik', Omega, μ_q)  # (B, N, N, K)
+    # Expand for pairwise computation
+    phi_i_exp = phi_i.unsqueeze(2)  # (B, N, 1, dim_g)
+    phi_j_exp = phi_j.unsqueeze(1)  # (B, 1, N, dim_g)
 
-    # Transport variances (diagonal): (Ω @ diag(σ²) @ Ω^T)_kk = Σ_l Ω_kl² · σ_l²
-    var_transported = torch.einsum('bnijk,bjk,bnijk->bnik',
-                                    Omega, var_q, Omega)  # (B, N, N, K)
+    # Order 1: naive difference (only correct for abelian groups!)
+    phi_ij = phi_i_exp - phi_j_exp  # (B, N, N, dim_g)
 
-    # KL(q_i || transported_j)
-    μ_i = μ_q.unsqueeze(2)  # (B, N, 1, K)
-    var_i = var_q.unsqueeze(2)  # (B, N, 1, K)
+    if order >= 2:
+        # First commutator: -½[φ_i, φ_j]
+        # [X_i, X_j]^c = Σ_{a,b} φ_i^a φ_j^b f_abc
+        commutator = torch.einsum('bnia,bnjb,abc->bnijc',
+                                   phi_i_exp, phi_j_exp,
+                                   structure_constants)  # (B, N, N, dim_g)
+        phi_ij = phi_ij - 0.5 * commutator
 
-    kl = 0.5 * (
-        torch.log(var_transported / var_i)
-        + var_i / var_transported
-        + (μ_i - μ_transported).square() / var_transported
-        - 1.0
+    if order >= 3:
+        # Second order: +1/12[φ_i,[φ_i,φ_j]] - 1/12[φ_j,[φ_i,φ_j]]
+        # [φ_i, commutator]^c = Σ_{a,b} φ_i^a comm^b f_abc
+        comm_i_comm = torch.einsum('bnia,bnijb,abc->bnijc',
+                                    phi_i_exp, commutator,
+                                    structure_constants)
+        comm_j_comm = torch.einsum('bnjb,bnija,abc->bnijc',
+                                    phi_j_exp, commutator,
+                                    structure_constants)
+        phi_ij = phi_ij + (1.0/12.0) * comm_i_comm - (1.0/12.0) * comm_j_comm
+
+    return phi_ij
+```
+
+### 2.5 Efficient Rotation via Rodrigues (SO(3)) and Series (SO(N))
+
+**Key insight**: We never materialize the full (B, N, N, K, K) transport tensor!
+
+#### For SO(3): Rodrigues Formula
+
+```python
+def rodrigues_rotate(phi_ij, v):
+    """
+    Rodrigues formula: R(φ)·v = v·cos(θ) + (k×v)·sin(θ) + k(k·v)(1-cos(θ))
+
+    where θ = ||φ||, k = φ/θ (unit axis)
+
+    Args:
+        phi_ij: (B, N, N, 3) - axis-angle in so(3)
+        v: (B, N, 3) - vectors to rotate
+
+    Returns:
+        Rv: (B, N, N, 3) - rotated vectors
+
+    Complexity: O(B × N² × K) instead of O(B × N² × K²)
+    """
+    B, N1, N2, _ = phi_ij.shape
+
+    # Compute angle and axis
+    theta = phi_ij.norm(dim=-1, keepdim=True).clamp(min=1e-8)  # (B, N, N, 1)
+    k = phi_ij / theta  # unit axis (B, N, N, 3)
+
+    cos_t = torch.cos(theta)  # (B, N, N, 1)
+    sin_t = torch.sin(theta)
+
+    # Expand v for broadcasting: (B, 1, N, 3)
+    v_exp = v.unsqueeze(1)
+
+    # k · v (dot product)
+    k_dot_v = (k * v_exp).sum(dim=-1, keepdim=True)  # (B, N, N, 1)
+
+    # k × v (cross product)
+    k_cross_v = torch.cross(k, v_exp.expand(-1, N1, -1, -1), dim=-1)  # (B, N, N, 3)
+
+    # Rodrigues formula
+    Rv = v_exp * cos_t + k_cross_v * sin_t + k * k_dot_v * (1 - cos_t)
+
+    return Rv  # (B, N, N, 3)
+```
+
+#### For SO(N): Truncated Exponential Series
+
+```python
+def soN_rotate(phi_ij, v, generators, max_terms=4):
+    """
+    Rotate v by exp(φ_ij · G) using truncated series.
+
+    exp(X) ≈ I + X + X²/2! + X³/3! + ...
+
+    Args:
+        phi_ij: (B, N, N, dim_g) - Lie algebra elements
+        v: (B, N, K) - vectors in representation space
+        generators: (dim_g, K, K) - Lie algebra generators
+        max_terms: truncation order
+
+    Returns:
+        Rv: (B, N, N, K)
+    """
+    B, N1, N2, dim_g = phi_ij.shape
+    K = v.shape[-1]
+
+    # Compute X = φ · G as (B, N, N, K, K) matrix
+    # But DON'T materialize - apply term by term
+
+    v_exp = v.unsqueeze(1)  # (B, 1, N, K)
+    result = v_exp.clone()  # Identity term
+
+    # X·v term
+    Xv = torch.einsum('bnija,ajk,bnk->bnij', phi_ij, generators, v_exp.squeeze(1))
+    result = result + Xv.unsqueeze(-1) if K == 1 else result + Xv
+
+    # Higher order terms: X^n·v / n!
+    current = Xv
+    for n in range(2, max_terms + 1):
+        # X · current
+        current = torch.einsum('bnija,ajk,bnijk->bnijk',
+                               phi_ij, generators, current.unsqueeze(-1)).squeeze(-1)
+        result = result + current / math.factorial(n)
+
+    return result
+```
+
+#### For Reducible Representations (Multiple Irreps)
+
+```python
+def rotate_reducible(phi_ij, v, irrep_structure, generators_per_irrep):
+    """
+    Rotate vectors in a reducible representation K = ⊕_ℓ n_ℓ · (2ℓ+1)
+
+    Args:
+        phi_ij: (B, N, N, dim_g)
+        v: (B, N, K) where K = Σ n_ℓ · dim(irrep_ℓ)
+        irrep_structure: [(irrep_dim, multiplicity, start_idx), ...]
+        generators_per_irrep: dict mapping irrep_dim -> generators
+
+    Returns:
+        Rv: (B, N, N, K)
+    """
+    B, N1, N2, _ = phi_ij.shape
+    K = v.shape[-1]
+
+    Rv = torch.zeros(B, N1, N2, K, device=v.device, dtype=v.dtype)
+
+    for irrep_dim, mult, start in irrep_structure:
+        end = start + irrep_dim * mult
+        v_block = v[..., start:end].reshape(B, -1, mult, irrep_dim)
+
+        if irrep_dim == 1:
+            # Scalars are invariant under SO(N)
+            Rv[..., start:end] = v_block.unsqueeze(1).expand(-1, N1, N2, -1, -1).reshape(B, N1, N2, -1)
+        else:
+            # Apply appropriate rotation
+            gens = generators_per_irrep[irrep_dim]
+            for m in range(mult):
+                v_m = v_block[..., m, :]  # (B, N, irrep_dim)
+                if irrep_dim == 3:
+                    Rv_m = rodrigues_rotate(phi_ij, v_m)
+                else:
+                    Rv_m = soN_rotate(phi_ij, v_m, gens)
+                Rv[..., start + m*irrep_dim : start + (m+1)*irrep_dim] = Rv_m
+
+    return Rv
+```
+
+---
+
+## III. Block-Diagonal Covariance (Mean-Field Fix)
+
+### 3.1 The Problem with Diagonal Covariance
+
+When we transport diagonal covariance:
+```
+Σ' = Ω · diag(σ²) · Ω^T
+```
+
+The result Σ' is generally **full**, not diagonal. Projecting back to diagonal via:
+```
+σ'_k² = (Ω · diag(σ²) · Ω^T)_kk = Σ_l Ω_kl² · σ_l²
+```
+
+**discards the off-diagonal correlations** generated by the rotation.
+
+### 3.2 Block-Diagonal Solution
+
+Use block-diagonal covariance aligned with irreps:
+
+```
+Σ = diag(Σ_scalar₁, ..., Σ_scalar_n, Σ_vector₁, ..., Σ_vector_m, ...)
+```
+
+where:
+- Scalar blocks: 1×1 (trivially diagonal)
+- Vector blocks: 3×3 (full covariance within the 3D subspace)
+- Rank-2 blocks: 5×5, etc.
+
+Transport preserves block structure because irreps don't mix:
+```
+Ω · Σ_block · Ω^T = Σ'_block  (same shape!)
+```
+
+```python
+@dataclass
+class IrrepStructure:
+    """Defines how K decomposes into irreps."""
+    irreps: List[Tuple[int, int]]  # [(dim, multiplicity), ...]
+
+    @property
+    def total_dim(self):
+        return sum(dim * mult for dim, mult in self.irreps)
+
+    def get_block_indices(self):
+        """Return (start, end, dim) for each irrep block."""
+        indices = []
+        pos = 0
+        for dim, mult in self.irreps:
+            for _ in range(mult):
+                indices.append((pos, pos + dim, dim))
+                pos += dim
+        return indices
+
+
+class BlockDiagonalCovariance(nn.Module):
+    """
+    Block-diagonal covariance respecting irrep structure.
+    """
+    def __init__(self, irrep_structure: IrrepStructure):
+        super().__init__()
+        self.irrep_structure = irrep_structure
+
+        # Store Cholesky factors for each block (ensures positive definiteness)
+        self.register_parameter('log_diag', None)  # Diagonal elements
+        self.register_parameter('off_diag', None)  # Off-diagonal (lower triangular)
+
+        # Initialize parameters
+        self._init_params()
+
+    def get_covariance_blocks(self, sigma_params):
+        """
+        Convert parameters to list of covariance blocks.
+
+        Args:
+            sigma_params: (B, N, n_params) packed parameters
+
+        Returns:
+            blocks: list of (B, N, dim, dim) covariance matrices
+        """
+        blocks = []
+        param_idx = 0
+
+        for start, end, dim in self.irrep_structure.get_block_indices():
+            if dim == 1:
+                # Scalar: just variance
+                var = sigma_params[..., param_idx:param_idx+1].exp()
+                blocks.append(var.unsqueeze(-1))  # (B, N, 1, 1)
+                param_idx += 1
+            else:
+                # Full block: Cholesky parameterization
+                n_params = dim + dim * (dim - 1) // 2
+                L = self._unpack_cholesky(sigma_params[..., param_idx:param_idx+n_params], dim)
+                blocks.append(L @ L.transpose(-1, -2))  # (B, N, dim, dim)
+                param_idx += n_params
+
+        return blocks
+
+    def transport_blocks(self, blocks, phi_ij, generators_per_irrep):
+        """
+        Transport each covariance block: Σ' = Ω · Σ · Ω^T
+        """
+        transported = []
+        block_idx = 0
+
+        for start, end, dim in self.irrep_structure.get_block_indices():
+            block = blocks[block_idx]  # (B, N, dim, dim)
+
+            if dim == 1:
+                # Scalars are invariant
+                transported.append(block.unsqueeze(1).expand(-1, phi_ij.shape[1], -1, -1, -1))
+            else:
+                # Compute Ω for this irrep and transport
+                Omega = compute_irrep_rotation(phi_ij, dim, generators_per_irrep[dim])
+                # Σ' = Ω @ Σ @ Ω^T
+                block_exp = block.unsqueeze(1)  # (B, 1, N, dim, dim)
+                transported_block = Omega @ block_exp @ Omega.transpose(-1, -2)
+                transported.append(transported_block)
+
+            block_idx += 1
+
+        return transported
+```
+
+---
+
+## IV. Symmetry Breaking: Haar Initialization
+
+### 4.1 The Cold Start Problem
+
+If all φ_i = 0 initially, transport is trivial (Ω_ij = I) and belief alignment provides no semantic differentiation. The model gets "stuck."
+
+### 4.2 Haar-Distributed Initialization
+
+Initialize token gauge frames from the Haar measure on SO(N):
+
+```python
+def haar_so3_init(n_tokens, dim_g=3):
+    """
+    Sample φ uniformly over SO(3) via axis-angle.
+
+    Haar measure on SO(3): uniform axis, uniform angle in [0, π]
+    (with proper density correction)
+    """
+    # Random unit axes
+    axes = torch.randn(n_tokens, 3)
+    axes = F.normalize(axes, dim=-1)
+
+    # Uniform angle in [0, π] with Haar density ∝ sin²(θ/2)
+    # Use inverse CDF sampling
+    u = torch.rand(n_tokens)
+    # CDF of sin²(θ/2) on [0,π]: F(θ) = (θ - sin(θ))/π
+    # Approximate inverse via Newton's method or lookup table
+    angles = inverse_haar_cdf_so3(u)
+
+    return axes * angles.unsqueeze(-1)
+
+
+def haar_soN_init(n_tokens, N):
+    """
+    Sample φ uniformly over SO(N).
+
+    Generate random orthogonal matrix via QR decomposition of Gaussian matrix.
+    Then extract Lie algebra element via matrix logarithm.
+    """
+    dim_g = N * (N - 1) // 2
+
+    # Random orthogonal matrices via QR
+    A = torch.randn(n_tokens, N, N)
+    Q, R = torch.linalg.qr(A)
+    # Ensure det(Q) = +1
+    Q = Q * torch.sign(torch.diagonal(R, dim1=-2, dim2=-1)).unsqueeze(-1)
+
+    # Matrix logarithm to get Lie algebra element
+    phi_matrix = torch.linalg.matrix_log(Q)  # Antisymmetric
+
+    # Extract coordinates in basis
+    phi = extract_lie_coords(phi_matrix, N)  # (n_tokens, dim_g)
+
+    return phi
+```
+
+---
+
+## V. Complete VFE with Efficient Transport
+
+### 5.1 Transported KL Divergence
+
+```python
+def kl_transported_efficient(mu_q, sigma_blocks, phi, structure_constants,
+                              irrep_structure, generators, bch_order=2, eps=1e-6):
+    """
+    Compute KL(q_i || Ω_ij·q_j) efficiently using BCH.
+
+    NEVER materializes (B, N, N, K, K) tensor!
+
+    Complexity: O(B × N² × K × dim_g) instead of O(B × N² × K³)
+    """
+    B, N, K = mu_q.shape
+
+    # Step 1: BCH to get combined Lie algebra elements
+    phi_ij = bch_combine(phi, phi, structure_constants, order=bch_order)  # (B, N, N, dim_g)
+
+    # Step 2: Transport means via Rodrigues/series (NOT matrix multiply)
+    mu_transported = rotate_reducible(phi_ij, mu_q, irrep_structure, generators)
+
+    # Step 3: Transport covariance blocks
+    sigma_transported_blocks = transport_covariance_blocks(
+        sigma_blocks, phi_ij, irrep_structure, generators
     )
-    return kl.sum(dim=-1)  # (B, N, N)
 
-def compute_attention(kl_matrix, kappa, mask=None):
-    """β_ij = softmax_j(-KL_ij / κ)"""
-    logits = -kl_matrix / kappa
-    if mask is not None:
-        logits = logits.masked_fill(~mask, float('-inf'))
-    return F.softmax(logits, dim=-1)
+    # Step 4: Compute KL divergence
+    # For block-diagonal: KL = Σ_blocks KL_block
+    kl = compute_block_kl(
+        mu_q, sigma_blocks,
+        mu_transported, sigma_transported_blocks,
+        irrep_structure, eps
+    )
+
+    return kl  # (B, N, N)
+
+
+def compute_block_kl(mu_i, sigma_i_blocks, mu_j_transported, sigma_j_blocks,
+                     irrep_structure, eps):
+    """
+    KL divergence for block-diagonal Gaussians.
+
+    KL = Σ_blocks [ ½(log|Σ_j|/|Σ_i| + tr(Σ_j⁻¹Σ_i) + (μ_i-μ_j)^T Σ_j⁻¹ (μ_i-μ_j) - dim) ]
+    """
+    B, N1, N2 = mu_j_transported.shape[:3]
+    kl_total = torch.zeros(B, N1, N2, device=mu_i.device)
+
+    block_idx = 0
+    for start, end, dim in irrep_structure.get_block_indices():
+        mu_i_block = mu_i[..., start:end].unsqueeze(2)  # (B, N, 1, dim)
+        mu_j_block = mu_j_transported[..., start:end]    # (B, N, N, dim)
+
+        Sigma_i = sigma_i_blocks[block_idx].unsqueeze(2)  # (B, N, 1, dim, dim)
+        Sigma_j = sigma_j_blocks[block_idx]                # (B, N, N, dim, dim)
+
+        # Add eps for stability
+        Sigma_j_safe = Sigma_j + eps * torch.eye(dim, device=Sigma_j.device)
+
+        # Compute block KL
+        Sigma_j_inv = torch.linalg.inv(Sigma_j_safe)
+
+        log_det_ratio = torch.linalg.slogdet(Sigma_j_safe)[1] - torch.linalg.slogdet(Sigma_i + eps * torch.eye(dim, device=Sigma_i.device))[1]
+        trace_term = torch.einsum('...ij,...ji->...', Sigma_j_inv, Sigma_i)
+
+        mu_diff = mu_i_block - mu_j_block
+        mahal_term = torch.einsum('...i,...ij,...j->...', mu_diff, Sigma_j_inv, mu_diff)
+
+        kl_block = 0.5 * (log_det_ratio + trace_term + mahal_term - dim)
+        kl_total = kl_total + kl_block
+
+        block_idx += 1
+
+    return kl_total
 ```
 
-### 3.3 Prior Coupling: Σ γ_ij · KL(p_i || Ω_ij·p_j)
-
-**THE MISSING TERM** - ensures priors form a coherent world model:
+### 5.2 Complete VFE Computation
 
 ```python
-def prior_coupling_term(μ_p, σ_p, Omega, kappa_gamma, mask=None):
+def compute_vfe(mu_q, sigma_blocks, phi, mu_p, sigma_p_blocks,
+                target_ids, token_priors, config, mask=None):
     """
-    Σ γ_ij · KL(p_i || Ω_ij·p_j)
-
-    This term ensures priors are mutually consistent under transport.
-    """
-    # Compute KL between priors with transport
-    kl_priors = kl_transported_priors(μ_p, σ_p, Omega)  # (N, N)
-
-    # Compute γ attention weights
-    gamma = compute_attention(kl_priors, kappa_gamma, mask)  # (N, N)
-
-    # Weighted sum
-    prior_coupling = (gamma * kl_priors).sum()
-
-    return prior_coupling, gamma
-```
-
-### 3.4 Observation Likelihood
-
-Output via **transported KL** to token priors:
-
-```python
-def observation_likelihood(μ_q, σ_q, φ, token_priors, tau=1.0):
-    """
-    logits_v = -KL(q_i || Ω_{iv}·π_v) / τ
-
-    Transport each token prior into the agent's frame before comparing.
-    """
-    B, N, K = μ_q.shape
-    V = token_priors.μ_tokens.shape[0]
-
-    # Compute transport from each agent to each token prior
-    # Ω_{iv} = exp(φ_i)·exp(-φ_v)
-    Omega_to_tokens = compute_agent_to_token_transport(
-        φ, token_priors.φ_tokens, generators
-    )  # (B, N, V, K, K)
-
-    # Transport token priors
-    μ_transported = transport_means(token_priors.μ_tokens, Omega_to_tokens)
-    σ_transported = transport_stds(token_priors.σ_tokens, Omega_to_tokens)
-
-    # KL to each transported token prior
-    kl_to_tokens = compute_kl_batch(μ_q, σ_q, μ_transported, σ_transported)
-
-    # Logits
-    logits = -kl_to_tokens / tau  # (B, N, V)
-
-    return logits
-```
-
-### 3.5 Complete VFE Computation
-
-```python
-def compute_vfe(μ_q, σ_q, φ, μ_p, σ_p, Omega, target_ids, token_priors, config):
-    """
-    FULL Variational Free Energy:
+    FULL Variational Free Energy with efficient BCH transport.
 
     F = α·Σ_i KL(q_i||p_i)
       + λ_β·Σ_ij β_ij·KL(q_i||Ω_ij·q_j)
       + λ_γ·Σ_ij γ_ij·KL(p_i||Ω_ij·p_j)
       - Σ_i log p(y_i|q_i)
     """
-    # 1. Self-coupling
-    kl_self = kl_self_coupling(μ_q, σ_q, μ_p, σ_p)
+    B, N, K = mu_q.shape
+
+    # Precompute BCH-combined gauge frames
+    phi_ij = bch_combine(phi, phi, config.structure_constants,
+                         order=config.bch_order)  # (B, N, N, dim_g)
+
+    # 1. Self-coupling: KL(q_i || p_i) - no transport needed
+    kl_self = kl_block_diagonal(mu_q, sigma_blocks, mu_p, sigma_p_blocks)
     F_self = config.alpha * kl_self.sum()
 
-    # 2. Belief alignment (WITH TRANSPORT)
-    kl_beliefs = kl_transported(μ_q, σ_q, Omega)
+    # 2. Belief alignment with BCH transport
+    kl_beliefs = kl_transported_efficient(
+        mu_q, sigma_blocks, phi, config.structure_constants,
+        config.irrep_structure, config.generators, config.bch_order
+    )
     beta = compute_attention(kl_beliefs, config.kappa_beta, mask)
     F_belief = config.lambda_beta * (beta * kl_beliefs).sum()
 
-    # 3. Prior coupling (WITH TRANSPORT) - THE MISSING TERM!
-    kl_priors = kl_transported_priors(μ_p, σ_p, Omega)
+    # 3. Prior coupling with BCH transport
+    kl_priors = kl_transported_efficient(
+        mu_p, sigma_p_blocks, phi, config.structure_constants,
+        config.irrep_structure, config.generators, config.bch_order
+    )
     gamma = compute_attention(kl_priors, config.kappa_gamma, mask)
     F_prior = config.lambda_gamma * (gamma * kl_priors).sum()
 
-    # 4. Observation likelihood
-    logits = observation_likelihood(μ_q, σ_q, φ, token_priors, config.tau)
-    ce_loss = F.cross_entropy(logits.view(-1, V), target_ids.view(-1))
-    F_obs = ce_loss * target_ids.numel()
+    # 4. Observation likelihood (with transport to token priors)
+    logits = compute_output_logits(mu_q, sigma_blocks, phi, token_priors, config)
+    ce_loss = F.cross_entropy(logits.view(-1, config.vocab_size),
+                               target_ids.view(-1), reduction='sum')
+    F_obs = ce_loss
 
     F_total = F_self + F_belief + F_prior + F_obs
 
@@ -391,172 +667,98 @@ def compute_vfe(μ_q, σ_q, φ, μ_p, σ_p, Omega, target_ids, token_priors, con
         'F_belief': F_belief.item(),
         'F_prior': F_prior.item(),
         'F_obs': F_obs.item(),
-        'beta': beta,
-        'gamma': gamma
+        'beta': beta.detach(),
+        'gamma': gamma.detach(),
     }
 ```
 
 ---
 
-## IV. Gradient Computation (including ∂F/∂φ!)
+## VI. Ouroboros Tower (Phase 2 Optional)
 
-### 4.1 Gradient with respect to Gauge Frames: ∂F/∂φ_i
+### 6.1 The Non-Markovian Memory Term
 
-This is CRUCIAL - gauge frames evolve via VFE gradient descent:
-
-```python
-def compute_phi_gradient(φ, μ_q, σ_q, μ_p, σ_p, β, γ, generators, config):
-    """
-    ∂F/∂φ_i includes contributions from:
-    1. Belief alignment: Σ_j [∂β_ij/∂φ_i · KL_ij + β_ij · ∂KL_ij/∂φ_i]
-    2. Prior coupling:   Σ_j [∂γ_ij/∂φ_i · KL_ij^p + γ_ij · ∂KL_ij^p/∂φ_i]
-    3. Others to me:     Σ_k β_ki · ∂KL(q_k||Ω_ki·q_i)/∂φ_i
-    4. Priors others:    Σ_k γ_ki · ∂KL(p_k||Ω_ki·p_i)/∂φ_i
-
-    The gradient flows through the transport operator Ω_ij = exp(φ_i)·exp(-φ_j)
-    """
-    # Use autograd for correctness, then optimize if needed
-    φ.requires_grad_(True)
-
-    # Recompute F with gradient tracking
-    Omega = compute_transport_operators(φ, generators)
-    F, _ = compute_vfe(μ_q, σ_q, φ, μ_p, σ_p, Omega, ...)
-
-    # Gradient via autograd
-    grad_phi = torch.autograd.grad(F, φ, retain_graph=True)[0]
-
-    return grad_phi
+```
+F_ouroboros = Σ_i Σ_d decay^d · KL(p_i || h_i^d)
 ```
 
-### 4.2 Three-Timescale Updates
+where h_i^d is the hyperprior from ancestor depth d.
+
+### 6.2 Implementation (Phase 2)
 
 ```python
-def vfe_step(μ_q, σ_q, φ, μ_p, σ_p, generators, config):
+class OuroborosTower:
     """
-    Single VFE gradient descent step updating:
-    - μ_q (belief means) - fast
-    - σ_q (belief stds) - fast
-    - φ (gauge frames) - medium (can be slower than beliefs)
+    Hierarchical hyperprior memory for long-range dependencies.
+
+    Enable this AFTER core VFE is validated.
     """
-    # Compute transport operators
-    Omega = compute_transport_operators(φ, generators)
+    def __init__(self, config):
+        self.decay = config.ouroboros_decay
+        self.max_depth = config.ouroboros_depth
+        self.history_buffer = []  # List of (mu_h, sigma_h) at each depth
 
-    # Compute VFE and all gradients
-    with torch.enable_grad():
-        μ_q.requires_grad_(True)
-        σ_q.requires_grad_(True)
-        φ.requires_grad_(True)
+    def compute_ouroboros_term(self, mu_p, sigma_p_blocks):
+        """
+        Σ_d decay^d · KL(p_i || h_i^d)
+        """
+        if not self.history_buffer:
+            return 0.0
 
-        F, metrics = compute_vfe(μ_q, σ_q, φ, μ_p, σ_p, Omega, ...)
+        F_ouro = 0.0
+        for d, (mu_h, sigma_h) in enumerate(self.history_buffer):
+            weight = self.decay ** d
+            kl_to_hyperprior = kl_block_diagonal(mu_p, sigma_p_blocks, mu_h, sigma_h)
+            F_ouro += weight * kl_to_hyperprior.sum()
 
-        grad_μ = torch.autograd.grad(F, μ_q, retain_graph=True)[0]
-        grad_σ = torch.autograd.grad(F, σ_q, retain_graph=True)[0]
-        grad_φ = torch.autograd.grad(F, φ)[0]
+        return F_ouro
 
-    # Natural gradient updates
-    var_q = σ_q.square()
-    μ_q_new = μ_q - config.lr_mu * var_q * grad_μ
-    σ_q_new = σ_q * torch.exp(-config.lr_sigma * grad_σ * σ_q)
-    φ_new = φ - config.lr_phi * grad_φ
-
-    # Clamp for stability
-    σ_q_new = σ_q_new.clamp(min=config.variance_floor)
-    φ_new = clamp_phi_norm(φ_new, config.phi_max_norm)  # e.g., π
-
-    return μ_q_new, σ_q_new, φ_new
+    def update_history(self, mu_p, sigma_p_blocks):
+        """
+        Shift history and add current priors as new hyperprior.
+        """
+        self.history_buffer.insert(0, (mu_p.detach().clone(),
+                                        [b.detach().clone() for b in sigma_p_blocks]))
+        if len(self.history_buffer) > self.max_depth:
+            self.history_buffer.pop()
 ```
+
+**When to enable:**
+- After Phase 1-4 are working
+- For long-context tasks (WikiText-103, etc.)
+- When the model needs "gravitational pull" from distant history
 
 ---
 
-## V. Why Semantic Encoding in φ Works
-
-### 5.1 Token Identity via Gauge Frame
-
-Different tokens have different "orientations" in semantic space:
-
-```
-Token "cat" → φ_cat = [0.3, -0.1, 0.5]   (some orientation)
-Token "dog" → φ_dog = [0.4, -0.2, 0.6]   (similar orientation - similar semantics!)
-Token "run" → φ_run = [-0.5, 0.8, 0.1]   (different orientation - different category)
-```
-
-When computing attention:
-- cat attending to dog: Ω_{cat,dog} ≈ I (small rotation, easy transport)
-- cat attending to run: Ω_{cat,run} = large rotation (harder transport)
-
-This creates **semantic clustering** in attention patterns!
-
-### 5.2 Transport Cost as Semantic Distance
-
-The KL divergence after transport:
-```
-KL(q_cat || Ω_{cat,run}·q_run)
-```
-includes an implicit cost for the transport itself. Even if the beliefs (μ, σ) are similar, if the frames are misaligned, attention is reduced.
-
-### 5.3 Multi-Head = Multiple Semantic Axes
-
-For SO(3) with 3 generators:
-- Head 1 (G_x): Captures one axis of semantic variation
-- Head 2 (G_y): Captures another axis
-- Head 3 (G_z): Captures third axis
-
-Different heads attend to different aspects of semantic similarity.
-
----
-
-## VI. Position Encoding (WITHOUT φ)
-
-### 6.1 Position in Priors Only
-
-```python
-class LayerPriors:
-    """
-    Position structure emerges from position-dependent priors.
-    NOT from gauge frames.
-    """
-    def __init__(self, max_seq_len, embed_dim):
-        # Position-dependent prior means
-        self.μ_p = nn.Parameter(torch.randn(max_seq_len, embed_dim) * 0.1)
-        # Position-dependent prior stds
-        self.log_σ_p = nn.Parameter(torch.zeros(max_seq_len, embed_dim))
-
-        # NO φ_position - gauge frames come from TOKEN priors only!
-```
-
-### 6.2 Why Position Emerges
-
-Through P-flow, position priors learn:
-- Position 0 sees beginning-of-sequence patterns
-- Position N-1 sees end-of-sequence patterns
-- Middle positions learn their characteristic patterns
-
-The causal mask ensures positional asymmetry. Priors naturally differentiate.
-
----
-
-## VII. Complete Model Architecture
-
-### 7.1 Configuration
+## VII. Complete Configuration
 
 ```python
 @dataclass
 class PureFEPConfig:
     # Architecture
     vocab_size: int = 256
-    embed_dim: int = 64           # K
+    embed_dim: int = 64           # K (must match irrep decomposition)
     n_layers: int = 4
     max_seq_len: int = 128
 
     # Gauge structure
     gauge_group: str = 'SO3'      # 'SO3' or 'SON'
+    N: int = 3                    # N for SO(N)
     phi_dim: int = 3              # dim(𝔤): 3 for SO(3), N(N-1)/2 for SO(N)
-    n_heads: int = 3              # = phi_dim for SO(3)
+    bch_order: int = 2            # BCH truncation order
+
+    # Irrep decomposition of embed_dim
+    # Example for K=64 under SO(3): 10 scalars + 18 vectors = 10×1 + 18×3 = 64
+    irrep_structure: IrrepStructure = field(default_factory=lambda:
+        IrrepStructure([(1, 10), (3, 18)]))  # [(dim, multiplicity), ...]
+
+    # Covariance structure
+    covariance_mode: str = 'block_diagonal'  # 'diagonal' or 'block_diagonal'
 
     # VFE weights
     alpha: float = 0.1            # Self-coupling
     lambda_beta: float = 1.0      # Belief alignment
-    lambda_gamma: float = 0.1     # Prior coupling (NEW!)
+    lambda_gamma: float = 0.1     # Prior coupling
     kappa_beta: float = 1.0       # Belief attention temperature
     kappa_gamma: float = 1.0      # Prior attention temperature
     tau: float = 1.0              # Output temperature
@@ -571,172 +773,155 @@ class PureFEPConfig:
     lr_prior: float = 0.01
     lr_token_prior: float = 0.01
 
+    # Initialization
+    phi_init: str = 'haar'        # 'zeros', 'haar', 'uniform'
+
+    # Ouroboros (Phase 2)
+    enable_ouroboros: bool = False
+    ouroboros_decay: float = 0.9
+    ouroboros_depth: int = 4
+
     # Stability
     variance_floor: float = 1e-4
     phi_max_norm: float = 3.14159  # π radians
     eps: float = 1e-6
 ```
 
-### 7.2 Model Definition
+---
+
+## VIII. Token Prior Bank (with Haar Init)
 
 ```python
-class PureFEPTransformer(nn.Module):
+class TokenPriorBank(nn.Module):
     """
-    Pure FEP Transformer with FULL gauge structure.
+    Each token v has: π_v = (μ_v, Σ_v, φ_v)
 
-    - Gauge frames φ encode SEMANTIC features
-    - Transport Ω_ij = exp(φ_i)·exp(-φ_j) in ALL KL terms
-    - Position encoded in priors (μ_p, σ_p), NOT in φ
-    - Complete VFE includes prior coupling term
+    φ_v initialized from Haar measure for symmetry breaking.
     """
-
-    def __init__(self, config: PureFEPConfig):
+    def __init__(self, config):
         super().__init__()
         self.config = config
 
-        # Generate Lie algebra generators
-        if config.gauge_group == 'SO3':
-            self.generators = generate_so3_generators()  # (3, K, K)
-        else:
-            self.generators = generate_soN_generators(config.phi_dim)
-        self.register_buffer('generators_buf', self.generators)
-
-        # Token prior bank (μ, σ, φ for each token)
-        self.token_priors = TokenPriorBank(
-            vocab_size=config.vocab_size,
-            embed_dim=config.embed_dim,
-            phi_dim=config.phi_dim,
-            generators=self.generators
+        # Token prior means
+        init_std = 1.0 / math.sqrt(config.embed_dim)
+        self.mu_tokens = nn.Parameter(
+            torch.randn(config.vocab_size, config.embed_dim) * init_std
         )
 
-        # Position priors for each layer (μ, σ only - NO φ!)
-        self.position_priors = nn.ModuleList([
-            PositionPriors(config.max_seq_len, config.embed_dim)
-            for _ in range(config.n_layers)
-        ])
+        # Token prior covariances (block-diagonal parameters)
+        n_cov_params = self._count_cov_params(config.irrep_structure)
+        self.sigma_params = nn.Parameter(
+            torch.zeros(config.vocab_size, n_cov_params)
+        )
 
-    def forward(self, input_ids, target_ids=None):
-        B, N = input_ids.shape
-        device = input_ids.device
+        # Token gauge frames - HAAR INITIALIZED!
+        if config.gauge_group == 'SO3':
+            phi_init = haar_so3_init(config.vocab_size)
+        else:
+            phi_init = haar_soN_init(config.vocab_size, config.N)
+        self.phi_tokens = nn.Parameter(phi_init)
 
-        # === ENCODING ===
-        # Initialize (μ_q, σ_q, φ) from token priors
-        μ_q, σ_q, φ = self.token_priors.encode(input_ids)
+    def encode(self, input_ids):
+        """Initialize agent beliefs from token priors."""
+        mu_q = self.mu_tokens[input_ids]            # (B, N, K)
+        sigma_params = self.sigma_params[input_ids]  # (B, N, n_params)
+        phi = self.phi_tokens[input_ids]             # (B, N, phi_dim)
 
-        # Causal mask
-        mask = torch.tril(torch.ones(N, N, device=device, dtype=torch.bool))
+        # Convert sigma_params to block covariances
+        sigma_blocks = self._params_to_blocks(sigma_params)
 
-        # === LAYERS ===
-        for layer_idx in range(self.config.n_layers):
-            μ_p = self.position_priors[layer_idx].μ_p[:N]
-            σ_p = self.position_priors[layer_idx].σ_p[:N]
+        return mu_q, sigma_blocks, phi
 
-            # Q-flow with gauge evolution
-            μ_q, σ_q, φ = self.q_flow(
-                μ_q, σ_q, φ, μ_p, σ_p, mask, target_ids
-            )
+    def decode(self, mu_q, sigma_blocks, phi):
+        """
+        Output logits via transported KL to all token priors.
 
-        # === DECODING ===
-        logits = self.token_priors.decode(μ_q, σ_q, φ)
-
-        loss = None
-        if target_ids is not None:
-            loss = F.cross_entropy(
-                logits.view(-1, self.config.vocab_size),
-                target_ids.view(-1)
-            )
-
-        return logits, loss
-
-    def q_flow(self, μ_q, σ_q, φ, μ_p, σ_p, mask, targets):
-        """VFE gradient descent on beliefs AND gauge frames."""
-        for step in range(self.config.n_vfe_steps):
-            μ_q, σ_q, φ = vfe_step(
-                μ_q, σ_q, φ, μ_p, σ_p,
-                self.generators_buf, mask, targets,
-                self.token_priors, self.config
-            )
-        return μ_q, σ_q, φ
+        logits_v = -KL(q_i || Ω_{iv}·π_v) / τ
+        """
+        # Compute transport from each position to each token
+        # This is expensive but necessary for output
+        logits = compute_output_logits_efficient(
+            mu_q, sigma_blocks, phi,
+            self.mu_tokens, self._params_to_blocks(self.sigma_params), self.phi_tokens,
+            self.config
+        )
+        return logits
 ```
-
----
-
-## VIII. What We KEEP vs AVOID
-
-### KEEP (Core FEP with Gauge Structure)
-
-| Component | Role |
-|-----------|------|
-| Gauge frames φ | Semantic/feature encoding |
-| Transport Ω_ij | Frame alignment for comparison |
-| KL(q_i \|\| Ω_ij·q_j) | Transported belief alignment |
-| KL(p_i \|\| Ω_ij·p_j) | Prior coupling (world model coherence) |
-| ∂F/∂φ | Gauge frame evolution |
-| Multi-head from dim(𝔤) | Natural head structure |
-
-### AVOID (Ad Hoc / Neural)
-
-| Eliminated | Reason |
-|------------|--------|
-| Position in φ | φ is for semantics, not position |
-| Sinusoidal encoding | Position emerges from priors |
-| W_Q, W_K, W_V matrices | Attention from KL geometry |
-| MLPs / FFN | VFE gradient descent |
-| GELU/ReLU | Softmax gradient nonlinearity |
-| Learned projections | All from VFE |
 
 ---
 
 ## IX. Implementation Phases (Revised)
 
-### Phase 1: Gauge Infrastructure (Week 1)
-1. Implement SO(3) generators
-2. Implement transport operator computation
-3. Implement transported KL divergence
-4. Test gauge equivariance properties
+### Phase 1: Gauge Infrastructure
+1. Implement SO(N) structure constants
+2. Implement BCH combination (order 2-3)
+3. Implement Rodrigues formula (SO3) and series expansion (SON)
+4. Implement Haar initialization
+5. **Test**: Verify group properties (closure, associativity)
 
-### Phase 2: Complete VFE (Week 2)
-1. Implement all four VFE terms
-2. Implement gradient computation (including ∂F/∂φ)
-3. Validate gradients with finite differences
-4. Test on simple examples
+### Phase 2: Block-Diagonal Covariance
+1. Implement IrrepStructure and block indexing
+2. Implement Cholesky parameterization for blocks
+3. Implement block transport under rotation
+4. Implement block KL divergence
+5. **Test**: Verify positive-definiteness preservation
 
-### Phase 3: Token & Position Priors (Week 3)
-1. Implement TokenPriorBank with φ_tokens
+### Phase 3: Complete VFE
+1. Implement all four VFE terms with efficient transport
+2. Implement gradient computation via autograd
+3. Implement natural gradient updates
+4. **Test**: Gradient check with finite differences
+
+### Phase 4: Token & Position Priors
+1. Implement TokenPriorBank with Haar init
 2. Implement PositionPriors (μ, σ only)
-3. Encoding/decoding with transport
-4. P-flow updates
+3. Implement encoding/decoding with transport
+4. Implement P-flow updates
+5. **Test**: Verify symmetry breaking
 
-### Phase 4: Full Model (Week 4)
+### Phase 5: Full Model & Training
 1. Stack layers
 2. Training loop with Q-flow + P-flow
-3. WikiText-2 experiments
-4. Compare to standard transformer
+3. WikiText-2 character-level experiments
+4. Compare to standard transformer baseline
 
-### Phase 5: Analysis (Week 5)
-1. Visualize learned φ structure
-2. Analyze attention patterns
-3. Study semantic clustering
-4. Multi-head decomposition
+### Phase 6: Ouroboros Extension (Optional)
+1. Implement OuroborosTower
+2. Add to VFE computation
+3. Test on long-context tasks
+4. Tune decay and depth parameters
 
 ---
 
-## X. Key Equations Summary (REVISED)
+## X. Complexity Analysis
+
+| Operation | Naive | With BCH + Rodrigues |
+|-----------|-------|---------------------|
+| Transport operators | O(B×N²×K³) | O(B×N²×K×dim_g) |
+| Mean transport | O(B×N²×K²) | O(B×N²×K) |
+| Covariance transport | O(B×N²×K³) | O(B×N²×Σblock_dim³) |
+| Memory for Ω | O(B×N²×K²) | O(B×N²×dim_g) |
+
+For K=64, N=1024, dim_g=3:
+- Naive Ω memory: 64×1024²×64² ≈ 270GB per batch item 😱
+- BCH approach: 1024²×3 ≈ 3MB per batch item ✓
+
+---
+
+## XI. Key Equations Summary (Final)
 
 | Component | Equation |
 |-----------|----------|
-| **Agent** | (q_i, p_i, φ_i) = (N(μ_qi, σ_qi²), N(μ_pi, σ_pi²), φ_i ∈ 𝔤) |
-| **Transport** | Ω_ij = exp(φ_i·G) · exp(-φ_j·G) |
-| **Transported Mean** | μ̃_j = Ω_ij · μ_j |
-| **Transported Var** | σ̃_j² = diag(Ω_ij · diag(σ_j²) · Ω_ij^T) |
+| **BCH Combination** | φ_ij = φ_i - φ_j - ½[φ_i, φ_j]_𝔤 + O(φ³) |
+| **Lie Bracket** | [φ_i, φ_j]^c = Σ_{ab} φ_i^a φ_j^b f_abc |
+| **Rodrigues (SO3)** | Ω·v = v cos θ + (k×v) sin θ + k(k·v)(1-cos θ) |
+| **Block Covariance Transport** | Σ'_block = Ω_block · Σ_block · Ω_block^T |
 | **Belief Attention** | β_ij = softmax_j(-KL(q_i \|\| Ω_ij·q_j) / κ_β) |
-| **Prior Attention** | γ_ij = softmax_j(-KL(p_i \|\| Ω_ij·p_j) / κ_γ) |
-| **VFE** | F = α·Σ KL(q\|\|p) + λ_β·Σ β·KL(q\|\|Ω·q) + λ_γ·Σ γ·KL(p\|\|Ω·p) - log p(y) |
-| **Natural Gradient μ** | μ ← μ - η_μ · σ² · ∂F/∂μ |
-| **Gauge Update** | φ ← φ - η_φ · ∂F/∂φ |
+| **VFE** | F = α·KL(q\|\|p) + λ_β·β·KL + λ_γ·γ·KL - log p(y) [+ Ouroboros] |
+| **Haar Init (SO3)** | φ ~ Uniform(S²) × HaarAngle([0,π]) |
 
 ---
 
-*Revised plan incorporating gauge frames as CORE semantic encoding mechanism.*
+*Plan v2: Proper BCH transport, SO(N) compatible, block-diagonal covariance.*
 *φ encodes WHAT (semantics), priors encode WHERE (position).*
-*Full transport Ω_ij in ALL KL terms including prior coupling.*
+*Ouroboros tower deferred to Phase 6 after core validation.*
