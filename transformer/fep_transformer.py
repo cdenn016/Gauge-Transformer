@@ -1152,9 +1152,11 @@ class FEPTransformer(nn.Module):
 
         if targets is not None:
             # Compute observation loss AFTER Q-flow (no label leakage!)
+            # Ignore padding tokens (GPT-2 uses eos_token=50256 as pad)
             f_obs = F.cross_entropy(
                 logits.reshape(-1, self.vocab_size),
-                targets.reshape(-1)
+                targets.reshape(-1),
+                ignore_index=50256  # Don't count padding in loss
             )
             components['f_obs'] = f_obs.item()
 
