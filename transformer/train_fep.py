@@ -215,7 +215,7 @@ def evaluate(model, dataloader, device):
 
 def main():
     parser = argparse.ArgumentParser(description='Train FEP Transformer')
-    parser.add_argument('--dataset', type=str, default='wikitext-2',
+    parser.add_argument('--dataset', type=str, default='wikitext-103',
                         choices=['wikitext-2', 'wikitext-103', 'random'])
     parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--batch_size', type=int, default=8)
