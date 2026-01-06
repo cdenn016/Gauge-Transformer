@@ -7,6 +7,9 @@ No bells and whistles - just the core VFE minimization.
 
 Usage:
     python -m transformer.train_fep --dataset wikitext-2 --epochs 10
+
+    Or run directly:
+    python transformer/train_fep.py --dataset wikitext-2 --epochs 10
 """
 
 import argparse
@@ -19,7 +22,11 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from .fep_transformer import FEPTransformer, IrrepSpec
+# Handle both relative and absolute imports
+try:
+    from .fep_transformer import FEPTransformer, IrrepSpec
+except ImportError:
+    from fep_transformer import FEPTransformer, IrrepSpec
 
 
 # =============================================================================
