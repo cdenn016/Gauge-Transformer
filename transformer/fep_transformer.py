@@ -935,6 +935,10 @@ class QFlow(nn.Module):
         Returns:
             Updated beliefs
         """
+        # Clamp gradients to prevent explosion
+        grad_mu = torch.clamp(grad_mu, -10.0, 10.0)
+        grad_sigma = torch.clamp(grad_sigma, -10.0, 10.0)
+
         # Natural gradient for mean (Fisher = I)
         new_mu = beliefs.mu - self.mu_lr * grad_mu
 
@@ -943,7 +947,11 @@ class QFlow(nn.Module):
         # Update in log-space for stability
         log_sigma = torch.log(beliefs.sigma + 1e-8)
         new_log_sigma = log_sigma - self.sigma_lr * beliefs.sigma * grad_sigma
+        new_log_sigma = torch.clamp(new_log_sigma, -10.0, 10.0)  # Prevent exp overflow
         new_sigma = torch.exp(new_log_sigma)
+
+        # Clamp sigma to reasonable range
+        new_sigma = torch.clamp(new_sigma, 1e-6, 1e6)
 
         return GaussianBelief(mu=new_mu, sigma=new_sigma, phi=beliefs.phi)
 
