@@ -253,68 +253,222 @@ def rodrigues_so3(phi: torch.Tensor) -> torch.Tensor:
 # PART 3: GAUSSIAN BELIEFS WITH BLOCK-DIAGONAL COVARIANCE
 # =============================================================================
 
+class IrrepSpec:
+    """
+    Specification of irreducible representations.
+
+    Example: [('fund', 3, 10)] means 3 copies of 10-dim fundamental rep
+    Total dim = 3 * 10 = 30
+    """
+    def __init__(self, specs: List[Tuple[str, int, int]]):
+        """
+        Args:
+            specs: List of (name, multiplicity, dimension) tuples
+        """
+        self.specs = specs
+        self.block_dims = []
+        self.block_starts = []
+
+        offset = 0
+        for name, mult, dim in specs:
+            for _ in range(mult):
+                self.block_starts.append(offset)
+                self.block_dims.append(dim)
+                offset += dim
+
+        self.total_dim = offset
+        self.n_blocks = len(self.block_dims)
+
+    def __repr__(self):
+        return f"IrrepSpec({self.specs}, total_dim={self.total_dim})"
+
+
+class BlockDiagonalCovariance:
+    """
+    Block-diagonal covariance matrix aligned with irrep structure.
+
+    Stores r blocks of sizes (d_1, d_1), (d_2, d_2), ..., (d_r, d_r)
+    Memory: O(Σ d_i²) instead of O((Σ d_i)²)
+
+    For embed_dim=30 with 3×SO(10):
+        - Full: 30×30 = 900 params
+        - Block-diagonal: 3×(10×10) = 300 params
+        - Diagonal: 30 params (loses intra-block correlations)
+    """
+
+    def __init__(self, blocks: List[torch.Tensor]):
+        """
+        Args:
+            blocks: List of (..., d_i, d_i) covariance matrices
+        """
+        self.blocks = blocks
+        self.n_blocks = len(blocks)
+        self.block_dims = [b.shape[-1] for b in blocks]
+        self.total_dim = sum(self.block_dims)
+
+    @classmethod
+    def from_diagonal(cls, diag: torch.Tensor, irrep_spec: IrrepSpec) -> 'BlockDiagonalCovariance':
+        """Create block-diagonal from diagonal (scalar per dimension)."""
+        blocks = []
+        for start, dim in zip(irrep_spec.block_starts, irrep_spec.block_dims):
+            # Extract diagonal for this block, make it a diagonal matrix
+            block_diag = diag[..., start:start+dim]
+            block = torch.diag_embed(block_diag)
+            blocks.append(block)
+        return cls(blocks)
+
+    @classmethod
+    def from_scalar_per_block(cls, scalars: torch.Tensor, irrep_spec: IrrepSpec) -> 'BlockDiagonalCovariance':
+        """Create isotropic blocks: Σ_i = σ_i² I."""
+        blocks = []
+        for i, dim in enumerate(irrep_spec.block_dims):
+            # scalars[..., i] is variance for block i
+            var = scalars[..., i:i+1, None]  # (..., 1, 1)
+            I = torch.eye(dim, device=scalars.device, dtype=scalars.dtype)
+            block = var * I
+            blocks.append(block)
+        return cls(blocks)
+
+    def to_full(self) -> torch.Tensor:
+        """Convert to full (K, K) matrix. Use sparingly!"""
+        batch_shape = self.blocks[0].shape[:-2]
+        full = torch.zeros(*batch_shape, self.total_dim, self.total_dim,
+                          device=self.blocks[0].device, dtype=self.blocks[0].dtype)
+        offset = 0
+        for block in self.blocks:
+            d = block.shape[-1]
+            full[..., offset:offset+d, offset:offset+d] = block
+            offset += d
+        return full
+
+    def log_det(self) -> torch.Tensor:
+        """Compute log|Σ| = Σ_i log|Σ_i|."""
+        log_det = 0
+        for block in self.blocks:
+            # For each block, compute log determinant
+            log_det = log_det + torch.linalg.slogdet(block)[1]
+        return log_det
+
+    def solve(self, v: torch.Tensor, irrep_spec: IrrepSpec) -> torch.Tensor:
+        """Compute Σ⁻¹ v block-wise."""
+        result = torch.zeros_like(v)
+        for i, (start, dim) in enumerate(zip(irrep_spec.block_starts, irrep_spec.block_dims)):
+            v_block = v[..., start:start+dim]
+            # Solve Σ_i x = v_block
+            solved = torch.linalg.solve(self.blocks[i], v_block.unsqueeze(-1)).squeeze(-1)
+            result[..., start:start+dim] = solved
+        return result
+
+    def trace_solve(self, other: 'BlockDiagonalCovariance') -> torch.Tensor:
+        """Compute tr(Σ⁻¹ other) = Σ_i tr(Σ_i⁻¹ other_i)."""
+        trace = 0
+        for my_block, other_block in zip(self.blocks, other.blocks):
+            # tr(A⁻¹ B) = tr(solve(A, B))
+            solved = torch.linalg.solve(my_block, other_block)
+            trace = trace + torch.diagonal(solved, dim1=-2, dim2=-1).sum(dim=-1)
+        return trace
+
+    def quadratic_form(self, v: torch.Tensor, irrep_spec: IrrepSpec) -> torch.Tensor:
+        """Compute v^T Σ⁻¹ v block-wise."""
+        result = 0
+        for i, (start, dim) in enumerate(zip(irrep_spec.block_starts, irrep_spec.block_dims)):
+            v_block = v[..., start:start+dim]
+            # v^T Σ⁻¹ v for this block
+            solved = torch.linalg.solve(self.blocks[i], v_block.unsqueeze(-1)).squeeze(-1)
+            result = result + (v_block * solved).sum(dim=-1)
+        return result
+
+    def transform(self, R: torch.Tensor, irrep_spec: IrrepSpec) -> 'BlockDiagonalCovariance':
+        """
+        Apply rotation: Σ' = R Σ R^T, block-wise.
+
+        R should be block-diagonal matching irrep structure.
+        """
+        new_blocks = []
+        for i, (start, dim) in enumerate(zip(irrep_spec.block_starts, irrep_spec.block_dims)):
+            R_block = R[..., start:start+dim, start:start+dim]
+            # Σ'_i = R_i Σ_i R_i^T
+            transformed = torch.einsum('...ij,...jk,...lk->...il',
+                                       R_block, self.blocks[i], R_block)
+            new_blocks.append(transformed)
+        return BlockDiagonalCovariance(new_blocks)
+
+
 @dataclass
 class GaussianBelief:
     """
     Gaussian belief q = N(μ, Σ) with optional gauge frame φ.
 
-    For block-diagonal covariance aligned with irreps:
-        Σ = diag(Σ_1, Σ_2, ..., Σ_r)
-    where each Σ_k is a (d_k × d_k) block for irrep k.
+    Supports three covariance modes:
+    1. Diagonal: sigma is (..., K) - fastest, loses all correlations
+    2. Block-diagonal: sigma is BlockDiagonalCovariance - preserves intra-irrep correlations
+    3. Full: sigma is (..., K, K) - slowest, full correlations
     """
     mu: torch.Tensor           # (..., K) mean
-    sigma: torch.Tensor        # (..., K) diagonal or (..., K, K) full
+    sigma: torch.Tensor        # (..., K) diagonal, (..., K, K) full, or BlockDiagonalCovariance
     phi: Optional[torch.Tensor] = None  # (..., dim_g) gauge frame
+    irrep_spec: Optional[IrrepSpec] = None  # For block-diagonal mode
 
     @property
     def is_diagonal(self) -> bool:
-        return self.sigma.dim() == self.mu.dim()
+        return isinstance(self.sigma, torch.Tensor) and self.sigma.dim() == self.mu.dim()
+
+    @property
+    def is_block_diagonal(self) -> bool:
+        return isinstance(self.sigma, BlockDiagonalCovariance)
+
+    @property
+    def is_full(self) -> bool:
+        return isinstance(self.sigma, torch.Tensor) and self.sigma.dim() == self.mu.dim() + 1
 
 
 def kl_divergence_gaussian(q: GaussianBelief, p: GaussianBelief,
-                           transport: Optional[torch.Tensor] = None) -> torch.Tensor:
+                           transport: Optional[torch.Tensor] = None,
+                           irrep_spec: Optional[IrrepSpec] = None) -> torch.Tensor:
     """
     KL divergence KL(q || p) between Gaussians, with optional transport.
 
     If transport Ω is provided, we compute KL(q || Ω·p) where:
         Ω·p = N(Ω μ_p, Ω Σ_p Ω^T)
 
-    For diagonal covariances:
-        KL = ½[tr(Σ_p⁻¹ Σ_q) + (μ_p - μ_q)^T Σ_p⁻¹ (μ_p - μ_q) - K + log|Σ_p|/|Σ_q|]
+    Supports diagonal, block-diagonal, and full covariance modes.
+
+    KL = ½[tr(Σ_p⁻¹ Σ_q) + (μ_p - μ_q)^T Σ_p⁻¹ (μ_p - μ_q) - K + log|Σ_p|/|Σ_q|]
 
     Args:
         q: Query belief N(μ_q, Σ_q)
         p: Prior/target belief N(μ_p, Σ_p)
         transport: Optional (..., K, K) rotation matrix
+        irrep_spec: Required for block-diagonal mode
 
     Returns:
         kl: (...,) KL divergence values
     """
-    mu_q, sigma_q = q.mu, q.sigma
-    mu_p, sigma_p = p.mu, p.sigma
+    mu_q = q.mu
+    mu_p = p.mu
+    sigma_q = q.sigma
+    sigma_p = p.sigma
+
+    K = mu_q.shape[-1]
 
     # Apply transport if provided
     if transport is not None:
         # Rotate prior mean: μ_p' = Ω μ_p
         mu_p = torch.einsum('...ij,...j->...i', transport, mu_p)
 
-        if p.is_diagonal:
-            # For diagonal Σ_p, Ω Σ_p Ω^T is generally full
-            # But if Ω is block-diagonal matching Σ blocks, stays block-diagonal
-            # For now, assume diagonal is preserved (requires block structure)
-            # This is valid when transport respects irrep decomposition
-            pass  # sigma_p stays diagonal
-        else:
+        # Transform covariance based on type
+        if q.is_block_diagonal and irrep_spec is not None:
+            sigma_p = sigma_p.transform(transport, irrep_spec)
+        elif not q.is_diagonal:
             # Full covariance: Σ_p' = Ω Σ_p Ω^T
             sigma_p = torch.einsum('...ij,...jk,...lk->...il',
                                    transport, sigma_p, transport)
+        # For diagonal, assume transport preserves diagonal (block structure)
 
-    K = mu_q.shape[-1]
-
-    if q.is_diagonal and p.is_diagonal:
-        # Both diagonal - efficient formula
-        # KL = ½ Σ_k [σ_q_k/σ_p_k + (μ_p_k - μ_q_k)²/σ_p_k - 1 + log(σ_p_k/σ_q_k)]
-        var_q = sigma_q  # These are variances (diagonal elements)
+    # Compute KL based on covariance type
+    if q.is_diagonal and (isinstance(sigma_p, torch.Tensor) and sigma_p.dim() == mu_p.dim()):
+        # Both diagonal - most efficient
+        var_q = sigma_q
         var_p = sigma_p
 
         var_ratio = var_q / (var_p + 1e-8)
@@ -323,9 +477,45 @@ def kl_divergence_gaussian(q: GaussianBelief, p: GaussianBelief,
         log_det_ratio = torch.log(var_p + 1e-8) - torch.log(var_q + 1e-8)
 
         kl = 0.5 * (var_ratio + mahal - 1 + log_det_ratio).sum(dim=-1)
+
+    elif q.is_block_diagonal and isinstance(sigma_p, BlockDiagonalCovariance):
+        # Both block-diagonal - efficient block-wise computation
+        assert irrep_spec is not None, "irrep_spec required for block-diagonal KL"
+
+        # tr(Σ_p⁻¹ Σ_q)
+        trace_term = sigma_p.trace_solve(sigma_q)
+
+        # (μ_p - μ_q)^T Σ_p⁻¹ (μ_p - μ_q)
+        diff = mu_p - mu_q
+        mahal_term = sigma_p.quadratic_form(diff, irrep_spec)
+
+        # log|Σ_p| - log|Σ_q|
+        log_det_p = sigma_p.log_det()
+        log_det_q = sigma_q.log_det()
+        log_det_ratio = log_det_p - log_det_q
+
+        kl = 0.5 * (trace_term + mahal_term - K + log_det_ratio)
+
+    elif q.is_full or (isinstance(sigma_p, torch.Tensor) and sigma_p.dim() == mu_p.dim() + 1):
+        # Full covariance
+        # tr(Σ_p⁻¹ Σ_q)
+        Sigma_p_inv_Sigma_q = torch.linalg.solve(sigma_p, sigma_q)
+        trace_term = torch.diagonal(Sigma_p_inv_Sigma_q, dim1=-2, dim2=-1).sum(dim=-1)
+
+        # (μ_p - μ_q)^T Σ_p⁻¹ (μ_p - μ_q)
+        diff = (mu_p - mu_q).unsqueeze(-1)
+        mahal_term = torch.linalg.solve(sigma_p, diff).squeeze(-1)
+        mahal_term = (diff.squeeze(-1) * mahal_term).sum(dim=-1)
+
+        # log|Σ_p| - log|Σ_q|
+        log_det_p = torch.linalg.slogdet(sigma_p)[1]
+        log_det_q = torch.linalg.slogdet(sigma_q)[1]
+        log_det_ratio = log_det_p - log_det_q
+
+        kl = 0.5 * (trace_term + mahal_term - K + log_det_ratio)
+
     else:
-        # Full covariance case (more expensive)
-        raise NotImplementedError("Full covariance KL not yet implemented")
+        raise ValueError(f"Incompatible covariance types: q={type(sigma_q)}, p={type(sigma_p)}")
 
     return kl
 
@@ -350,24 +540,55 @@ class VFEFunctional(nn.Module):
     def __init__(self,
                  embed_dim: int,
                  gauge_dim: int,  # N for SO(N)
+                 irrep_spec: Optional[IrrepSpec] = None,
                  alpha: float = 1.0,   # Self-coupling weight
                  beta: float = 1.0,    # Alignment weight
                  gamma: float = 0.1,   # Prior weight
-                 bch_order: int = 2):  # BCH truncation
+                 bch_order: int = 2,   # BCH truncation
+                 temperature: float = 1.0):  # Attention temperature
         super().__init__()
 
         self.embed_dim = embed_dim
         self.gauge_dim = gauge_dim
+        self.irrep_spec = irrep_spec
         self.alpha = alpha
         self.beta = beta
         self.gamma = gamma
         self.bch_order = bch_order
+        self.temperature = temperature
 
         # Precompute SO(N) structure
         self.register_buffer('generators', so_n_generators(gauge_dim))
         self.register_buffer('f_abc', so_n_structure_constants(gauge_dim))
 
         self.dim_g = gauge_dim * (gauge_dim - 1) // 2  # Lie algebra dimension
+
+        # For multiple irreps, we need block-diagonal generators
+        if irrep_spec is not None:
+            self._build_block_diagonal_generators(irrep_spec)
+
+    def _build_block_diagonal_generators(self, irrep_spec: IrrepSpec):
+        """
+        Build block-diagonal generators for multiple irreps.
+
+        Each block gets its own copy of the SO(N) generators.
+        Total embedding dim = sum of block dims.
+        """
+        # For now, assume all blocks are the same gauge_dim (fundamental rep)
+        # Each block of size d gets d(d-1)/2 generators
+        K = irrep_spec.total_dim
+        n_blocks = irrep_spec.n_blocks
+
+        # Build block-diagonal generators
+        # Shape: (dim_g, K, K) where generators are block-diagonal
+        block_gens = torch.zeros(self.dim_g, K, K)
+
+        for i, (start, dim) in enumerate(zip(irrep_spec.block_starts, irrep_spec.block_dims)):
+            # Only include if this block matches gauge_dim
+            if dim == self.gauge_dim:
+                block_gens[:, start:start+dim, start:start+dim] = self.generators
+
+        self.register_buffer('block_generators', block_gens)
 
     def compute_transport(self, phi_i: torch.Tensor, phi_j: torch.Tensor) -> torch.Tensor:
         """
@@ -407,10 +628,14 @@ class VFEFunctional(nn.Module):
         H[q] = ½ log|2πe Σ| = ½(K log(2πe) + log|Σ|)
 
         For diagonal: H = ½ Σ_k log(2πe σ_k)
+        For block-diagonal: H = ½ Σ_b log|2πe Σ_b|
         """
         if beliefs.is_diagonal:
             # Diagonal case: sum of log variances
             log_det = torch.log(beliefs.sigma + 1e-8).sum(dim=-1)
+        elif beliefs.is_block_diagonal:
+            # Block-diagonal: sum of block log determinants
+            log_det = beliefs.sigma.log_det()
         else:
             # Full covariance: log determinant
             log_det = torch.linalg.slogdet(beliefs.sigma)[1]
@@ -429,46 +654,94 @@ class VFEFunctional(nn.Module):
         F_align = Σ_{i,j} w_ij · KL(q_i || Ω_ij q_j)
 
         Returns both the free energy and the attention weights (for output).
+
+        For block-diagonal covariance with multiple irreps:
+        - Transport is block-diagonal: Ω = diag(Ω_1, Ω_2, ..., Ω_r)
+        - Each block transforms independently
         """
         B, N, K = beliefs.mu.shape
 
-        # Compute transport operators
-        omega = self.compute_transport(beliefs.phi, beliefs.phi)
+        # Compute transport operators (in the gauge_dim space)
+        omega_small = self.compute_transport(beliefs.phi, beliefs.phi)
         # Shape: (B, N, N, gauge_dim, gauge_dim)
 
-        # For now, assume embed_dim == gauge_dim (fundamental rep)
-        # TODO: Handle multiple irreps with block-diagonal structure
+        # Expand to full embed_dim if using multiple irreps
+        if self.irrep_spec is not None and hasattr(self, 'block_generators'):
+            # Build block-diagonal transport in full K×K space
+            omega = torch.zeros(B, N, N, K, K, device=beliefs.mu.device, dtype=beliefs.mu.dtype)
+            for i, (start, dim) in enumerate(zip(self.irrep_spec.block_starts,
+                                                   self.irrep_spec.block_dims)):
+                if dim == self.gauge_dim:
+                    omega[..., start:start+dim, start:start+dim] = omega_small
+                else:
+                    # Identity for non-matching blocks
+                    omega[..., start:start+dim, start:start+dim] = torch.eye(
+                        dim, device=omega.device, dtype=omega.dtype)
+        else:
+            omega = omega_small
 
-        # Compute pairwise KL
-        # q_i: beliefs at position i
-        # q_j transported: Ω_ij q_j
-
-        # Expand beliefs for pairwise
+        # Expand beliefs for pairwise computation
         mu_i = beliefs.mu.unsqueeze(2)      # (B, N, 1, K)
         mu_j = beliefs.mu.unsqueeze(1)      # (B, 1, N, K)
-        sigma_i = beliefs.sigma.unsqueeze(2)  # (B, N, 1, K)
-        sigma_j = beliefs.sigma.unsqueeze(1)  # (B, 1, N, K)
 
         # Transport μ_j: Ω_ij μ_j
-        mu_j_transported = torch.einsum('bnmij,...nmj->...nmi', omega, mu_j)
+        mu_j_transported = torch.einsum('bnmij,bnmj->bnmi', omega, mu_j)
 
-        # For diagonal covariance with block-diagonal transport,
-        # the variance transforms but stays diagonal if blocks match
-        # Simplified: assume variance is approximately preserved
-        sigma_j_transported = sigma_j  # Approximation for diagonal case
+        if beliefs.is_diagonal:
+            sigma_i = beliefs.sigma.unsqueeze(2)  # (B, N, 1, K)
+            sigma_j = beliefs.sigma.unsqueeze(1)  # (B, 1, N, K)
 
-        # KL(q_i || Ω_ij q_j) - diagonal case
-        var_ratio = sigma_i / (sigma_j_transported + 1e-8)
-        diff = mu_j_transported - mu_i
-        mahal = diff ** 2 / (sigma_j_transported + 1e-8)
-        log_det_ratio = torch.log(sigma_j_transported + 1e-8) - torch.log(sigma_i + 1e-8)
+            # For diagonal covariance, rotation preserves diagonal if isotropic per block
+            # Approximation: variance is preserved under rotation
+            sigma_j_transported = sigma_j
 
-        kl_ij = 0.5 * (var_ratio + mahal - 1 + log_det_ratio).sum(dim=-1)
-        # Shape: (B, N, N)
+            # KL(q_i || Ω_ij q_j) - diagonal case
+            var_ratio = sigma_i / (sigma_j_transported + 1e-8)
+            diff = mu_j_transported - mu_i
+            mahal = diff ** 2 / (sigma_j_transported + 1e-8)
+            log_det_ratio = torch.log(sigma_j_transported + 1e-8) - torch.log(sigma_i + 1e-8)
 
-        # Convert to attention weights (softmax over source dimension)
+            kl_ij = 0.5 * (var_ratio + mahal - 1 + log_det_ratio).sum(dim=-1)
+
+        elif beliefs.is_block_diagonal:
+            # Block-diagonal case: compute KL block by block
+            # This is more expensive but preserves intra-block correlations
+            kl_ij = torch.zeros(B, N, N, device=beliefs.mu.device, dtype=beliefs.mu.dtype)
+
+            for b_idx, (start, dim) in enumerate(zip(self.irrep_spec.block_starts,
+                                                      self.irrep_spec.block_dims)):
+                # Extract block data
+                mu_i_block = mu_i[..., start:start+dim]
+                mu_j_block = mu_j_transported[..., start:start+dim]
+                sigma_i_block = beliefs.sigma.blocks[b_idx].unsqueeze(2)  # (B, N, 1, d, d)
+                sigma_j_block = beliefs.sigma.blocks[b_idx].unsqueeze(1)  # (B, 1, N, d, d)
+
+                # Transform sigma_j block
+                omega_block = omega[..., start:start+dim, start:start+dim]
+                sigma_j_block = torch.einsum('bnmij,bnmjk,bnmlk->bnmil',
+                                             omega_block, sigma_j_block, omega_block)
+
+                # KL for this block
+                diff = mu_j_block - mu_i_block
+                # tr(Σ_i⁻¹ Σ_j)
+                trace_term = torch.linalg.solve(sigma_i_block, sigma_j_block)
+                trace_term = torch.diagonal(trace_term, dim1=-2, dim2=-1).sum(dim=-1)
+                # (μ_j - μ_i)^T Σ_i⁻¹ (μ_j - μ_i)
+                mahal = torch.linalg.solve(sigma_i_block, diff.unsqueeze(-1)).squeeze(-1)
+                mahal = (diff * mahal).sum(dim=-1)
+                # log|Σ_i| - log|Σ_j|
+                log_det_i = torch.linalg.slogdet(sigma_i_block)[1]
+                log_det_j = torch.linalg.slogdet(sigma_j_block)[1]
+
+                kl_ij = kl_ij + 0.5 * (trace_term + mahal - dim + log_det_i - log_det_j)
+
+        else:
+            # Full covariance case
+            raise NotImplementedError("Full covariance f_align not implemented")
+
+        # Convert to attention weights with temperature scaling
         # Lower KL = higher attention
-        attn_logits = -kl_ij  # Negative KL as logits
+        attn_logits = -kl_ij / self.temperature
 
         if mask is not None:
             attn_logits = attn_logits.masked_fill(mask == 0, float('-inf'))
@@ -742,12 +1015,14 @@ class FEPTransformer(nn.Module):
                  vocab_size: int,
                  embed_dim: int,
                  gauge_dim: int,
+                 irrep_spec: Optional[List[Tuple[str, int, int]]] = None,
                  n_layers: int = 1,
                  n_q_iterations: int = 5,
                  alpha: float = 0.1,
                  beta: float = 1.0,
                  gamma: float = 0.1,
                  bch_order: int = 2,
+                 temperature: float = 1.0,
                  tie_embeddings: bool = False):
         super().__init__()
 
@@ -756,6 +1031,15 @@ class FEPTransformer(nn.Module):
         self.gauge_dim = gauge_dim
         self.n_layers = n_layers
 
+        # Parse irrep specification
+        if irrep_spec is not None:
+            self.irrep_spec = IrrepSpec(irrep_spec)
+            assert self.irrep_spec.total_dim == embed_dim, \
+                f"Irrep spec total dim {self.irrep_spec.total_dim} != embed_dim {embed_dim}"
+        else:
+            # Default: single block matching gauge_dim
+            self.irrep_spec = None
+
         # Belief embeddings
         self.belief_embed = BeliefEmbedding(vocab_size, embed_dim, gauge_dim)
 
@@ -763,7 +1047,8 @@ class FEPTransformer(nn.Module):
         self.prior_embed = BeliefEmbedding(vocab_size, embed_dim, gauge_dim)
 
         # VFE functional
-        self.vfe = VFEFunctional(embed_dim, gauge_dim, alpha, beta, gamma, bch_order)
+        self.vfe = VFEFunctional(embed_dim, gauge_dim, self.irrep_spec,
+                                  alpha, beta, gamma, bch_order, temperature)
 
         # Q-flow dynamics
         self.q_flow = QFlow(embed_dim, n_iterations=n_q_iterations)
