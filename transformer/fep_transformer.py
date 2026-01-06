@@ -1094,30 +1094,54 @@ class FEPTransformer(nn.Module):
         mask = torch.tril(torch.ones(N, N, device=input_ids.device)).unsqueeze(0)
 
         # Q-flow: iterative belief updates
-        for layer in range(self.n_layers):
-            # Compute VFE and its gradients
-            # In practice, we use autograd for this
-            if targets is not None:
-                vfe, components = self.vfe(beliefs, priors, targets, self.output_proj, mask)
-            else:
-                # For inference without targets, skip observation term
-                vfe = self.vfe.alpha * self.vfe.f_self(beliefs)
-                f_align, attn = self.vfe.f_align(beliefs, mask)
-                vfe = vfe + self.vfe.beta * f_align
-                vfe = vfe + self.vfe.gamma * self.vfe.f_prior(beliefs, priors)
-                components = {'attention': attn}
+        # CRITICAL: Do NOT include targets during Q-flow to prevent label leakage
+        # The model must optimize beliefs based ONLY on self-consistency and priors
+        for q_iter in range(self.q_flow.n_iterations):
+            # Compute BLIND VFE (no observation term - no peeking at targets!)
+            beliefs.mu.requires_grad_(True)
+            beliefs.sigma.requires_grad_(True)
 
-        # Output logits
+            f_self = self.vfe.f_self(beliefs)
+            f_align, attn = self.vfe.f_align(beliefs, mask)
+            f_prior = self.vfe.f_prior(beliefs, priors)
+
+            # Internal VFE for optimization (NO f_obs!)
+            vfe_internal = (self.vfe.alpha * f_self +
+                           self.vfe.beta * f_align +
+                           self.vfe.gamma * f_prior)
+
+            # Compute gradients w.r.t. beliefs
+            grads = torch.autograd.grad(
+                vfe_internal,
+                [beliefs.mu, beliefs.sigma],
+                create_graph=self.training,
+                retain_graph=True
+            )
+
+            # Update beliefs via natural gradient
+            beliefs = self.q_flow.step(beliefs, grads[0], grads[1])
+
+        # Output logits (AFTER Q-flow has finished)
         logits = self.output_proj(beliefs.mu)
+
+        # Now compute observation loss for training (only AFTER belief optimization)
+        components = {'attention': attn, 'f_self': f_self.item(), 'f_align': f_align.item(), 'f_prior': f_prior.item()}
 
         result = {'logits': logits}
 
         if targets is not None:
-            result['loss'] = vfe
-            result['ce_loss'] = F.cross_entropy(
+            # Compute observation loss AFTER Q-flow (no label leakage!)
+            f_obs = F.cross_entropy(
                 logits.reshape(-1, self.vocab_size),
                 targets.reshape(-1)
             )
+            components['f_obs'] = f_obs.item()
+
+            # Total VFE = internal terms + observation
+            # The internal terms (f_self, f_align, f_prior) were already optimized by Q-flow
+            # f_obs provides the learning signal
+            result['loss'] = vfe_internal + f_obs
+            result['ce_loss'] = f_obs
 
         if return_components:
             result['components'] = components
