@@ -781,9 +781,9 @@ class VFEFunctional(nn.Module):
         # Project belief means to vocabulary
         logits = output_proj(beliefs.mu)  # (B, N, vocab_size)
 
-        # Cross-entropy loss
+        # Cross-entropy loss (use reshape for non-contiguous tensors)
         B, N, V = logits.shape
-        loss = F.cross_entropy(logits.view(-1, V), targets.view(-1), reduction='mean')
+        loss = F.cross_entropy(logits.reshape(-1, V), targets.reshape(-1), reduction='mean')
 
         return loss
 
@@ -1115,8 +1115,8 @@ class FEPTransformer(nn.Module):
         if targets is not None:
             result['loss'] = vfe
             result['ce_loss'] = F.cross_entropy(
-                logits.view(-1, self.vocab_size),
-                targets.view(-1)
+                logits.reshape(-1, self.vocab_size),
+                targets.reshape(-1)
             )
 
         if return_components:
