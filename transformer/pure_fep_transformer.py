@@ -1263,17 +1263,20 @@ class PureFEPLayer(nn.Module):
 
                 # Debug logging: Monitor gradient magnitudes
                 if self.config.debug_gradient_logging and step_idx == 0:
-                    # Compute individual gradient component magnitudes
-                    grad_mu_self_mag = (alpha * delta_mu / sigma_p_safe).abs().mean().item() if is_diagonal else 0.0
+                    # Compute gradient component magnitudes (CE is available, total is grad_mu)
                     grad_mu_ce_mag = grad_mu_ce.abs().mean().item()
                     grad_mu_total_mag = grad_mu.abs().mean().item()
 
+                    # VFE gradient components (computed above at line 1219)
+                    # grad_mu already includes VFE + CE terms
+                    grad_mu_vfe_mag = grad_mu_total_mag - (lambda_obs * grad_mu_ce_mag / (B * N))
+
                     print(f"  [Gradient Debug] Step {step_idx}")
-                    print(f"    Self-coupling grad: {grad_mu_self_mag:.6f}")
-                    print(f"    Observation grad:   {grad_mu_ce_mag:.6f}")
-                    print(f"    Total grad:         {grad_mu_total_mag:.6f}")
-                    if grad_mu_self_mag > 0:
-                        print(f"    Ratio CE/Self:      {grad_mu_ce_mag / grad_mu_self_mag:.3f}")
+                    print(f"    VFE grad (KL terms): {grad_mu_vfe_mag:.6f}")
+                    print(f"    Observation grad:    {grad_mu_ce_mag:.6f}")
+                    print(f"    Total grad:          {grad_mu_total_mag:.6f}")
+                    if grad_mu_vfe_mag > 1e-8:
+                        print(f"    Ratio CE/VFE:        {grad_mu_ce_mag / grad_mu_vfe_mag:.3f}")
         else:
             # Differentiable mode (for hybrid training)
             grad_enabled = torch.is_grad_enabled() and mu_q.requires_grad
