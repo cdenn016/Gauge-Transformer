@@ -1043,13 +1043,20 @@ class FEPTransformer(nn.Module):
                  temperature: float = 1.0,
                  tie_embeddings: bool = False,
                  residual: bool = True,
-                 observe_during_qflow: bool = False):
+                 observe_during_qflow: bool = False,
+                 blind_iterations: int = 3,
+                 lambda_obs: float = 1.0):
         """
         Args:
             observe_during_qflow: If True, include observation term (f_obs) in VFE
-                during Q-flow iterations. This is "pure FEP" where beliefs update
-                based on observations. If False (default), Q-flow is blind and
-                f_obs only contributes to the final loss - more honest for LM.
+                during Q-flow iterations. Two-phase: first blind_iterations are
+                alignment-only, then observations are added.
+            blind_iterations: Number of Q-flow iterations for alignment before
+                adding observations. Only used when observe_during_qflow=True.
+                E.g., if n_q_iterations=5 and blind_iterations=3:
+                  - Iterations 0,1,2: alignment only (words interact)
+                  - Iterations 3,4: add observations (check prediction)
+            lambda_obs: Weight for observation term in VFE (default 1.0).
         """
         super().__init__()
 
@@ -1059,6 +1066,8 @@ class FEPTransformer(nn.Module):
         self.n_layers = n_layers
         self.residual = residual
         self.observe_during_qflow = observe_during_qflow
+        self.blind_iterations = blind_iterations
+        self.lambda_obs = lambda_obs
 
         # Parse irrep specification
         if irrep_spec is not None:
@@ -1104,9 +1113,13 @@ class FEPTransformer(nn.Module):
         """
         Run Q-flow iterations for a single layer.
 
-        Args:
-            targets: If provided AND observe_during_qflow=True, include f_obs in VFE.
-                     This is the "pure FEP" mode where observations drive belief updates.
+        Two-phase Q-flow (when observe_during_qflow=True):
+          Phase 1 (iterations 0 to blind_iterations-1): Alignment only
+            - Words interact via KL, build contextual representation
+          Phase 2 (iterations blind_iterations onwards): Add observations
+            - Check prediction against target, refine beliefs
+
+        This mimics human reading: understand first, then predict.
 
         Returns updated beliefs, final vfe_internal, and attention weights.
         """
@@ -1129,20 +1142,21 @@ class FEPTransformer(nn.Module):
             f_align, attn = vfe.f_align(beliefs, mask)
             f_prior = vfe.f_prior(beliefs, priors)
 
-            # Internal VFE
+            # Internal VFE (alignment phase)
             vfe_internal = (vfe.alpha * f_self +
                            vfe.beta * f_align +
                            vfe.gamma * f_prior)
 
-            # Optionally include observations in VFE (pure FEP mode)
-            if self.observe_during_qflow and targets is not None:
+            # Two-phase: only add observations AFTER blind alignment iterations
+            in_observation_phase = q_iter >= self.blind_iterations
+            if self.observe_during_qflow and targets is not None and in_observation_phase:
                 logits = self.output_proj(beliefs.mu)
                 f_obs = F.cross_entropy(
                     logits.reshape(-1, self.vocab_size),
                     targets.reshape(-1),
                     ignore_index=50256
                 )
-                vfe_internal = vfe_internal + f_obs
+                vfe_internal = vfe_internal + self.lambda_obs * f_obs
 
             # Compute gradients w.r.t. beliefs
             # NOTE: create_graph=False for speed. Gradients still flow through

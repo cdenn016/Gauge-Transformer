@@ -39,7 +39,9 @@ DEFAULT_CONFIG = {
     'n_layers': 4,            # Number of Q-flow layers (stacked)
     'n_q_iterations': 5,      # Iterations per layer
     'residual': True,         # Residual connections between layers
-    'observe_during_qflow': False,  # True=pure FEP (obs in VFE), False=blind prediction
+    'observe_during_qflow': True,   # True=two-phase FEP, False=blind prediction
+    'blind_iterations': 3,          # Alignment-only iterations before observing
+    'lambda_obs': 1.0,              # Observation term weight
 
     # VFE weights
     'alpha': 0.1,             # Self-coupling (entropy)
@@ -325,7 +327,12 @@ def main():
     print(f"  Irrep spec: {config['irrep_spec']}")
     print(f"  N layers: {config['n_layers']} (Q-flow iterations: {config['n_q_iterations']} per layer)")
     print(f"  Residual: {config.get('residual', True)}")
-    observe_mode = "PURE FEP (obs in VFE)" if config.get('observe_during_qflow', False) else "BLIND (honest LM)"
+    if config.get('observe_during_qflow', False):
+        blind_iters = config.get('blind_iterations', 3)
+        obs_iters = config['n_q_iterations'] - blind_iters
+        observe_mode = f"TWO-PHASE FEP (align:{blind_iters} → obs:{obs_iters}, λ={config.get('lambda_obs', 1.0)})"
+    else:
+        observe_mode = "BLIND (honest LM)"
     print(f"  Q-flow mode: {observe_mode}")
     print(f"  BCH order: {config['bch_order']}")
     print(f"  VFE weights: α={config['alpha']}, β={config['beta']}, γ={config['gamma']}")
@@ -345,6 +352,8 @@ def main():
         temperature=config['temperature'],
         residual=config.get('residual', True),
         observe_during_qflow=config.get('observe_during_qflow', False),
+        blind_iterations=config.get('blind_iterations', 3),
+        lambda_obs=config.get('lambda_obs', 1.0),
     ).to(device)
 
     n_params = sum(p.numel() for p in model.parameters())
