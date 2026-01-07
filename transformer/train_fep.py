@@ -6,13 +6,10 @@ Minimal, clean training loop for the Free Energy Principle Transformer.
 No bells and whistles - just the core VFE minimization.
 
 Usage:
-    python -m transformer.train_fep --dataset wikitext-2 --epochs 10
-
-    Or run directly:
-    python transformer/train_fep.py --dataset wikitext-2 --epochs 10
+    Edit DEFAULT_CONFIG below, then run:
+    python transformer/train_fep.py
 """
 
-import argparse
 import math
 import time
 from pathlib import Path
@@ -52,12 +49,14 @@ DEFAULT_CONFIG = {
     'temperature': 1.0,       # Attention temperature
 
     # Training
+    'dataset': 'wikitext-103',  # 'wikitext-2', 'wikitext-103', or 'random'
     'batch_size': 8,
     'seq_len': 128,
     'learning_rate': 1e-3,
     'weight_decay': 0.01,
     'epochs': 10,
     'grad_clip': 1.0,
+    'output_dir': './fep_checkpoints',
 
     # Logging
     'log_interval': 100,
@@ -264,43 +263,21 @@ def evaluate(model, dataloader, device):
 # =============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description='Train FEP Transformer')
-    parser.add_argument('--dataset', type=str, default='wikitext-103',
-                        choices=['wikitext-2', 'wikitext-103', 'random'])
-    parser.add_argument('--epochs', type=int, default=10)
-    parser.add_argument('--batch_size', type=int, default=8)
-    parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--embed_dim', type=int, default=30)
-    parser.add_argument('--gauge_dim', type=int, default=10)
-    parser.add_argument('--n_layers', type=int, default=4, help='Number of Q-flow layers')
-    parser.add_argument('--observe', action='store_true', help='Include observations in Q-flow (pure FEP mode)')
-    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
-    parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--output_dir', type=str, default='./fep_checkpoints')
-    args = parser.parse_args()
+    # =========================================================================
+    # ALL SETTINGS IN DEFAULT_CONFIG - just edit that dict above!
+    # =========================================================================
+    config = DEFAULT_CONFIG.copy()
 
     # Set seed
-    torch.manual_seed(args.seed)
+    torch.manual_seed(42)
     if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(args.seed)
+        torch.cuda.manual_seed_all(42)
 
-    # Config
-    config = DEFAULT_CONFIG.copy()
-    config['epochs'] = args.epochs
-    config['batch_size'] = args.batch_size
-    config['learning_rate'] = args.lr
-    config['embed_dim'] = args.embed_dim
-    config['gauge_dim'] = args.gauge_dim
-    config['n_layers'] = args.n_layers
-    # Only override config if --observe flag is explicitly passed
-    if args.observe:
-        config['observe_during_qflow'] = True
+    # Auto-compute irrep_spec from embed_dim and gauge_dim
+    n_copies = config['embed_dim'] // config['gauge_dim']
+    config['irrep_spec'] = [('fund', n_copies, config['gauge_dim'])]
 
-    # Update irrep_spec based on embed_dim and gauge_dim
-    n_copies = args.embed_dim // args.gauge_dim
-    config['irrep_spec'] = [('fund', n_copies, args.gauge_dim)]
-
-    device = torch.device(args.device)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
 
     # Load tokenizer and data
@@ -308,12 +285,13 @@ def main():
     if tokenizer is not None:
         config['vocab_size'] = len(tokenizer)
 
-    if args.dataset == 'random' or tokenizer is None:
+    dataset_name = config.get('dataset', 'wikitext-103')
+    if dataset_name == 'random' or tokenizer is None:
         print("Using random data for testing...")
         train_data = RandomDataset(config['vocab_size'], config['seq_len'], 10000)
         val_data = RandomDataset(config['vocab_size'], config['seq_len'], 1000)
     else:
-        train_data, val_data = get_dataset(args.dataset, tokenizer, config['seq_len'])
+        train_data, val_data = get_dataset(dataset_name, tokenizer, config['seq_len'])
         if train_data is None:
             train_data = RandomDataset(config['vocab_size'], config['seq_len'], 10000)
             val_data = RandomDataset(config['vocab_size'], config['seq_len'], 1000)
@@ -366,7 +344,7 @@ def main():
     )
 
     # Training loop
-    output_dir = Path(args.output_dir)
+    output_dir = Path(config['output_dir'])
     output_dir.mkdir(parents=True, exist_ok=True)
 
     best_val_ppl = float('inf')
