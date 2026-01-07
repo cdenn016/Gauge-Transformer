@@ -193,6 +193,12 @@ def train_epoch(model, dataloader, optimizer, config, device, epoch, tokenizer=N
         loss = outputs['loss']
         ce_loss = outputs['ce_loss']
 
+        # Skip batch if NaN detected
+        if torch.isnan(loss) or torch.isnan(ce_loss):
+            tqdm.write(f"  [Warning] NaN detected at batch {batch_idx}, skipping...")
+            optimizer.zero_grad()  # Clear any partial gradients
+            continue
+
         # Backward pass
         loss.backward()
 
