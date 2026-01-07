@@ -170,14 +170,15 @@ def quick_sample(model, tokenizer, device, temperature=0.8, max_tokens=20):
     return prompt, generated
 
 
-def train_epoch(model, dataloader, optimizer, config, device, epoch, tokenizer=None):
-    """Train for one epoch."""
+def train_epoch(model, dataloader, optimizer, config, device, epoch, tokenizer=None, val_loader=None):
+    """Train for one epoch with periodic validation."""
     model.train()
     total_loss = 0
     total_ce = 0
     n_batches = 0
 
-    sample_interval = config.get('sample_interval', 500)  # Show sample every N batches
+    sample_interval = config.get('sample_interval', 500)
+    eval_interval = config.get('eval_interval', 500)
 
     pbar = tqdm(dataloader, desc=f'Epoch {epoch}')
     for batch_idx, batch in enumerate(pbar):
@@ -197,7 +198,7 @@ def train_epoch(model, dataloader, optimizer, config, device, epoch, tokenizer=N
         # Skip batch if NaN detected
         if torch.isnan(loss) or torch.isnan(ce_loss):
             tqdm.write(f"  [Warning] NaN detected at batch {batch_idx}, skipping...")
-            optimizer.zero_grad()  # Clear any partial gradients
+            optimizer.zero_grad()
             continue
 
         # Backward pass
@@ -228,6 +229,12 @@ def train_epoch(model, dataloader, optimizer, config, device, epoch, tokenizer=N
         if tokenizer is not None and batch_idx > 0 and batch_idx % sample_interval == 0:
             prompt, generated = quick_sample(model, tokenizer, device)
             tqdm.write(f"\n  [Sample] \"{prompt}\" → {generated}\n")
+
+        # Periodic validation
+        if val_loader is not None and batch_idx > 0 and batch_idx % eval_interval == 0:
+            val_loss, val_ce, val_ppl = evaluate(model, val_loader, device)
+            tqdm.write(f"\n  [Val @ {batch_idx}] CE={val_ce:.4f}, PPL={val_ppl:.1f}\n")
+            model.train()  # Back to training mode
 
     return total_loss / n_batches, total_ce / n_batches
 
@@ -353,7 +360,7 @@ def main():
         start_time = time.time()
 
         train_loss, train_ce = train_epoch(
-            model, train_loader, optimizer, config, device, epoch, tokenizer
+            model, train_loader, optimizer, config, device, epoch, tokenizer, val_loader
         )
 
         val_loss, val_ce, val_ppl = evaluate(model, val_loader, device)
