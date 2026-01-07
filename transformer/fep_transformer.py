@@ -1085,6 +1085,13 @@ class FEPTransformer(nn.Module):
         Returns updated beliefs, final vfe_internal, and attention weights.
         """
         for q_iter in range(self.q_flow.n_iterations):
+            # Clamp sigma BEFORE computing VFE to prevent NaN
+            beliefs = GaussianBelief(
+                mu=beliefs.mu,
+                sigma=torch.clamp(beliefs.sigma, 1e-4, 1e4),
+                phi=beliefs.phi
+            )
+
             # Ensure gradients can be computed
             beliefs.mu.requires_grad_(True)
             beliefs.sigma.requires_grad_(True)
