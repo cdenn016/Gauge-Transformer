@@ -292,7 +292,9 @@ def main():
     config['embed_dim'] = args.embed_dim
     config['gauge_dim'] = args.gauge_dim
     config['n_layers'] = args.n_layers
-    config['observe_during_qflow'] = args.observe
+    # Only override config if --observe flag is explicitly passed
+    if args.observe:
+        config['observe_during_qflow'] = True
 
     # Update irrep_spec based on embed_dim and gauge_dim
     n_copies = args.embed_dim // args.gauge_dim
