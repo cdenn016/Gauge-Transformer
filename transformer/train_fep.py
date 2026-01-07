@@ -241,11 +241,15 @@ def train_epoch(model, dataloader, optimizer, config, device, epoch, tokenizer=N
 
 @torch.no_grad()
 def evaluate(model, dataloader, device):
-    """Evaluate on validation set."""
+    """Evaluate on validation set with HONEST (blind) Q-flow."""
     model.eval()
     total_loss = 0
     total_ce = 0
     n_batches = 0
+
+    # Force blind Q-flow during validation - no peeking at targets!
+    original_observe = model.observe_during_qflow
+    model.observe_during_qflow = False
 
     for batch in dataloader:
         input_ids = batch['input_ids'].to(device)
@@ -257,6 +261,9 @@ def evaluate(model, dataloader, device):
         total_loss += outputs['loss'].item()
         total_ce += outputs['ce_loss'].item()
         n_batches += 1
+
+    # Restore original setting
+    model.observe_during_qflow = original_observe
 
     avg_loss = total_loss / n_batches
     avg_ce = total_ce / n_batches
