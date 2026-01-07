@@ -39,8 +39,9 @@ DEFAULT_CONFIG = {
     'embed_dim': 30,          # Small for testing (3 x SO(10))
     'gauge_dim': 10,          # SO(10)
     'irrep_spec': [('fund', 3, 10)],  # 3 copies of fundamental
-    'n_layers': 1,
-    'n_q_iterations': 5,
+    'n_layers': 4,            # Number of Q-flow layers (stacked)
+    'n_q_iterations': 5,      # Iterations per layer
+    'residual': True,         # Residual connections between layers
 
     # VFE weights
     'alpha': 0.1,             # Self-coupling (entropy)
@@ -270,7 +271,7 @@ def main():
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--embed_dim', type=int, default=30)
     parser.add_argument('--gauge_dim', type=int, default=10)
-    parser.add_argument('--n_layers', type=int, default=1)
+    parser.add_argument('--n_layers', type=int, default=4, help='Number of Q-flow layers')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--output_dir', type=str, default='./fep_checkpoints')
@@ -325,6 +326,8 @@ def main():
     print(f"  Embed dim: {config['embed_dim']}")
     print(f"  Gauge dim: {config['gauge_dim']} (SO({config['gauge_dim']}))")
     print(f"  Irrep spec: {config['irrep_spec']}")
+    print(f"  N layers: {config['n_layers']} (Q-flow iterations: {config['n_q_iterations']} per layer)")
+    print(f"  Residual: {config.get('residual', True)}")
     print(f"  BCH order: {config['bch_order']}")
     print(f"  VFE weights: α={config['alpha']}, β={config['beta']}, γ={config['gamma']}")
     print("=" * 60 + "\n")
@@ -341,6 +344,7 @@ def main():
         gamma=config['gamma'],
         bch_order=config['bch_order'],
         temperature=config['temperature'],
+        residual=config.get('residual', True),
     ).to(device)
 
     n_params = sum(p.numel() for p in model.parameters())

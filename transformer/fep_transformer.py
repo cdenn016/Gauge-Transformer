@@ -1022,6 +1022,9 @@ class FEPTransformer(nn.Module):
     3. P-flow: Update priors toward successful beliefs
     4. Output: Project final beliefs to vocabulary
 
+    Multi-layer: Stack Q-flow layers for hierarchical belief refinement.
+    Each layer has its own priors and Q-flow dynamics.
+
     NO learned attention weights, NO MLP layers.
     Everything emerges from VFE minimization.
     """
@@ -1038,13 +1041,15 @@ class FEPTransformer(nn.Module):
                  gamma: float = 0.1,
                  bch_order: int = 2,
                  temperature: float = 1.0,
-                 tie_embeddings: bool = False):
+                 tie_embeddings: bool = False,
+                 residual: bool = True):
         super().__init__()
 
         self.vocab_size = vocab_size
         self.embed_dim = embed_dim
         self.gauge_dim = gauge_dim
         self.n_layers = n_layers
+        self.residual = residual
 
         # Parse irrep specification
         if irrep_spec is not None:
@@ -1055,20 +1060,27 @@ class FEPTransformer(nn.Module):
             # Default: single block matching gauge_dim
             self.irrep_spec = None
 
-        # Belief embeddings
+        # Belief embeddings (input layer)
         self.belief_embed = BeliefEmbedding(vocab_size, embed_dim, gauge_dim)
 
-        # Prior bank (learnable priors per token)
-        self.prior_embed = BeliefEmbedding(vocab_size, embed_dim, gauge_dim)
+        # Per-layer priors and Q-flow dynamics
+        self.layer_priors = nn.ModuleList([
+            BeliefEmbedding(vocab_size, embed_dim, gauge_dim)
+            for _ in range(n_layers)
+        ])
 
-        # VFE functional
-        self.vfe = VFEFunctional(embed_dim, gauge_dim, self.irrep_spec,
-                                  alpha, beta, gamma, bch_order, temperature)
+        self.layer_vfe = nn.ModuleList([
+            VFEFunctional(embed_dim, gauge_dim, self.irrep_spec,
+                         alpha, beta, gamma, bch_order, temperature)
+            for _ in range(n_layers)
+        ])
 
-        # Q-flow dynamics
-        self.q_flow = QFlow(embed_dim, n_iterations=n_q_iterations)
+        self.layer_q_flow = nn.ModuleList([
+            QFlow(embed_dim, n_iterations=n_q_iterations)
+            for _ in range(n_layers)
+        ])
 
-        # P-flow dynamics
+        # P-flow dynamics (shared across layers)
         self.p_flow = PFlow(embed_dim)
 
         # Output projection
@@ -1077,14 +1089,17 @@ class FEPTransformer(nn.Module):
         if tie_embeddings:
             self.output_proj.weight = self.belief_embed.mu.weight
 
-    def _run_q_flow(self, beliefs: GaussianBelief, priors: GaussianBelief,
-                    mask: torch.Tensor) -> Tuple[GaussianBelief, torch.Tensor, torch.Tensor]:
+    def _run_q_flow_layer(self, beliefs: GaussianBelief, priors: GaussianBelief,
+                          mask: torch.Tensor, layer_idx: int) -> Tuple[GaussianBelief, torch.Tensor, torch.Tensor]:
         """
-        Run Q-flow iterations to optimize beliefs.
+        Run Q-flow iterations for a single layer.
 
         Returns updated beliefs, final vfe_internal, and attention weights.
         """
-        for q_iter in range(self.q_flow.n_iterations):
+        vfe = self.layer_vfe[layer_idx]
+        q_flow = self.layer_q_flow[layer_idx]
+
+        for q_iter in range(q_flow.n_iterations):
             # Clamp sigma BEFORE computing VFE to prevent NaN
             beliefs = GaussianBelief(
                 mu=beliefs.mu,
@@ -1096,14 +1111,14 @@ class FEPTransformer(nn.Module):
             beliefs.mu.requires_grad_(True)
             beliefs.sigma.requires_grad_(True)
 
-            f_self = self.vfe.f_self(beliefs)
-            f_align, attn = self.vfe.f_align(beliefs, mask)
-            f_prior = self.vfe.f_prior(beliefs, priors)
+            f_self = vfe.f_self(beliefs)
+            f_align, attn = vfe.f_align(beliefs, mask)
+            f_prior = vfe.f_prior(beliefs, priors)
 
             # Internal VFE for optimization (NO f_obs!)
-            vfe_internal = (self.vfe.alpha * f_self +
-                           self.vfe.beta * f_align +
-                           self.vfe.gamma * f_prior)
+            vfe_internal = (vfe.alpha * f_self +
+                           vfe.beta * f_align +
+                           vfe.gamma * f_prior)
 
             # Compute gradients w.r.t. beliefs
             grads = torch.autograd.grad(
@@ -1114,7 +1129,7 @@ class FEPTransformer(nn.Module):
             )
 
             # Update beliefs via natural gradient
-            beliefs = self.q_flow.step(beliefs, grads[0], grads[1])
+            beliefs = q_flow.step(beliefs, grads[0], grads[1])
 
         return beliefs, vfe_internal, attn
 
@@ -1137,31 +1152,50 @@ class FEPTransformer(nn.Module):
 
         # Get initial beliefs from embeddings
         beliefs = self.belief_embed(input_ids)
-        priors = self.prior_embed(input_ids)
 
         # Causal mask for autoregressive
         mask = torch.tril(torch.ones(N, N, device=input_ids.device)).unsqueeze(0)
 
-        # Q-flow: iterative belief updates
+        # Multi-layer Q-flow: stack belief refinement
         # CRITICAL: Do NOT include targets during Q-flow to prevent label leakage
-        # The model must optimize beliefs based ONLY on self-consistency and priors
-
-        # Check if we're in inference mode (no gradients available)
         inference_mode = not torch.is_grad_enabled()
 
-        if inference_mode:
-            # During inference, run Q-flow with gradient computation enabled
-            with torch.enable_grad():
-                beliefs, vfe_internal, attn = self._run_q_flow(beliefs, priors, mask)
-        else:
-            # During training, run normally
-            beliefs, vfe_internal, attn = self._run_q_flow(beliefs, priors, mask)
+        total_vfe = 0.0
+        all_attns = []
 
-        # Output logits (AFTER Q-flow has finished)
+        for layer_idx in range(self.n_layers):
+            # Get layer-specific priors
+            priors = self.layer_priors[layer_idx](input_ids)
+
+            # Store input for residual connection
+            if self.residual and layer_idx > 0:
+                beliefs_in = beliefs
+
+            # Run Q-flow for this layer
+            if inference_mode:
+                with torch.enable_grad():
+                    beliefs, vfe_internal, attn = self._run_q_flow_layer(
+                        beliefs, priors, mask, layer_idx)
+            else:
+                beliefs, vfe_internal, attn = self._run_q_flow_layer(
+                    beliefs, priors, mask, layer_idx)
+
+            # Residual connection: add input beliefs to output
+            if self.residual and layer_idx > 0:
+                beliefs = GaussianBelief(
+                    mu=beliefs.mu + beliefs_in.mu,
+                    sigma=beliefs.sigma,  # Don't add variances
+                    phi=beliefs.phi
+                )
+
+            total_vfe += vfe_internal
+            all_attns.append(attn)
+
+        # Output logits (AFTER all Q-flow layers)
         logits = self.output_proj(beliefs.mu)
 
         # Components for logging
-        components = {'attention': attn, 'vfe_internal': vfe_internal.item()}
+        components = {'attention': all_attns[-1], 'vfe_internal': total_vfe.item() if hasattr(total_vfe, 'item') else total_vfe}
 
         result = {'logits': logits}
 
@@ -1175,10 +1209,10 @@ class FEPTransformer(nn.Module):
             )
             components['f_obs'] = f_obs.item()
 
-            # Total VFE = internal terms + observation
+            # Total VFE = internal terms (summed across layers) + observation
             # The internal terms (f_self, f_align, f_prior) were already optimized by Q-flow
             # f_obs provides the learning signal
-            result['loss'] = vfe_internal + f_obs
+            result['loss'] = total_vfe + f_obs
             result['ce_loss'] = f_obs
 
         if return_components:
