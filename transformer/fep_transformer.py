@@ -1042,7 +1042,15 @@ class FEPTransformer(nn.Module):
                  bch_order: int = 2,
                  temperature: float = 1.0,
                  tie_embeddings: bool = False,
-                 residual: bool = True):
+                 residual: bool = True,
+                 observe_during_qflow: bool = False):
+        """
+        Args:
+            observe_during_qflow: If True, include observation term (f_obs) in VFE
+                during Q-flow iterations. This is "pure FEP" where beliefs update
+                based on observations. If False (default), Q-flow is blind and
+                f_obs only contributes to the final loss - more honest for LM.
+        """
         super().__init__()
 
         self.vocab_size = vocab_size
@@ -1050,6 +1058,7 @@ class FEPTransformer(nn.Module):
         self.gauge_dim = gauge_dim
         self.n_layers = n_layers
         self.residual = residual
+        self.observe_during_qflow = observe_during_qflow
 
         # Parse irrep specification
         if irrep_spec is not None:
@@ -1090,9 +1099,14 @@ class FEPTransformer(nn.Module):
             self.output_proj.weight = self.belief_embed.mu.weight
 
     def _run_q_flow_layer(self, beliefs: GaussianBelief, priors: GaussianBelief,
-                          mask: torch.Tensor, layer_idx: int) -> Tuple[GaussianBelief, torch.Tensor, torch.Tensor]:
+                          mask: torch.Tensor, layer_idx: int,
+                          targets: Optional[torch.Tensor] = None) -> Tuple[GaussianBelief, torch.Tensor, torch.Tensor]:
         """
         Run Q-flow iterations for a single layer.
+
+        Args:
+            targets: If provided AND observe_during_qflow=True, include f_obs in VFE.
+                     This is the "pure FEP" mode where observations drive belief updates.
 
         Returns updated beliefs, final vfe_internal, and attention weights.
         """
@@ -1115,10 +1129,20 @@ class FEPTransformer(nn.Module):
             f_align, attn = vfe.f_align(beliefs, mask)
             f_prior = vfe.f_prior(beliefs, priors)
 
-            # Internal VFE for optimization (NO f_obs!)
+            # Internal VFE
             vfe_internal = (vfe.alpha * f_self +
                            vfe.beta * f_align +
                            vfe.gamma * f_prior)
+
+            # Optionally include observations in VFE (pure FEP mode)
+            if self.observe_during_qflow and targets is not None:
+                logits = self.output_proj(beliefs.mu)
+                f_obs = F.cross_entropy(
+                    logits.reshape(-1, self.vocab_size),
+                    targets.reshape(-1),
+                    ignore_index=50256
+                )
+                vfe_internal = vfe_internal + f_obs
 
             # Compute gradients w.r.t. beliefs
             grads = torch.autograd.grad(
@@ -1157,8 +1181,12 @@ class FEPTransformer(nn.Module):
         mask = torch.tril(torch.ones(N, N, device=input_ids.device)).unsqueeze(0)
 
         # Multi-layer Q-flow: stack belief refinement
-        # CRITICAL: Do NOT include targets during Q-flow to prevent label leakage
+        # If observe_during_qflow=True: beliefs update based on observations (pure FEP)
+        # If observe_during_qflow=False: blind Q-flow, f_obs only in final loss (honest LM)
         inference_mode = not torch.is_grad_enabled()
+
+        # Only pass targets to Q-flow if observe_during_qflow is enabled
+        qflow_targets = targets if self.observe_during_qflow else None
 
         total_vfe = 0.0
         all_attns = []
@@ -1175,10 +1203,10 @@ class FEPTransformer(nn.Module):
             if inference_mode:
                 with torch.enable_grad():
                     beliefs, vfe_internal, attn = self._run_q_flow_layer(
-                        beliefs, priors, mask, layer_idx)
+                        beliefs, priors, mask, layer_idx, qflow_targets)
             else:
                 beliefs, vfe_internal, attn = self._run_q_flow_layer(
-                    beliefs, priors, mask, layer_idx)
+                    beliefs, priors, mask, layer_idx, qflow_targets)
 
             # Residual connection: add input beliefs to output
             if self.residual and layer_idx > 0:

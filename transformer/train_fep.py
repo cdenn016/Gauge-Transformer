@@ -42,6 +42,7 @@ DEFAULT_CONFIG = {
     'n_layers': 4,            # Number of Q-flow layers (stacked)
     'n_q_iterations': 5,      # Iterations per layer
     'residual': True,         # Residual connections between layers
+    'observe_during_qflow': False,  # True=pure FEP (obs in VFE), False=blind prediction
 
     # VFE weights
     'alpha': 0.1,             # Self-coupling (entropy)
@@ -272,6 +273,7 @@ def main():
     parser.add_argument('--embed_dim', type=int, default=30)
     parser.add_argument('--gauge_dim', type=int, default=10)
     parser.add_argument('--n_layers', type=int, default=4, help='Number of Q-flow layers')
+    parser.add_argument('--observe', action='store_true', help='Include observations in Q-flow (pure FEP mode)')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--output_dir', type=str, default='./fep_checkpoints')
@@ -290,6 +292,7 @@ def main():
     config['embed_dim'] = args.embed_dim
     config['gauge_dim'] = args.gauge_dim
     config['n_layers'] = args.n_layers
+    config['observe_during_qflow'] = args.observe
 
     # Update irrep_spec based on embed_dim and gauge_dim
     n_copies = args.embed_dim // args.gauge_dim
@@ -328,6 +331,8 @@ def main():
     print(f"  Irrep spec: {config['irrep_spec']}")
     print(f"  N layers: {config['n_layers']} (Q-flow iterations: {config['n_q_iterations']} per layer)")
     print(f"  Residual: {config.get('residual', True)}")
+    observe_mode = "PURE FEP (obs in VFE)" if config.get('observe_during_qflow', False) else "BLIND (honest LM)"
+    print(f"  Q-flow mode: {observe_mode}")
     print(f"  BCH order: {config['bch_order']}")
     print(f"  VFE weights: α={config['alpha']}, β={config['beta']}, γ={config['gamma']}")
     print("=" * 60 + "\n")
@@ -345,6 +350,7 @@ def main():
         bch_order=config['bch_order'],
         temperature=config['temperature'],
         residual=config.get('residual', True),
+        observe_during_qflow=config.get('observe_during_qflow', False),
     ).to(device)
 
     n_params = sum(p.numel() for p in model.parameters())
