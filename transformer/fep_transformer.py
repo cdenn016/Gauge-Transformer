@@ -1145,10 +1145,12 @@ class FEPTransformer(nn.Module):
                 vfe_internal = vfe_internal + f_obs
 
             # Compute gradients w.r.t. beliefs
+            # NOTE: create_graph=False for speed. Gradients still flow through
+            # belief updates because beliefs.mu is tracked.
             grads = torch.autograd.grad(
                 vfe_internal,
                 [beliefs.mu, beliefs.sigma],
-                create_graph=self.training,
+                create_graph=False,  # Don't build graph through Q-flow iterations
                 retain_graph=True
             )
 
