@@ -143,6 +143,14 @@ class GaugeTransformerLM(nn.Module):
         # CRITICAL: Token-dependent is REQUIRED for language modeling!
         use_prior_bank = config.get('use_prior_bank', False)  # Toggle for PriorBank
 
+        # =================================================================
+        # Output Mode: 'linear' (default) or 'kl_to_prior' (principled)
+        # =================================================================
+        # 'linear': Standard nn.Linear projection (learns W_out)
+        # 'kl_to_prior': logits = -KL(q || π_v) / τ (uses PriorBank, principled!)
+        self.output_mode = config.get('output_mode', 'linear')
+        self.output_tau = config.get('output_tau', 1.0)  # Temperature for KL-to-prior
+
         # Pure FEP requires untied embeddings!
         # - Input embeddings (W_in) = priors, updated via p-flow
         # - Output embeddings (W_out) = observation anchors, fixed
@@ -279,10 +287,15 @@ class GaugeTransformerLM(nn.Module):
         )
 
         # =================================================================
-        # PriorBank for Pure FEP (Token-Dependent Priors)
+        # PriorBank for Pure FEP or KL-to-Prior Output
         # =================================================================
+        # Create PriorBank when:
+        # 1. Pure FEP mode with use_prior_bank=True
+        # 2. output_mode='kl_to_prior' (principled output projection)
         self.prior_bank = None
-        if ffn_pure_fep_mode and use_prior_bank:
+        need_prior_bank = (ffn_pure_fep_mode and use_prior_bank) or (self.output_mode == 'kl_to_prior')
+
+        if need_prior_bank:
             from transformer.prior_bank import PriorBank
 
             self.prior_bank = PriorBank(
@@ -297,6 +310,7 @@ class GaugeTransformerLM(nn.Module):
             )
             print(f"[GaugeTransformerLM] Created PriorBank with token-dependent priors (vocab_size={vocab_size})")
             print(f"                     gauge_fixed_priors={gauge_fixed_priors}")
+            print(f"                     output_mode={self.output_mode}")
 
         # =================================================================
         # Transformer Stack
@@ -499,7 +513,13 @@ class GaugeTransformerLM(nn.Module):
         # =================================================================
         # 7. Project to Vocabulary (one prediction per agent)
         # =================================================================
-        logits = self.out_proj(mu_q)  # (B, N, V)
+        if self.output_mode == 'kl_to_prior' and self.prior_bank is not None:
+            # PRINCIPLED OUTPUT: logits = -KL(q || π_v) / τ
+            # Uses belief uncertainty (sigma_q) for uncertainty-aware predictions
+            logits = self.prior_bank.decode(mu_q, sigma_q, tau=self.output_tau)  # (B, N, V)
+        else:
+            # STANDARD OUTPUT: linear projection (ignores sigma_q)
+            logits = self.out_proj(mu_q)  # (B, N, V)
 
         # =================================================================
         # Trajectory Recording: End forward pass
@@ -627,7 +647,12 @@ class GaugeTransformerLM(nn.Module):
         mu_q = self.transformer.final_norm(mu_q)
 
         # Project to vocabulary
-        logits = self.out_proj(mu_q)
+        if self.output_mode == 'kl_to_prior' and self.prior_bank is not None:
+            # PRINCIPLED OUTPUT: logits = -KL(q || π_v) / τ
+            logits = self.prior_bank.decode(mu_q, sigma_q, tau=self.output_tau)  # (B, N, V)
+        else:
+            # STANDARD OUTPUT: linear projection
+            logits = self.out_proj(mu_q)
 
         # Get initial embedding priors for gamma term
         mu_p, sigma_p, phi_p = self.token_embed(token_ids)
