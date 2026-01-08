@@ -1460,7 +1460,12 @@ def run_single_experiment(
         print("  Model type: GAUGE VFE TRANSFORMER (KL-divergence attention)")
         print("  - Attention: KL-divergence based")
         print("  - FFN: VFE EM-step dynamics")
-        print("  - Output: Linear projection")
+        # Show actual output mode from config
+        output_mode = config.get('output_mode', 'linear')
+        if output_mode == 'kl_to_prior':
+            print("  - Output: KL-to-prior (principled!)")
+        else:
+            print("  - Output: Linear projection")
         print("  - Learning: Backprop")
         print("  - Position: None (emergent)")
 
@@ -1896,7 +1901,12 @@ def main():
         print("="*70)
         print("   Attention: KL-divergence based (gauge-equivariant)")
         print("   FFN: VFE EM-step dynamics")
-        print("   Output: Linear projection")
+        # Show actual output mode from config
+        output_mode = VFE_EM_CONFIG.get('output_mode', 'linear')
+        if output_mode == 'kl_to_prior':
+            print("   Output: KL-to-prior (principled!)")
+        else:
+            print("   Output: Linear projection")
         print("   Learning: Backpropagation")
         print("   Position: None (emergent)")
         print("="*70 + "\n")
