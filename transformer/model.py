@@ -385,6 +385,15 @@ class GaugeTransformerLM(nn.Module):
         n_params = sum(p.numel() for p in self.parameters())
         print(f"GaugeTransformerLM initialized: {n_params/1e6:.2f}M parameters")
 
+        # Report output mode
+        if self.output_mode == 'kl_to_prior':
+            if self.prior_bank is not None:
+                print(f"                     output_mode=KL-TO-PRIOR (tau={self.output_tau})")
+            else:
+                print(f"WARNING: output_mode='kl_to_prior' but prior_bank is None! Falling back to linear.")
+        else:
+            print(f"                     output_mode=LINEAR")
+
     def _compute_irrep_dims(self, irrep_spec: List[Tuple[str, int, int]]) -> List[int]:
         """
         Compute flat list of block dimensions from irrep_spec.
@@ -516,6 +525,8 @@ class GaugeTransformerLM(nn.Module):
         if self.output_mode == 'kl_to_prior' and self.prior_bank is not None:
             # PRINCIPLED OUTPUT: logits = -KL(q || π_v) / τ
             # Uses belief uncertainty (sigma_q) for uncertainty-aware predictions
+            if sigma_q is None:
+                raise ValueError("KL-to-prior output requires sigma_q but got None! Set evolve_sigma=True")
             logits = self.prior_bank.decode(mu_q, sigma_q, tau=self.output_tau)  # (B, N, V)
         else:
             # STANDARD OUTPUT: linear projection (ignores sigma_q)
@@ -649,6 +660,8 @@ class GaugeTransformerLM(nn.Module):
         # Project to vocabulary
         if self.output_mode == 'kl_to_prior' and self.prior_bank is not None:
             # PRINCIPLED OUTPUT: logits = -KL(q || π_v) / τ
+            if sigma_q is None:
+                raise ValueError("KL-to-prior output requires sigma_q but got None! Set evolve_sigma=True")
             logits = self.prior_bank.decode(mu_q, sigma_q, tau=self.output_tau)  # (B, N, V)
         else:
             # STANDARD OUTPUT: linear projection
