@@ -312,16 +312,6 @@ class GaugeTransformerLM(nn.Module):
             print(f"                     gauge_fixed_priors={gauge_fixed_priors}")
             print(f"                     output_mode={self.output_mode}")
 
-            # Initialize PriorBank priors from token embeddings for better starting point
-            # This makes KL(q || π_v) small when q comes from token v's embedding
-            init_prior_from_embed = config.get('init_prior_from_embed', True)
-            if init_prior_from_embed and not gauge_fixed_priors:
-                with torch.no_grad():
-                    self.prior_bank.prior_mu.data.copy_(self.token_embed.mu_embed.weight.data)
-                    if hasattr(self.prior_bank, 'log_prior_sigma') and hasattr(self.token_embed, 'log_sigma_embed'):
-                        self.prior_bank.log_prior_sigma.data.copy_(self.token_embed.log_sigma_embed.weight.data)
-                print(f"                     initialized priors from token embeddings")
-
         # =================================================================
         # Transformer Stack
         # =================================================================
