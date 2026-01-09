@@ -276,13 +276,11 @@ class PriorBank(nn.Module):
             + torch.log(sigma_p_safe / sigma_q_safe)
         )  # (B, N, V, K)
 
-        # Sum over K dimensions and normalize by K for scale-invariance
-        # This makes logits independent of embedding dimension
+        # Sum over K dimensions
         kl_total = kl_per_dim.sum(dim=-1)  # (B, N, V)
-        kl_normalized = kl_total / K  # Mean KL per dimension
 
         # Convert to logits: -KL/τ (negative because higher KL = lower probability)
-        logits = -kl_normalized / tau  # (B, N, V)
+        logits = -kl_total / tau  # (B, N, V)
 
         return logits
 
