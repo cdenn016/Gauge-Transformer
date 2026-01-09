@@ -403,20 +403,6 @@ VFE_EM_CONFIG = {
     'pos_encoding_scale': 0.3,
     'use_prior_bank': True,
 
-    # =================================================================
-    # OUTPUT MODE: 'linear' (default) or 'kl_to_prior' (principled)
-    # =================================================================
-    # 'linear': Standard nn.Linear projection (learns W_out, ignores Σ)
-    # 'kl_to_prior': logits = -KL(q||π_v)/τ (uses PriorBank, uncertainty-aware)
-    #
-    # KL-to-prior is more theoretically principled:
-    # - No learned W_out needed (uses same PriorBank as embeddings)
-    # - Uses belief uncertainty Σ_q (uncertain beliefs → flatter predictions)
-    # - Completes the VFE architecture (attention + FFN + output all VFE-based)
-    # =================================================================
-    'output_mode': 'linear',      # Change to 'kl_to_prior' for principled output
-    'output_tau': 1.0,            # Temperature for KL-to-prior softmax
-
     # Not used in VFE_EM mode
     'ffn_pure_fep_mode': False,
     'ffn_prior_lr': 0.01,
