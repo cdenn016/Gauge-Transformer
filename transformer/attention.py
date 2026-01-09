@@ -623,7 +623,8 @@ def _compute_kl_matrix_torch(
 
         # KL divergence for all pairs
         kl_all = 0.5 * (trace_term + mahal_term - K + logdet_term)  # (B, N, N)
-        kl_all = torch.clamp(kl_all, min=0.0)
+        # Clamp KL to [0, 100] for numerical stability
+        kl_all = torch.clamp(kl_all, min=0.0, max=100.0)
 
         # Copy to output (in-place)
         kl_matrix.copy_(kl_all)
@@ -825,7 +826,9 @@ def _compute_kl_matrix_diagonal(
 
     # Full KL
     kl_all = 0.5 * (trace_term + mahal_term - K + logdet_term)
-    kl_all = torch.clamp(kl_all, min=0.0)
+    # Clamp KL to [0, 100] for numerical stability
+    # Values > 100 indicate severely divergent distributions and cause gradient explosion
+    kl_all = torch.clamp(kl_all, min=0.0, max=100.0)
 
     kl_matrix.copy_(kl_all)
 
@@ -971,7 +974,8 @@ def _compute_kl_matrix_chunked(
 
                 # KL divergence for chunk
                 kl_chunk = 0.5 * (trace_term + mahal_term - K + logdet_term)
-                kl_chunk = torch.clamp(kl_chunk, min=0.0)
+                # Clamp KL to [0, 100] for numerical stability
+                kl_chunk = torch.clamp(kl_chunk, min=0.0, max=100.0)
 
                 # Write to output
                 kl_matrix[:, i_start:i_end, j_start:j_end] = kl_chunk
@@ -1102,7 +1106,8 @@ def _compute_kl_matrix_diagonal_chunked(
 
             # Full KL
             kl_chunk = 0.5 * (trace_term + mahal_term - K + logdet_term)
-            kl_chunk = torch.clamp(kl_chunk, min=0.0)
+            # Clamp KL to [0, 100] for numerical stability
+            kl_chunk = torch.clamp(kl_chunk, min=0.0, max=100.0)
 
             # Write to output
             kl_matrix[:, i_start:i_end, j_start:j_end] = kl_chunk
@@ -1298,7 +1303,8 @@ def _compute_kl_matrix_block_diagonal(
 
             # KL for this block
             kl_block = 0.5 * (trace_term + mahal_term - d + logdet_p - logdet_q)
-            kl_block = torch.clamp(kl_block, min=0.0)
+            # Clamp KL to [0, 100] for numerical stability
+            kl_block = torch.clamp(kl_block, min=0.0, max=100.0)
 
             # ACCUMULATE to total KL (additive decomposition)
             kl_matrix.add_(kl_block)
@@ -1447,7 +1453,8 @@ def _compute_kl_matrix_block_diagonal_chunked(
 
                     # Accumulate block KL
                     kl_block = 0.5 * (trace_term + mahal_term - d + logdet_p - logdet_q)
-                    kl_chunk.add_(torch.clamp(kl_block, min=0.0))
+                    # Clamp KL to [0, 100] for numerical stability
+                    kl_chunk.add_(torch.clamp(kl_block, min=0.0, max=100.0))
 
                 except RuntimeError:
                     # Fallback: add small contribution
@@ -1614,7 +1621,8 @@ def compute_attention_weights_local(
                 # Fallback: set to large value
                 kl_vals = torch.full((B, n_pairs), 100.0, device=device, dtype=dtype)
 
-        kl_vals = torch.clamp(kl_vals, min=0.0)
+        # Clamp KL to [0, 100] for numerical stability
+        kl_vals = torch.clamp(kl_vals, min=0.0, max=100.0)
 
         # Scatter into KL matrix
         i_indices = torch.arange(i_start, i_end, device=device)
@@ -1789,7 +1797,8 @@ def compute_attention_weights_sparse(
             except RuntimeError:
                 kl_vals = torch.full((end - start,), 100.0, device=device, dtype=dtype)
 
-        kl_vals = torch.clamp(kl_vals, min=0.0)
+        # Clamp KL to [0, 100] for numerical stability
+        kl_vals = torch.clamp(kl_vals, min=0.0, max=100.0)
 
         # Scatter to output
         kl_matrix[b_idx, i_idx, j_idx] = kl_vals

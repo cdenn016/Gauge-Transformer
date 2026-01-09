@@ -223,7 +223,8 @@ def _compute_vfe_gradients_block_diagonal(
                 logdet_i = torch.zeros(B, C_actual, device=device, dtype=dtype)
 
             kl_block = 0.5 * (trace_block + mahal_block - d + logdet_j - logdet_i[:, :, None])
-            kl_values[:, i_start:i_end, :] = kl_values[:, i_start:i_end, :] + kl_block.clamp(min=0.0)
+            # Clamp KL to [0, 100] for numerical stability
+            kl_values[:, i_start:i_end, :] = kl_values[:, i_start:i_end, :] + kl_block.clamp(min=0.0, max=100.0)
 
             # Sigma alignment gradient for this block
             if compute_sigma_align_grad:
@@ -375,7 +376,8 @@ def _compute_vfe_gradients_chunked(
 
             logdet_q = torch.sum(torch.log(sigma_i), dim=-1)[:, :, None].expand(-1, -1, n_j).clone()
 
-            kl_chunk = 0.5 * (trace_term + mahal - K + logdet_p - logdet_q).clamp(min=0.0)
+            # Clamp KL to [0, 100] for numerical stability
+            kl_chunk = 0.5 * (trace_term + mahal - K + logdet_p - logdet_q).clamp(min=0.0, max=100.0)
 
             # Accumulate weighted gradient for avg_grad (non-inplace)
             chunk_beta_grad_kl_sum = chunk_beta_grad_kl_sum + torch.einsum('bij,bijk->bik', beta_chunk, grad_kl)
@@ -616,7 +618,8 @@ def compute_vfe_gradients_gpu(
 
         # Full KL divergence
         kl_values = 0.5 * (trace_term + mahal_term - K + logdet_j_t - logdet_i_expanded)
-        kl_values = kl_values.clamp(min=0.0)  # (B, N, N)
+        # Clamp KL to [0, 100] for numerical stability
+        kl_values = kl_values.clamp(min=0.0, max=100.0)  # (B, N, N)
 
         # =================================================================
         # 2a. Direct term: Σ_j β_ij · ∂KL_ij/∂μ_i
@@ -727,7 +730,8 @@ def compute_vfe_gradients_gpu(
 
         # Full KL divergence
         kl_values = 0.5 * (trace_term + mahal_term - K + logdet_j_t - logdet_i_expanded)
-        kl_values = kl_values.clamp(min=0.0)  # (B, N, N)
+        # Clamp KL to [0, 100] for numerical stability
+        kl_values = kl_values.clamp(min=0.0, max=100.0)  # (B, N, N)
 
         # Direct term
         grad_mu_direct = lambda_belief * torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair)
@@ -962,8 +966,9 @@ def retract_spd_diagonal_torch(
     exp_arg = (step_size * whitened).clamp(-50.0, 50.0)
     sigma_new = sigma_safe * torch.exp(exp_arg)
 
-    # Floor for safety
-    return sigma_new.clamp(min=eps)
+    # Clamp to [eps, 100.0] for numerical stability
+    # Floor prevents division by zero; ceiling prevents KL divergence explosion
+    return sigma_new.clamp(min=eps, max=100.0)
 
 
 # =============================================================================
