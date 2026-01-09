@@ -250,8 +250,9 @@ def gaussian_kl_divergence(
         # KL divergence
         kl = 0.5 * (trace_term + mahal_term - K + logdet_term)
 
-    # Clamp to non-negative (numerical safety)
-    return torch.clamp(kl, min=0.0)
+    # Clamp to [0, 100] for numerical stability
+    # Values > 100 indicate severely divergent distributions and cause gradient explosion
+    return torch.clamp(kl, min=0.0, max=100.0)
 
 try:
     from tqdm import tqdm
