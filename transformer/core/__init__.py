@@ -11,7 +11,7 @@ This module contains the core transformer model components:
 - PriorBank: Token-dependent priors
 """
 
-from transformer.core.model import GaugeTransformerLM, create_gauge_transformer_lm
+from transformer.core.model import GaugeTransformerLM
 from transformer.core.blocks import GaugeTransformerBlock, GaugeTransformerStack
 from transformer.core.attention import (
     compute_attention_weights,
@@ -28,13 +28,12 @@ from transformer.core.embeddings import (
     GaugePositionalEncoding,
 )
 from transformer.core.prior_bank import PriorBank
-from transformer.core.ffn import FFNWrapper
+from transformer.core.ffn import GaugeFFN, create_ffn
 from transformer.core.variational_ffn import VariationalFFNDynamic
 
 __all__ = [
     # Main model
     'GaugeTransformerLM',
-    'create_gauge_transformer_lm',
 
     # Blocks
     'GaugeTransformerBlock',
@@ -58,6 +57,7 @@ __all__ = [
     'PriorBank',
 
     # FFN
-    'FFNWrapper',
+    'GaugeFFN',
+    'create_ffn',
     'VariationalFFNDynamic',
 ]
