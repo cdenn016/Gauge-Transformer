@@ -26,7 +26,7 @@ warnings.filterwarnings("ignore", message="Failed to find nvdisasm", category=Us
 # =============================================================================
 # Core Model (from transformer.core)
 # =============================================================================
-from transformer.core.model import GaugeTransformerLM, create_gauge_transformer_lm
+from transformer.core.model import GaugeTransformerLM
 
 # =============================================================================
 # Training (from transformer.train and transformer.training)
@@ -55,7 +55,6 @@ from transformer.data import (
 __all__ = [
     # Core model
     'GaugeTransformerLM',
-    'create_gauge_transformer_lm',
 
     # Training
     'Trainer',
