@@ -26,7 +26,7 @@ import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 from pathlib import Path
 
-from transformer.model import GaugeTransformerLM
+from transformer.core.model import GaugeTransformerLM
 
 
 def create_tokenizer(vocab_size=50257):

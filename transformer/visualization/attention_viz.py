@@ -11,7 +11,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
-from transformer.model import GaugeTransformerLM
+from transformer.core.model import GaugeTransformerLM
 
 def visualize_per_head_attention():
     """Visualize attention for each head separately."""

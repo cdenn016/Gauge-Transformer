@@ -1781,7 +1781,7 @@ class HamiltonianFFN(nn.Module):
             # Build trajectory callback if global recorder is available
             trajectory_callback = None
             try:
-                from transformer.trajectory_tracking import get_global_recorder
+                from transformer.analysis.trajectory import get_global_recorder
                 recorder = get_global_recorder()
                 if recorder is not None and recorder.enabled and recorder.record_leapfrog:
                     def trajectory_callback(step, st, H, T, V):

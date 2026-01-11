@@ -9,7 +9,7 @@ import numpy as np
 torch.set_grad_enabled(False)
 np.set_printoptions(precision=4, suppress=True, linewidth=120)
 
-from transformer.model import GaugeTransformerLM
+from transformer.core.model import GaugeTransformerLM
 
 
 def diagnose():

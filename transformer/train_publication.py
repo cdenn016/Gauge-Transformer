@@ -75,15 +75,15 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Any
 
 
-from transformer.model import GaugeTransformerLM
-from transformer.standard_transformer import StandardTransformerLM
+from transformer.core.model import GaugeTransformerLM
+from transformer.baselines.standard_transformer import StandardTransformerLM
 from transformer.data import create_dataloaders, create_char_dataloaders
 from transformer.train import (
     compute_free_energy_loss,
     compute_rg_metrics_from_attention,
 )
-from transformer.train_fast import FastTrainer, FastTrainingConfig
-from transformer.publication_metrics import PublicationMetrics, ExperimentResult
+from transformer._archive.train_fast import FastTrainer, FastTrainingConfig
+from transformer.analysis.publication_metrics import PublicationMetrics, ExperimentResult
 
 # Import the principled PureFEPTransformer (KL-to-prior output, no backprop)
 from transformer.experimental.pure_fep_transformer import (

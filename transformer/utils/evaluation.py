@@ -10,7 +10,7 @@ import argparse
 from pathlib import Path
 import numpy as np
 
-from transformer.model import GaugeTransformerLM
+from transformer.core.model import GaugeTransformerLM
 from transformer.data import create_dataloaders
 from transformer.train import compute_free_energy_loss
 

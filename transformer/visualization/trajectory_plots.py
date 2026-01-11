@@ -37,7 +37,7 @@ except ImportError:
     print("Warning: matplotlib not available. Plotting disabled.")
 
 # Import trajectory classes
-from transformer.trajectory_tracking import (
+from transformer.analysis.trajectory import (
     ForwardTrajectory,
     LayerTrajectory,
     LeapfrogSnapshot,
@@ -971,7 +971,7 @@ if __name__ == '__main__':
     print("=" * 70)
 
     # Create synthetic trajectory data
-    from transformer.trajectory_tracking import (
+    from transformer.analysis.trajectory import (
         TrajectoryRecorder, ForwardTrajectory, LayerTrajectory, LeapfrogSnapshot
     )
     import torch

@@ -39,14 +39,14 @@ from pathlib import Path
 import time
 import json
 import numpy as np
-from transformer.rg_metrics import (
+from transformer.analysis.rg_metrics import (
     compute_rg_diagnostics,
     RGDiagnostics,
     RGFlowSummary,
 )
 
 # Import attention computation for gamma term
-from transformer.attention import compute_attention_weights
+from transformer.core.attention import compute_attention_weights
 
 
 

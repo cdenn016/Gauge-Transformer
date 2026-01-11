@@ -82,18 +82,18 @@ import math
 import numpy as np
 
 # Import existing VFE components
-from transformer.attention import (
+from transformer.core.attention import (
     compute_attention_weights,
     compute_attention_weights_local,
     aggregate_messages,
     compute_transport_operators,
     IrrepMultiHeadAttention,
 )
-from transformer.variational_ffn import (
+from transformer.core.variational_ffn import (
     compute_vfe_gradients_gpu,
     compute_natural_gradient_gpu,
 )
-from transformer.embeddings import (
+from transformer.core.embeddings import (
     GaugePositionalEncoding,
     so3_compose_bch,
 )
@@ -103,9 +103,9 @@ from math_utils.generators import (
     generate_soN_generators,
     generate_multi_irrep_soN_generators,
 )
-from transformer.prior_bank import PriorBank
+from transformer.core.prior_bank import PriorBank
 
-# NOTE: PriorBank is now imported from transformer.prior_bank
+# NOTE: PriorBank is now imported from transformer.core.prior_bank
 # This consolidates the implementation and avoids duplication.
 
 
