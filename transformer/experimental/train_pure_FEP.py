@@ -23,7 +23,7 @@ import time
 import math
 from datetime import datetime
 
-from transformer.pure_fep_transformer import PureFEPConfig, PureFEPTransformer
+from transformer.experimental.pure_fep_transformer import PureFEPConfig, PureFEPTransformer
 
 
 # =============================================================================

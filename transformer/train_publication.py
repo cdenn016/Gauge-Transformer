@@ -86,7 +86,7 @@ from transformer.train_fast import FastTrainer, FastTrainingConfig
 from transformer.publication_metrics import PublicationMetrics, ExperimentResult
 
 # Import the principled PureFEPTransformer (KL-to-prior output, no backprop)
-from transformer.pure_fep_transformer import (
+from transformer.experimental.pure_fep_transformer import (
     PureFEPTransformer,
     PureFEPConfig as PureFEPTransformerConfig,
 )

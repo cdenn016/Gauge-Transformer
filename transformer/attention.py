@@ -58,6 +58,34 @@ except ImportError:
 
 
 # =============================================================================
+# Public API
+# =============================================================================
+
+__all__ = [
+    # Core attention functions
+    'compute_attention_weights',
+    'compute_attention_weights_local',
+    'compute_attention_weights_sparse',
+    'aggregate_messages',
+
+    # KL divergence computation
+    'compute_kl_matrix',
+
+    # Multi-head attention class
+    'IrrepMultiHeadAttention',
+
+    # Utilities
+    'create_attention_mask',
+    'compute_transport_operators',
+    'estimate_chunk_size',
+
+    # Constants for checking availability
+    'NUMBA_AVAILABLE',
+    'TRANSPORT_AVAILABLE',
+]
+
+
+# =============================================================================
 # Sparse Attention Patterns
 # =============================================================================
 
@@ -230,8 +258,7 @@ def compute_attention_weights(
     return_kl: bool = False,   # Return KL matrix for loss computation
     diagonal_covariance: bool = False,  # Use diagonal sigma (B,N,K) instead of full (B,N,K,K)
     cached_transport: Optional[dict] = None,  # Precomputed transport operators (from compute_transport_operators)
-    self_attention_penalty: float = 0.0,  # DEPRECATED: Ad-hoc penalty removed. Use kappa instead.
-    # Memory-efficient options (NEW!)
+    # Memory-efficient options
     irrep_dims: Optional[List[int]] = None,  # Block-diagonal structure [d₁, d₂, ...] for principled KL decomposition
     chunk_size: Optional[int] = None,  # Chunk size for memory-efficient computation (None = auto)
     # ALiBi-style positional bias (NEW!)
@@ -404,23 +431,6 @@ def compute_attention_weights(
         alibi_bias = alibi_slope * rel_pos  # (N, N)
         logits = logits + alibi_bias.unsqueeze(0)  # (B, N, N)
 
-    # ==========================================================================
-    # SELF-ATTENTION PENALTY: Prevent diagonal from dominating
-    # Self-attention always has KL=0 (since KL(q_i||q_i)=0), which makes the
-    # diagonal dominate when kappa is small. For high-dimensional irreps (K>10),
-    # this can cause attention to collapse to pure self-attention.
-    # Adding a penalty to the diagonal encourages attending to other tokens.
-    # ==========================================================================
-    if self_attention_penalty > 0:
-        # Add penalty to diagonal (makes self-attention less attractive)
-        # Penalty is in logit units: -penalty means self-attention logit = -penalty
-        # instead of 0, equivalent to having KL = penalty * kappa for self-attention
-        B, N, _ = logits.shape
-        diag_idx = torch.arange(N, device=logits.device)
-        # Clone to avoid inplace modification (needed for gradient computation)
-        logits = logits.clone()
-        logits[:, diag_idx, diag_idx] = logits[:, diag_idx, diag_idx] - self_attention_penalty
-
     # Apply causal mask if provided (BEFORE self-attention masking)
     if mask is not None:
         # mask[b, i, j] = 0 means agent i CANNOT attend to agent j
@@ -463,6 +473,92 @@ def compute_attention_weights(
         return beta, kl_matrix
     else:
         return beta
+
+
+def compute_kl_matrix(
+    mu_q: torch.Tensor,        # (B, N, K) belief means
+    sigma_q: torch.Tensor,     # (B, N, K, K) or (B, N, K) if diagonal_covariance=True
+    phi: torch.Tensor,         # (B, N, n_gen) gauge frames
+    generators: torch.Tensor,  # (n_gen, K, K) Lie algebra generators
+    diagonal_covariance: bool = False,
+    irrep_dims: Optional[List[int]] = None,
+    chunk_size: Optional[int] = None,
+    use_identity_transport: bool = False,
+) -> torch.Tensor:
+    """
+    Compute pairwise KL divergence matrix: KL(q_i || Ω_ij[q_j]).
+
+    This is a convenience function that directly returns the KL matrix
+    without computing attention weights. Useful for debugging, loss
+    computation, and analysis.
+
+    Args:
+        mu_q: (B, N, K) belief means
+        sigma_q: (B, N, K, K) full covariances or (B, N, K) diagonal variances
+        phi: (B, N, n_gen) gauge frames
+        generators: (n_gen, K, K) Lie algebra generators
+        diagonal_covariance: If True, sigma_q is (B,N,K) diagonal variances
+        irrep_dims: Optional list of irrep block dimensions for block-diagonal mode
+        chunk_size: Optional chunk size for memory-efficient computation
+        use_identity_transport: If True, Ω_ij = I (skip gauge transport)
+
+    Returns:
+        kl_matrix: (B, N, N) pairwise KL divergences
+                   kl_matrix[b, i, j] = KL(q_i || Ω_ij[q_j])
+
+    Example:
+        >>> B, N, K = 2, 10, 32
+        >>> mu = torch.randn(B, N, K)
+        >>> sigma = torch.ones(B, N, K)  # Diagonal variances
+        >>> phi = torch.randn(B, N, 3) * 0.1
+        >>> G = generate_so3_generators(K)  # (3, K, K)
+        >>> kl = compute_kl_matrix(mu, sigma, phi, G, diagonal_covariance=True)
+        >>> kl.shape
+        torch.Size([2, 10, 10])
+    """
+    batch_size, num_agents, K = mu_q.shape
+    device = mu_q.device
+    dtype = mu_q.dtype
+
+    # Allocate output
+    kl_matrix = torch.zeros(batch_size, num_agents, num_agents, device=device, dtype=dtype)
+
+    # Select appropriate backend based on parameters
+    is_cuda = device.type == 'cuda'
+
+    if irrep_dims is not None and not diagonal_covariance:
+        if chunk_size is not None:
+            _compute_kl_matrix_block_diagonal_chunked(
+                mu_q, sigma_q, phi, generators, kl_matrix, irrep_dims, chunk_size
+            )
+        else:
+            _compute_kl_matrix_block_diagonal(
+                mu_q, sigma_q, phi, generators, kl_matrix, irrep_dims
+            )
+    elif chunk_size is not None and not diagonal_covariance:
+        _compute_kl_matrix_chunked(
+            mu_q, sigma_q, phi, generators, kl_matrix, chunk_size
+        )
+    elif diagonal_covariance:
+        if chunk_size is not None:
+            _compute_kl_matrix_diagonal_chunked(
+                mu_q, sigma_q, phi, generators, kl_matrix, chunk_size
+            )
+        else:
+            _compute_kl_matrix_diagonal(
+                mu_q, sigma_q, phi, generators, kl_matrix, None
+            )
+    elif NUMBA_AVAILABLE and TRANSPORT_AVAILABLE and not is_cuda:
+        _compute_kl_matrix_numba(
+            mu_q, sigma_q, phi, generators, kl_matrix
+        )
+    else:
+        _compute_kl_matrix_torch(
+            mu_q, sigma_q, phi, generators, kl_matrix, None,
+            use_identity_transport=use_identity_transport
+        )
+
+    return kl_matrix
 
 
 def _compute_kl_matrix_numba(
@@ -2004,7 +2100,6 @@ class IrrepMultiHeadAttention(nn.Module):
         gauge_group: str = 'SO3',  # 'SO3' or 'SON'
         gauge_dim: int = 3,        # N for SO(N) - only used when gauge_group='SON'
         global_generators: Optional[torch.Tensor] = None,  # (n_gen, K, K) for SO(N) mode
-        self_attention_penalty: float = 0.0,  # DEPRECATED: Ad-hoc penalty removed. Use kappa instead.
         alibi_slope: Optional[float] = None,  # ALiBi-style positional bias (negative = recency bias)
         use_identity_transport: bool = False,  # If True, Ω_ij = I (no gauge transport)
         mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
@@ -2048,7 +2143,6 @@ class IrrepMultiHeadAttention(nn.Module):
         self.attention_window = attention_window
         self.use_fast_exp = use_fast_exp
         self.exp_order = exp_order
-        self.self_attention_penalty = self_attention_penalty
         self.alibi_slope = alibi_slope
         self.use_identity_transport = use_identity_transport
         self.mask_self_attention = mask_self_attention
@@ -2276,7 +2370,6 @@ class IrrepMultiHeadAttention(nn.Module):
                     return_kl=True,
                     diagonal_covariance=self.diagonal_covariance,
                     cached_transport=head_cached_transport,
-                    self_attention_penalty=self.self_attention_penalty,
                     alibi_slope=self.alibi_slope,
                     use_identity_transport=self.use_identity_transport,
                     mask_self_attention=self.mask_self_attention,
@@ -2296,7 +2389,6 @@ class IrrepMultiHeadAttention(nn.Module):
                     return_kl=False,
                     diagonal_covariance=self.diagonal_covariance,
                     cached_transport=head_cached_transport,
-                    self_attention_penalty=self.self_attention_penalty,
                     alibi_slope=self.alibi_slope,
                     use_identity_transport=self.use_identity_transport,
                     mask_self_attention=self.mask_self_attention,
