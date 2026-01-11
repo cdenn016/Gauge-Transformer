@@ -359,10 +359,37 @@ class PriorBank(nn.Module):
                     new_sigma = (1.0 - sigma_lr) * current_sigma + sigma_lr * weighted_sigma
                     self.log_prior_sigma.data[token_id_int] = torch.log(new_sigma.clamp(min=self.eps))
 
+    def forward(
+        self,
+        token_ids: Optional[torch.Tensor] = None,
+        mu_q: Optional[torch.Tensor] = None,
+        sigma_q: Optional[torch.Tensor] = None,
+        mode: str = 'encode',
+        tau: float = 1.0,
+    ):
+        """
+        Forward pass - encode or decode.
+
+        Args:
+            token_ids: (B, N) for encoding
+            mu_q, sigma_q: (B, N, K) for decoding
+            mode: 'encode' or 'decode'
+            tau: Temperature for decoding
+        """
+        if mode == 'encode':
+            assert token_ids is not None
+            return self.encode(token_ids)
+        elif mode == 'decode':
+            assert mu_q is not None and sigma_q is not None
+            return self.decode(mu_q, sigma_q, tau)
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
+
     def extra_repr(self) -> str:
         """Pretty print for model summary."""
         return (
             f"vocab_size={self.vocab_size}, "
             f"embed_dim={self.embed_dim}, "
+            f"learnable_sigma={self.learnable_sigma}, "
             f"gauge_fixed_priors={self.gauge_fixed_priors}"
         )
