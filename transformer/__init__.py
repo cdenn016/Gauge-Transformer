@@ -1,47 +1,73 @@
 # -*- coding: utf-8 -*-
 """
-Created on Thu Dec 11 12:01:15 2025
-
-@author: chris and christine
-"""
-
-# -*- coding: utf-8 -*-
-"""
 Gauge-Theoretic Transformer Package
 ====================================
 
-Implements Hamiltonian dynamics on SPD manifolds for transformer architectures.
+Implements gauge-theoretic transformers with KL-divergence based attention
+and variational free energy dynamics.
+
+Package Structure:
+    transformer/
+    ├── core/           # Core model components
+    ├── training/       # Training infrastructure
+    ├── data/           # Data loading
+    ├── analysis/       # Analysis and metrics
+    ├── visualization/  # Plotting and visualization
+    ├── utils/          # Utilities
+    ├── baselines/      # Baseline models
+    └── experimental/   # Experimental code
 """
 
-# Suppress noisy Triton warnings about missing CUDA binaries on Windows
-# These occur because Triton looks for cuobjdump.exe and nvdisasm.exe
-# which are only in the CUDA Toolkit (not required for PyTorch GPU usage)
+# Suppress noisy Triton warnings
 import warnings
-warnings.filterwarnings(
-    "ignore",
-    message="Failed to find cuobjdump",
-    category=UserWarning,
-    module="triton"
+warnings.filterwarnings("ignore", message="Failed to find cuobjdump", category=UserWarning, module="triton")
+warnings.filterwarnings("ignore", message="Failed to find nvdisasm", category=UserWarning, module="triton")
+
+# =============================================================================
+# Core Model (from transformer.core)
+# =============================================================================
+from transformer.core.model import GaugeTransformerLM, create_gauge_transformer_lm
+
+# =============================================================================
+# Training (from transformer.train and transformer.training)
+# =============================================================================
+from transformer.train import Trainer, TrainingConfig
+from transformer.training import (
+    create_optimizer,
+    create_param_groups,
+    MetricsTracker,
 )
-warnings.filterwarnings(
-    "ignore",
-    message="Failed to find nvdisasm",
-    category=UserWarning,
-    module="triton"
+from transformer.training.config import (
+    get_standard_config,
+    get_vfe_dynamic_config,
+    get_pure_fep_config,
 )
 
-from .model import GaugeTransformerLM
-from .train import Trainer, TrainingConfig
-from .data import (
+# =============================================================================
+# Data Loading (from transformer.data)
+# =============================================================================
+from transformer.data import (
     create_dataloaders,
     create_char_dataloaders,
     create_byte_dataloaders,
 )
 
 __all__ = [
+    # Core model
     'GaugeTransformerLM',
+    'create_gauge_transformer_lm',
+
+    # Training
     'Trainer',
     'TrainingConfig',
+    'create_optimizer',
+    'create_param_groups',
+    'MetricsTracker',
+    'get_standard_config',
+    'get_vfe_dynamic_config',
+    'get_pure_fep_config',
+
+    # Data loading
     'create_dataloaders',
     'create_char_dataloaders',
     'create_byte_dataloaders',

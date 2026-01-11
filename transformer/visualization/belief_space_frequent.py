@@ -37,7 +37,7 @@ def get_frequent_tokens(n_tokens=100, dataset='wikitext-2'):
     Returns token IDs and their frequencies.
     """
     try:
-        from transformer.data import WikiTextDataset
+        from transformer.data.datasets import WikiTextDataset
 
         print(f"Loading {dataset} to find frequent tokens...")
         data = WikiTextDataset(split='train', max_seq_len=128, dataset_name=dataset)

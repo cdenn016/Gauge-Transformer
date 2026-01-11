@@ -45,7 +45,7 @@ except ImportError:
 
 # Import standard loss computation
 from transformer.train import compute_free_energy_loss
-from transformer.standard_transformer import StandardTransformerLM
+from transformer.baselines.standard_transformer import StandardTransformerLM
 
 
 # =============================================================================

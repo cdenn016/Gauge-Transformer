@@ -14,7 +14,7 @@ import json
 # Add project to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from transformer.model import GaugeTransformerLM
+from transformer.core.model import GaugeTransformerLM
 
 
 def analyze_query_variation(beta, input_ids=None, tokenizer=None):

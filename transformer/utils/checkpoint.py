@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 from typing import Tuple, Dict, Any, Optional
 
-from transformer.model import GaugeTransformerLM
+from transformer.core.model import GaugeTransformerLM
 
 
 def load_model(checkpoint_path: str) -> Tuple[GaugeTransformerLM, Dict[str, Any]]:
@@ -129,7 +129,7 @@ def get_tokenizer(config: Dict[str, Any], dataset_name: Optional[str] = None):
         dataset_name = config.get('dataset', 'wikitext-2')
 
     try:
-        from transformer.data import WikiTextDataset
+        from transformer.data.datasets import WikiTextDataset
         dataset = WikiTextDataset(
             split='train',
             max_seq_len=128,

@@ -53,7 +53,7 @@ from tqdm import tqdm
 import numpy as np
 
 # Import standard transformer
-from transformer.standard_transformer import StandardTransformerLM
+from transformer.baselines.standard_transformer import StandardTransformerLM
 
 # Import data loaders (reuse from gauge model)
 from transformer.data import create_char_dataloaders, create_dataloaders
