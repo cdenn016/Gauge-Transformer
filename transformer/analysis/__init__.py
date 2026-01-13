@@ -15,8 +15,10 @@ from transformer.analysis.rg_metrics import (
     RGFlowSummary,
 )
 from transformer.analysis.trajectory import (
-    TrajectoryTracker,
-    BeliefSnapshot,
+    TrajectoryRecorder,
+    LeapfrogSnapshot,
+    LayerTrajectory,
+    ForwardTrajectory,
 )
 
 __all__ = [
@@ -26,6 +28,8 @@ __all__ = [
     'RGFlowSummary',
 
     # Trajectory tracking
-    'TrajectoryTracker',
-    'BeliefSnapshot',
+    'TrajectoryRecorder',
+    'LeapfrogSnapshot',
+    'LayerTrajectory',
+    'ForwardTrajectory',
 ]
