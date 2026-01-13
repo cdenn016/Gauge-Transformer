@@ -12,6 +12,21 @@ Created on Thu Dec 11 19:24:37 2025
 @author: chris and christine
 """
 
+# =============================================================================
+# PATH SETUP - Ensure the project root is in the Python path
+# This allows the script to be run from any directory (including the transformer/ folder)
+# =============================================================================
+import sys
+import os
+
+# Get the directory containing this script
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+# Get the project root (parent of transformer/)
+_project_root = os.path.dirname(_script_dir)
+# Add project root to path if not already there
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
 """
 Publication Proof-of-Principle Training Script
 ===============================================
