@@ -171,7 +171,7 @@ Given the action of the group $G$ on the statistical fibers we are able to deriv
 
 where $q_i$ and $p_i$ are an agent's belief and prior at an individual base manifold point $c$, $s_i$ and $r_i$ are model hyperparameters, $\beta_{ij}$ and $\gamma_{ij}$ are attention weights and the observation likelihood term is the expected negative log-likelihood of observations $o$ given latent states $\{k_i\}$ and models $\{m_i\}$, averaged over the recognition distributions $\{q_i\}$, grounded in sensory observations/data. Without this term, the system is a pure vacuum theory where agents converge to a shared belief norm modulo gauge transformations. Observations break the vacuum symmetry, forcing agents to specialize based on local sensory evidence (see Appendix).
 
-In principle, our variational free energy could be regularized by a variety of terms (gauge frame smoothness, curvature, etc) which we consider elsewhere.  In our present study of transformers, feed-forward, and back propagation, we shall consider all fields to occupy a $0$ dimensional base manifold. However, in full generality we can perform gradient descent of our variational free energy on arbitrary dimensionful base manifolds by integrating over agent supports $\chi_i(c)$ and overlaps $\chi_{ij}(c)$.
+In principle, our variational free energy could be regularized by a variety of terms (gauge frame smoothness, curvature, etc) which we consider elsewhere. In our present study, we do not implement such regularization terms. We consider all fields to occupy a $0$ dimensional base manifold. However, in full generality we can perform gradient descent of our variational free energy on arbitrary dimensionful base manifolds by integrating over agent supports $\chi_i(c)$ and overlaps $\chi_{ij}(c)$.
 
 
 \subsection{Natural Gradient Descent}
@@ -320,15 +320,14 @@ where $\langle \cdot \rangle_{\beta_i} = \sum_k \beta_{ik}(\cdot)$ denotes the w
 The gauge frames $\phi_i \in \mathfrak{so}(N)$ influence the energy functional exclusively through the transport operators $\Omega_{ij} = e^{\phi_i} e^{-\phi_j}$ that appear in belief and model alignment terms. The complete gradient is:
 
 \begin{align}
-\nabla_{\phi_i} \mathcal{F} &= 
+\nabla_{\phi_i} \mathcal{F} &=
 \sum_j \left[(\nabla_{\phi_i} \beta_{ij}) K_{ij} + \beta_{ij} \nabla_{\phi_i} K_{ij}\right] \label{eq:grad_phi_complete_a} \\
 &\quad + \sum_j \left[(\nabla_{\phi_i} \gamma_{ij}) K_{ij}^{(p)} + \gamma_{ij} \nabla_{\phi_i} K_{ij}^{(p)}\right] \label{eq:grad_phi_complete_b} \\
 &\quad + \sum_k \beta_{ki} \nabla_{\phi_i} D_{\mathrm{KL}}(q_k \| \Omega_{ki}[q_i]) \label{eq:grad_phi_complete_c} \\
-&\quad + \sum_k \gamma_{ki} \nabla_{\phi_i} D_{\mathrm{KL}}(p_k \| \Omega_{ki}[p_i]) \label{eq:grad_phi_complete_d} \\
-&\quad + \lambda_\phi \nabla_{\phi_i} \int_{\mathcal{C}} \tfrac{1}{2} \|\nabla \phi_i(x)\|^2 \, \mathrm{d}x, \label{eq:grad_phi_complete_e}
+&\quad + \sum_k \gamma_{ki} \nabla_{\phi_i} D_{\mathrm{KL}}(p_k \| \Omega_{ki}[p_i]), \label{eq:grad_phi_complete_d}
 \end{align}
 
-where $K_{ij}^{(p)} = D_{\mathrm{KL}}(p_i \| \Omega_{ij}[p_j])$ denotes the prior alignment term. Terms~\eqref{eq:grad_phi_complete_a}--\eqref{eq:grad_phi_complete_b} account for $i$ aligning to others through belief and model coupling weights (with product rule),~\eqref{eq:grad_phi_complete_c}--\eqref{eq:grad_phi_complete_d} account for others aligning to $i$, and~\eqref{eq:grad_phi_complete_e} is the optional gauge smoothness regularizer.
+where $K_{ij}^{(p)} = D_{\mathrm{KL}}(p_i \| \Omega_{ij}[p_j])$ denotes the prior alignment term. Terms~\eqref{eq:grad_phi_complete_a}--\eqref{eq:grad_phi_complete_b} account for $i$ aligning to others through belief and model coupling weights (with product rule), while~\eqref{eq:grad_phi_complete_c}--\eqref{eq:grad_phi_complete_d} account for others aligning to $i$.
 
 For a transport operator $\Omega_{ij}[\cdot]$ acting on a Gaussian with parameters $(\mu, \Sigma)$, the gradients are:
 
@@ -354,13 +353,6 @@ for $\xi \in \mathfrak{so}(3)$, or alternatively via the adjoint representation:
 \label{eq:matrix_exp_adjoint}
 \end{equation}
 where $\mathrm{dexp}_\phi$ is the differential of the exponential map at $\phi$. For numerical implementation, automatic differentiation through the Lie algebra generators provides stable gradients.
-
-The gauge smoothness penalty~\eqref{eq:grad_phi_complete_e} when discretized becomes:
-\begin{equation}
-\nabla_{\phi_i} \left[\tfrac{1}{2} \|\nabla \phi_i\|^2\right] = -\Delta \phi_i,
-\label{eq:grad_phi_laplacian}
-\end{equation}
-where $\Delta$ is the Laplacian operator on the base manifold $\mathcal{C}$, enforcing spatial smoothness of the gauge field.
 
 \paragraph{Natural gradient projection.}
 All gradients must be projected onto their respective manifolds: Euclidean gradients $\nabla_{\Sigma_i} \mathcal{F}$ are projected onto the tangent space of the symmetric positive-definite (SPD) manifold using the Fisher-Rao metric, while gauge frame gradients $\nabla_{\phi_i} \mathcal{F}$ naturally lie in the Lie algebra $\mathfrak{so}(N)$. For numerical stability, covariances may be parametrized via Cholesky decomposition $\Sigma_i = L_i L_i^\top$, or using diagonal approximations for computational efficiency at scale.
@@ -821,9 +813,26 @@ An open question is how best to initialize beliefs for new sequences at inferenc
 Each has trade-offs between computational cost, architectural purity, and performance. Our proof-of-principle study performs per-sequence optimization during training but does not address inference-time requirements.
 
 
+\subsubsection{Semantic Emergence in Gauge Frames}
+
+A striking empirical finding is that the learned gauge frames $\phi_i$ develop semantically meaningful structure during training. Principal component analysis (PCA) of the gauge frame parameters reveals that tokens spontaneously cluster according to linguistic categories: punctuation marks, letters, and other token types separate into distinct regions of gauge frame space.
+
+This emergent clustering occurs without any explicit supervision or architectural bias toward such organization. The gauge frames are initialized randomly and optimized purely through variational free energy minimization. Yet the resulting structure reflects genuine linguistic categories, suggesting that the geometric framework naturally discovers meaningful coordinate systems for language.
+
+This finding has several implications:
+\begin{enumerate}
+    \item \textbf{Interpretability:} Unlike standard transformer embeddings which are opaque high-dimensional vectors, gauge frames provide geometrically interpretable coordinates where semantic relationships manifest as spatial clustering.
+
+    \item \textbf{Emergent structure:} The framework does not impose linguistic categories but discovers them through optimization, suggesting that gauge-theoretic attention captures genuine statistical regularities in language.
+
+    \item \textbf{Contextual encoding:} Since gauge frames determine how beliefs are transported between agents, semantically similar tokens (e.g., punctuation) naturally communicate through similar geometric transformations.
+\end{enumerate}
+
+This semantic organization in gauge frames provides evidence that the geometric structure is not merely a mathematical curiosity but captures functionally relevant aspects of language processing.
+
 \subsubsection{Curvature minimization hypothesis}
 
-In our proof-of-principle study, gauge frames $\phi_i$ were fixed via linear positional encoding. However, the framework naturally supports learnable frames optimized via $\nabla_{\phi_i} \mathcal{F}$. We conjecture that free optimization over $\{\mu_i, \Sigma_i, \phi_i\}$ would lead agents to minimize gauge curvature.
+The framework naturally supports learnable gauge frames optimized via $\nabla_{\phi_i} \mathcal{F}$. We conjecture that free optimization over $\{\mu_i, \Sigma_i, \phi_i\}$ leads agents toward configurations that balance expressivity with geometric coherence.
 
 \textbf{Curvature minimization hypothesis:} Natural language and effective communication systems evolve gauge configurations that minimize connection curvature, enabling consistent semantic transport regardless of communication path.
 
