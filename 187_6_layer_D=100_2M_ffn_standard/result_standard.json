@@ -1,0 +1,11 @@
+{
+  "ffn_mode": "standard",
+  "pure_fep": false,
+  "final_loss": 5.234922790527344,
+  "final_ppl": 187.71463012695312,
+  "random_ppl": 50257,
+  "improvement": 267.73086341757556,
+  "total_params": 5757700,
+  "vocab_size": 50257,
+  "checkpoint": "checkpoints_publication\\ffn_standard\\best_model.pt"
+}
