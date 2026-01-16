@@ -171,7 +171,7 @@ Given the action of the group $G$ on the statistical fibers we are able to deriv
 
 where $q_i$ and $p_i$ are an agent's belief and prior at an individual base manifold point $c$, $s_i$ and $r_i$ are model hyperparameters, $\beta_{ij}$ and $\gamma_{ij}$ are attention weights and the observation likelihood term is the expected negative log-likelihood of observations $o$ given latent states $\{k_i\}$ and models $\{m_i\}$, averaged over the recognition distributions $\{q_i\}$, grounded in sensory observations/data. Without this term, the system is a pure vacuum theory where agents converge to a shared belief norm modulo gauge transformations. Observations break the vacuum symmetry, forcing agents to specialize based on local sensory evidence (see Appendix).
 
-In principle, our variational free energy could be regularized by a variety of terms (gauge frame smoothness, curvature, etc) which we consider elsewhere.  In our present study of transformers, feed-forward, and back propagation, we shall consider all fields to occupy a $0$ dimensional base manifold. However, in full generality we can perform gradient descent of our variational free energy on arbitrary dimensionful base manifolds by integrating over agent supports $\chi_i(c)$ and overlaps $\chi_{ij}(c)$.
+In principle, our variational free energy could be regularized by a variety of terms (gauge frame smoothness, curvature, etc) which we consider elsewhere. In our present study, we do not implement such regularization terms. We consider all fields to occupy a $0$ dimensional base manifold. However, in full generality we can perform gradient descent of our variational free energy on arbitrary dimensionful base manifolds by integrating over agent supports $\chi_i(c)$ and overlaps $\chi_{ij}(c)$.
 
 
 \subsection{Natural Gradient Descent}
@@ -320,15 +320,14 @@ where $\langle \cdot \rangle_{\beta_i} = \sum_k \beta_{ik}(\cdot)$ denotes the w
 The gauge frames $\phi_i \in \mathfrak{so}(N)$ influence the energy functional exclusively through the transport operators $\Omega_{ij} = e^{\phi_i} e^{-\phi_j}$ that appear in belief and model alignment terms. The complete gradient is:
 
 \begin{align}
-\nabla_{\phi_i} \mathcal{F} &= 
+\nabla_{\phi_i} \mathcal{F} &=
 \sum_j \left[(\nabla_{\phi_i} \beta_{ij}) K_{ij} + \beta_{ij} \nabla_{\phi_i} K_{ij}\right] \label{eq:grad_phi_complete_a} \\
 &\quad + \sum_j \left[(\nabla_{\phi_i} \gamma_{ij}) K_{ij}^{(p)} + \gamma_{ij} \nabla_{\phi_i} K_{ij}^{(p)}\right] \label{eq:grad_phi_complete_b} \\
 &\quad + \sum_k \beta_{ki} \nabla_{\phi_i} D_{\mathrm{KL}}(q_k \| \Omega_{ki}[q_i]) \label{eq:grad_phi_complete_c} \\
-&\quad + \sum_k \gamma_{ki} \nabla_{\phi_i} D_{\mathrm{KL}}(p_k \| \Omega_{ki}[p_i]) \label{eq:grad_phi_complete_d} \\
-&\quad + \lambda_\phi \nabla_{\phi_i} \int_{\mathcal{C}} \tfrac{1}{2} \|\nabla \phi_i(x)\|^2 \, \mathrm{d}x, \label{eq:grad_phi_complete_e}
+&\quad + \sum_k \gamma_{ki} \nabla_{\phi_i} D_{\mathrm{KL}}(p_k \| \Omega_{ki}[p_i]), \label{eq:grad_phi_complete_d}
 \end{align}
 
-where $K_{ij}^{(p)} = D_{\mathrm{KL}}(p_i \| \Omega_{ij}[p_j])$ denotes the prior alignment term. Terms~\eqref{eq:grad_phi_complete_a}--\eqref{eq:grad_phi_complete_b} account for $i$ aligning to others through belief and model coupling weights (with product rule),~\eqref{eq:grad_phi_complete_c}--\eqref{eq:grad_phi_complete_d} account for others aligning to $i$, and~\eqref{eq:grad_phi_complete_e} is the optional gauge smoothness regularizer.
+where $K_{ij}^{(p)} = D_{\mathrm{KL}}(p_i \| \Omega_{ij}[p_j])$ denotes the prior alignment term. Terms~\eqref{eq:grad_phi_complete_a}--\eqref{eq:grad_phi_complete_b} account for $i$ aligning to others through belief and model coupling weights (with product rule), while~\eqref{eq:grad_phi_complete_c}--\eqref{eq:grad_phi_complete_d} account for others aligning to $i$.
 
 For a transport operator $\Omega_{ij}[\cdot]$ acting on a Gaussian with parameters $(\mu, \Sigma)$, the gradients are:
 
@@ -354,13 +353,6 @@ for $\xi \in \mathfrak{so}(3)$, or alternatively via the adjoint representation:
 \label{eq:matrix_exp_adjoint}
 \end{equation}
 where $\mathrm{dexp}_\phi$ is the differential of the exponential map at $\phi$. For numerical implementation, automatic differentiation through the Lie algebra generators provides stable gradients.
-
-The gauge smoothness penalty~\eqref{eq:grad_phi_complete_e} when discretized becomes:
-\begin{equation}
-\nabla_{\phi_i} \left[\tfrac{1}{2} \|\nabla \phi_i\|^2\right] = -\Delta \phi_i,
-\label{eq:grad_phi_laplacian}
-\end{equation}
-where $\Delta$ is the Laplacian operator on the base manifold $\mathcal{C}$, enforcing spatial smoothness of the gauge field.
 
 \paragraph{Natural gradient projection.}
 All gradients must be projected onto their respective manifolds: Euclidean gradients $\nabla_{\Sigma_i} \mathcal{F}$ are projected onto the tangent space of the symmetric positive-definite (SPD) manifold using the Fisher-Rao metric, while gauge frame gradients $\nabla_{\phi_i} \mathcal{F}$ naturally lie in the Lie algebra $\mathfrak{so}(N)$. For numerical stability, covariances may be parametrized via Cholesky decomposition $\Sigma_i = L_i L_i^\top$, or using diagonal approximations for computational efficiency at scale.
@@ -394,81 +386,30 @@ This provides 5 copies of the 20-dimensional fundamental representation. The Lie
 
 This decomposition induces block-diagonal structure where different blocks transform according to the same geometric representation but can capture independent semantic features. The gauge group dimension determines the number of attention heads geometrically, in contrast to standard architectures where head count is an arbitrary hyperparameter.
 
-\subsection{Positional Encoding via Gauge Frames}
+\subsection{Absence of Explicit Positional Encoding}
 
-Standard transformers require explicit positional encoding to distinguish token positions, typically added to embeddings as sinusoidal functions or learned vectors~\citep{vaswani2017attention}. Our gauge-theoretic framework provides a natural geometric alternative: positional information is encoded directly in the gauge frames $\phi_i$, making position an intrinsic property of each agent's coordinate system rather than an auxiliary input feature.
-
-For our 0-dimensional implementation, all agents exist at a single base manifold point $c \in \mathcal{C}$. Without additional structure, the model has no information about token order in the sequence. Standard transformers address this by adding positional encoding:
+Standard transformers require explicit positional encoding to distinguish token positions, typically added to embeddings as sinusoidal functions or learned vectors~\citep{vaswani2017attention}:
 
 \begin{equation}
 \text{input}_i = \text{embedding}_i + \text{PE}(\text{pos}_i),
 \end{equation}
 
-where $\text{PE}: \mathbb{N} \to \mathbb{R}^d$ maps integer positions to $d$-dimensional vectors. Common choices include sinusoidal encoding~\citep{vaswani2017attention} or learned embeddings~\citep{devlin2018bert}.
+where $\text{PE}: \mathbb{N} \to \mathbb{R}^d$ maps integer positions to $d$-dimensional vectors. This approach is ad-hoc: positional information is concatenated or added to content representations without geometric justification.
 
-However, this approach is ad-hoc: positional information is concatenated or added to content representations without geometric justification. The gauge-theoretic framework offers a geometric (and surprisingly deep) alternative.
+Our gauge VFE architecture operates \emph{without any explicit positional encoding}. This design choice has both theoretical and empirical motivations:
 
-Each agent $i$ at sequence position $\text{pos}_i$ has a gauge frame $\phi_i \in \mathfrak{so}(N)$, which decomposes into $\frac{N(N-1)}{2}$ scalar components. For SO(3), this gives three components:
+\textbf{Theoretical motivation:} In the gauge-theoretic framework, each token is an autonomous agent with beliefs $q_i$ that evolve through communication with other agents via parallel transport. The causal structure of next-token prediction---where agent $i$ can only attend to agents $j < i$---provides implicit positional information through the attention mask. The asymmetry of the prediction task breaks permutation symmetry without requiring explicit position markers.
 
-\begin{equation}
-\phi_i = \sum_{a=1}^3 \phi_i^{(a)} G_a, \quad \phi_i^{(a)} \in \mathbb{R}.
-\label{eq:gauge_position}
-\end{equation}
+\textbf{Empirical observation:} Our experiments demonstrate that the gauge VFE learns meaningful language statistics (218$\times$ improvement over random) without positional encoding. This suggests that:
+\begin{enumerate}
+    \item The autoregressive attention mask provides sufficient positional signal for the task
+    \item The geometric structure of KL-divergence attention may encode relative relationships differently than dot-product attention
+    \item Explicit positional encoding may be a compensation mechanism for architectural limitations rather than a fundamental requirement
+\end{enumerate}
 
-We encode positional information by initializing these components as functions of sequence position:
+This finding connects to recent work showing that some transformer variants can operate effectively without positional encoding when combined with appropriate attention patterns. In our framework, the absence of positional encoding is not a limitation but rather reflects the sufficiency of the geometric attention mechanism for capturing sequential dependencies.
 
-\begin{equation}
-\phi_i^{(a)} = f_a(\text{pos}_i), \quad a \in \{1,2,3\},
-\label{eq:position_encoding_gauge}
-\end{equation}
-
-where $f_a: \mathbb{N} \to \mathbb{R}$ are encoding functions. Unlike standard positional encoding that augment the embedding space, gauge-based positional encoding live in the fiber coordinate system, affecting how agents communicate through parallel transport.
-
-We may implement several encoding schemes:
-
-\textbf{Linear encoding:}
-
-\begin{equation}
-\phi_i^{(a)} = \lambda_a \cdot \text{pos}_i, \quad \lambda_a \in \mathbb{R},
-\end{equation}
-
-where $\lambda_a$ are scaling hyperparameters (e.g., $\lambda_1 = 0.1, \lambda_2 = 0.05, \lambda_3 = 0.02$). This creates a linear progression of gauge frames along the sequence.
-
-\textbf{Sinusoidal encoding (analogous to Vaswani et al.):}
-
-\begin{equation}
-\phi_i^{(1)} = A \sin\!\left(\frac{\text{pos}_i}{\omega_1}\right), \quad
-\phi_i^{(2)} = A \cos\!\left(\frac{\text{pos}_i}{\omega_2}\right), \quad
-\phi_i^{(3)} = A \sin\!\left(\frac{\text{pos}_i}{\omega_3}\right),
-\label{eq:sinusoidal_gauge}
-\end{equation}
-
-with amplitude $A$ and frequencies $\omega_a$. This provides periodic structure and supports extrapolation to unseen sequence lengths.
-
-\textbf{Learned initialization with gradient descent:}
-
-\begin{equation}
-\phi_i^{(a)} \sim \mathcal{N}(0, \sigma_{\text{init}}^2), \quad \text{optimized via } \nabla_{\phi_i} \mathcal{F}.
-\end{equation}
-
-where the gauge frames are initialized randomly and optimized alongside beliefs $(\mu_i, \Sigma_i)$, allowing the model to learn position-dependent coordinate systems. 
-
-Positional encoding via gauge frames directly influences communication. The transport operator between agents $i$ and $j$ becomes:
-
-\begin{equation}
-\Omega_{ij}^{(h)} = \exp\!\left(\phi_i^{(h)} G_h\right) \cdot \exp\!\left(-\phi_j^{(h)} G_h\right) 
-\label{eq:position_transport}
-\end{equation}
-
-Transport manifestly depends on the difference $\phi_i^{(h)} - \phi_j^{(h)}$ (modulo commutators), making it sensitive to relative position.
-
-
-Attention weights thus incorporate positional bias geometrically:
-
-\begin{equation}
-\beta_{ij}^{(h)} \propto \exp\!\left[-\kappa_\beta^{-1} D_{\mathrm{KL}}\!\left(q_i \,\big\|\, \exp\!\big(\lambda_h \Delta_{ij} G_h\big)[q_j]\right)\right],
-\quad \Delta_{ij} := \text{pos}_i - \text{pos}_j.
-\end{equation}
+Future work may explore whether learnable gauge frames $\phi_i$ initialized as functions of position could further improve performance, but our current results establish that such encoding is not necessary for meaningful language modeling.
 
 \subsection{Variational Inference as E-step and M-step.}
 
@@ -872,9 +813,26 @@ An open question is how best to initialize beliefs for new sequences at inferenc
 Each has trade-offs between computational cost, architectural purity, and performance. Our proof-of-principle study performs per-sequence optimization during training but does not address inference-time requirements.
 
 
+\subsubsection{Semantic Emergence in Gauge Frames}
+
+A striking empirical finding is that the learned gauge frames $\phi_i$ develop semantically meaningful structure during training. Principal component analysis (PCA) of the gauge frame parameters reveals that tokens spontaneously cluster according to linguistic categories: punctuation marks, letters, and other token types separate into distinct regions of gauge frame space.
+
+This emergent clustering occurs without any explicit supervision or architectural bias toward such organization. The gauge frames are initialized randomly and optimized purely through variational free energy minimization. Yet the resulting structure reflects genuine linguistic categories, suggesting that the geometric framework naturally discovers meaningful coordinate systems for language.
+
+This finding has several implications:
+\begin{enumerate}
+    \item \textbf{Interpretability:} Unlike standard transformer embeddings which are opaque high-dimensional vectors, gauge frames provide geometrically interpretable coordinates where semantic relationships manifest as spatial clustering.
+
+    \item \textbf{Emergent structure:} The framework does not impose linguistic categories but discovers them through optimization, suggesting that gauge-theoretic attention captures genuine statistical regularities in language.
+
+    \item \textbf{Contextual encoding:} Since gauge frames determine how beliefs are transported between agents, semantically similar tokens (e.g., punctuation) naturally communicate through similar geometric transformations.
+\end{enumerate}
+
+This semantic organization in gauge frames provides evidence that the geometric structure is not merely a mathematical curiosity but captures functionally relevant aspects of language processing.
+
 \subsubsection{Curvature minimization hypothesis}
 
-In our proof-of-principle study, gauge frames $\phi_i$ were fixed via linear positional encoding. However, the framework naturally supports learnable frames optimized via $\nabla_{\phi_i} \mathcal{F}$. We conjecture that free optimization over $\{\mu_i, \Sigma_i, \phi_i\}$ would lead agents to minimize gauge curvature.
+The framework naturally supports learnable gauge frames optimized via $\nabla_{\phi_i} \mathcal{F}$. We conjecture that free optimization over $\{\mu_i, \Sigma_i, \phi_i\}$ leads agents toward configurations that balance expressivity with geometric coherence.
 
 \textbf{Curvature minimization hypothesis:} Natural language and effective communication systems evolve gauge configurations that minimize connection curvature, enabling consistent semantic transport regardless of communication path.
 
