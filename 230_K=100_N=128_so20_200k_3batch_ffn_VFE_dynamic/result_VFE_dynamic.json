@@ -1,0 +1,11 @@
+{
+  "ffn_mode": "VFE_dynamic",
+  "pure_fep": false,
+  "final_loss": 5.523676967620849,
+  "final_ppl": 230.0602264404297,
+  "random_ppl": 50257,
+  "improvement": 218.45149323546033,
+  "total_params": 24625931,
+  "vocab_size": 50257,
+  "checkpoint": "checkpoints_publication\\ffn_VFE_dynamic\\best_model.pt"
+}
