@@ -415,31 +415,35 @@ Future work may explore whether learnable gauge frames $\phi_i$ initialized as f
 
 Our gauge-theoretic framework naturally decomposes into an expectation-maximization (EM) structure~\citep{dempster1977maximum}, providing a probabilistic interpretation of the forward and backward passes in standard transformers:
 
-\subsubsection{E-step (Inference / "Feed-forward"):} Given fixed model parameters (priors $\{p_i\}$ (initialized random embeddings), gauge frames $\{\phi_i\}$, and output projection $W_{\text{out}}$), update agent beliefs $\{q_i\}$ to minimize the free energy functional:
+\subsubsection{E-step (Belief Inference):} Given current model parameters (priors $\{p_i\}$ from learned embeddings, gauge frames $\{\phi_i\}$, and output projection $W_{\text{out}}$), update agent beliefs $\{q_i\}$ to minimize the free energy functional:
 
 \begin{equation}
 \{q_i^*\} = \argmin_{\{q_i\}} \mathcal{F}[\{q_i\}, \{p_i\}, \{\phi_i\}; W_{\text{out}}].
 \label{eq:e_step}
 \end{equation}
 
-This corresponds to variational inference: each agent adjusts its belief distribution to balance self-consistency (alignment with its prior $p_i$) against inter-agent communication (alignment with transported beliefs $\Omega_{ij}[q_j]$) and observations (cross-entropy with targets). In architecture (3), we perform natural gradient descent with detachment from the autograd graph:
+This corresponds to variational inference: each agent adjusts its belief distribution to balance self-consistency (alignment with its prior $p_i$) against inter-agent communication (alignment with transported beliefs $\Omega_{ij}[q_j]$) and observations (cross-entropy with targets). We perform natural gradient descent within the forward pass:
 
 \begin{equation}
-q_i^{(t+1)} \leftarrow q_i^{(t)} - \eta_E \, \tilde{\nabla}_{q_i} \mathcal{F}|_{q_i = q_i^{(t)}}, \quad q_i^{(t+1)} := \text{detach}(q_i^{(t+1)}),
+q_i^{(t+1)} \leftarrow q_i^{(t)} - \eta_E \, \tilde{\nabla}_{q_i} \mathcal{F}|_{q_i = q_i^{(t)}},
 \end{equation}
 
-where $\tilde{\nabla}$ denotes natural gradients projected via the Fisher-Rao metric. The detachment ensures that belief updates are treated as an inference procedure (finding the posterior given the model) rather than a differentiable transformation. The number of iterations $N_E$ is configurable; our default implementation uses $N_E = 1$ for computational efficiency, though the framework supports multiple iterations for tighter convergence.
+where $\tilde{\nabla}$ denotes natural gradients projected via the Fisher-Rao metric. Crucially, the belief updates remain within the computation graph---gradients flow through the VFE dynamics to enable end-to-end learning. The number of iterations $N_E$ is configurable; our default implementation uses $N_E = 1$ for computational efficiency, though the framework supports multiple iterations for tighter convergence.
 
-\subsubsection{M-step (Learning and Backpropagation):} 
+\subsubsection{M-step (Learning via Backpropagation):}
 
-Given converged beliefs $\{q_i^*\}$ from the E-step, update model parameters via standard stochastic gradient descent:
+After the E-step completes belief inference, gradients are computed via standard backpropagation through the entire computation graph:
 
 \begin{equation}
-\theta \leftarrow \theta - \eta_M \, \nabla_{\theta} \mathcal{F}[\{q_i^*\}, \theta],
+\theta \leftarrow \theta - \eta_M \, \nabla_{\theta} \mathcal{L}[\{q_i^*\}, \theta],
 \label{eq:m_step}
 \end{equation}
 
-where $\theta = \{W_{\text{out}}, W_{\text{attn}}\}$ encompasses all learnable parameters. Crucially, the beliefs $\{q_i^*\}$ are held fixed (detached) during this step, so gradients flow only through the model parameters. This is implemented via PyTorch's standard backpropagation over mini-batches, with separate learning rates for different parameter groups (natural gradient structure on the statistical manifold).
+where $\theta = \{\mu_{\text{embed}}, \Sigma_{\text{embed}}, \phi_{\text{embed}}, W_{\text{out}}\}$ encompasses the variational embedding parameters and output projection. Critically, gradients flow through the VFE dynamics---the evolved beliefs $\{q_i^*\}$ are \emph{not} detached, allowing the embedding parameters to learn how their initializations affect belief evolution and subsequent predictions.
+
+This differs from traditional EM where the E-step result is held fixed. Instead, our implementation uses end-to-end differentiable inference, where the ``E-step'' (VFE descent) is an inner optimization loop whose final result provides gradients to the ``M-step'' parameters via automatic differentiation.
+
+Note that there are no learned attention projection matrices $W_Q, W_K, W_V$. Attention weights $\beta_{ij}$ emerge directly from KL divergences between transported beliefs (Eq.~\ref{eq:beta_def}), computed using the learned gauge frames $\phi$ and embedding statistics $(\mu, \Sigma)$. This is a fundamental architectural distinction: attention structure emerges from geometric relationships rather than learned projections.
 
 \section{Experimental Results}
 \label{sec:experiments}
