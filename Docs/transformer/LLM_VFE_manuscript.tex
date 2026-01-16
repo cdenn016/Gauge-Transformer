@@ -394,81 +394,30 @@ This provides 5 copies of the 20-dimensional fundamental representation. The Lie
 
 This decomposition induces block-diagonal structure where different blocks transform according to the same geometric representation but can capture independent semantic features. The gauge group dimension determines the number of attention heads geometrically, in contrast to standard architectures where head count is an arbitrary hyperparameter.
 
-\subsection{Positional Encoding via Gauge Frames}
+\subsection{Absence of Explicit Positional Encoding}
 
-Standard transformers require explicit positional encoding to distinguish token positions, typically added to embeddings as sinusoidal functions or learned vectors~\citep{vaswani2017attention}. Our gauge-theoretic framework provides a natural geometric alternative: positional information is encoded directly in the gauge frames $\phi_i$, making position an intrinsic property of each agent's coordinate system rather than an auxiliary input feature.
-
-For our 0-dimensional implementation, all agents exist at a single base manifold point $c \in \mathcal{C}$. Without additional structure, the model has no information about token order in the sequence. Standard transformers address this by adding positional encoding:
+Standard transformers require explicit positional encoding to distinguish token positions, typically added to embeddings as sinusoidal functions or learned vectors~\citep{vaswani2017attention}:
 
 \begin{equation}
 \text{input}_i = \text{embedding}_i + \text{PE}(\text{pos}_i),
 \end{equation}
 
-where $\text{PE}: \mathbb{N} \to \mathbb{R}^d$ maps integer positions to $d$-dimensional vectors. Common choices include sinusoidal encoding~\citep{vaswani2017attention} or learned embeddings~\citep{devlin2018bert}.
+where $\text{PE}: \mathbb{N} \to \mathbb{R}^d$ maps integer positions to $d$-dimensional vectors. This approach is ad-hoc: positional information is concatenated or added to content representations without geometric justification.
 
-However, this approach is ad-hoc: positional information is concatenated or added to content representations without geometric justification. The gauge-theoretic framework offers a geometric (and surprisingly deep) alternative.
+Our gauge VFE architecture operates \emph{without any explicit positional encoding}. This design choice has both theoretical and empirical motivations:
 
-Each agent $i$ at sequence position $\text{pos}_i$ has a gauge frame $\phi_i \in \mathfrak{so}(N)$, which decomposes into $\frac{N(N-1)}{2}$ scalar components. For SO(3), this gives three components:
+\textbf{Theoretical motivation:} In the gauge-theoretic framework, each token is an autonomous agent with beliefs $q_i$ that evolve through communication with other agents via parallel transport. The causal structure of next-token prediction---where agent $i$ can only attend to agents $j < i$---provides implicit positional information through the attention mask. The asymmetry of the prediction task breaks permutation symmetry without requiring explicit position markers.
 
-\begin{equation}
-\phi_i = \sum_{a=1}^3 \phi_i^{(a)} G_a, \quad \phi_i^{(a)} \in \mathbb{R}.
-\label{eq:gauge_position}
-\end{equation}
+\textbf{Empirical observation:} Our experiments demonstrate that the gauge VFE learns meaningful language statistics (218$\times$ improvement over random) without positional encoding. This suggests that:
+\begin{enumerate}
+    \item The autoregressive attention mask provides sufficient positional signal for the task
+    \item The geometric structure of KL-divergence attention may encode relative relationships differently than dot-product attention
+    \item Explicit positional encoding may be a compensation mechanism for architectural limitations rather than a fundamental requirement
+\end{enumerate}
 
-We encode positional information by initializing these components as functions of sequence position:
+This finding connects to recent work showing that some transformer variants can operate effectively without positional encoding when combined with appropriate attention patterns. In our framework, the absence of positional encoding is not a limitation but rather reflects the sufficiency of the geometric attention mechanism for capturing sequential dependencies.
 
-\begin{equation}
-\phi_i^{(a)} = f_a(\text{pos}_i), \quad a \in \{1,2,3\},
-\label{eq:position_encoding_gauge}
-\end{equation}
-
-where $f_a: \mathbb{N} \to \mathbb{R}$ are encoding functions. Unlike standard positional encoding that augment the embedding space, gauge-based positional encoding live in the fiber coordinate system, affecting how agents communicate through parallel transport.
-
-We may implement several encoding schemes:
-
-\textbf{Linear encoding:}
-
-\begin{equation}
-\phi_i^{(a)} = \lambda_a \cdot \text{pos}_i, \quad \lambda_a \in \mathbb{R},
-\end{equation}
-
-where $\lambda_a$ are scaling hyperparameters (e.g., $\lambda_1 = 0.1, \lambda_2 = 0.05, \lambda_3 = 0.02$). This creates a linear progression of gauge frames along the sequence.
-
-\textbf{Sinusoidal encoding (analogous to Vaswani et al.):}
-
-\begin{equation}
-\phi_i^{(1)} = A \sin\!\left(\frac{\text{pos}_i}{\omega_1}\right), \quad
-\phi_i^{(2)} = A \cos\!\left(\frac{\text{pos}_i}{\omega_2}\right), \quad
-\phi_i^{(3)} = A \sin\!\left(\frac{\text{pos}_i}{\omega_3}\right),
-\label{eq:sinusoidal_gauge}
-\end{equation}
-
-with amplitude $A$ and frequencies $\omega_a$. This provides periodic structure and supports extrapolation to unseen sequence lengths.
-
-\textbf{Learned initialization with gradient descent:}
-
-\begin{equation}
-\phi_i^{(a)} \sim \mathcal{N}(0, \sigma_{\text{init}}^2), \quad \text{optimized via } \nabla_{\phi_i} \mathcal{F}.
-\end{equation}
-
-where the gauge frames are initialized randomly and optimized alongside beliefs $(\mu_i, \Sigma_i)$, allowing the model to learn position-dependent coordinate systems. 
-
-Positional encoding via gauge frames directly influences communication. The transport operator between agents $i$ and $j$ becomes:
-
-\begin{equation}
-\Omega_{ij}^{(h)} = \exp\!\left(\phi_i^{(h)} G_h\right) \cdot \exp\!\left(-\phi_j^{(h)} G_h\right) 
-\label{eq:position_transport}
-\end{equation}
-
-Transport manifestly depends on the difference $\phi_i^{(h)} - \phi_j^{(h)}$ (modulo commutators), making it sensitive to relative position.
-
-
-Attention weights thus incorporate positional bias geometrically:
-
-\begin{equation}
-\beta_{ij}^{(h)} \propto \exp\!\left[-\kappa_\beta^{-1} D_{\mathrm{KL}}\!\left(q_i \,\big\|\, \exp\!\big(\lambda_h \Delta_{ij} G_h\big)[q_j]\right)\right],
-\quad \Delta_{ij} := \text{pos}_i - \text{pos}_j.
-\end{equation}
+Future work may explore whether learnable gauge frames $\phi_i$ initialized as functions of position could further improve performance, but our current results establish that such encoding is not necessary for meaningful language modeling.
 
 \subsection{Variational Inference as E-step and M-step.}
 
