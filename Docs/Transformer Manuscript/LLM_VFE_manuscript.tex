@@ -98,7 +98,17 @@ Testing whether gauge theory captures fundamental attention principles requires 
     \item \textbf{Interpretability:} Does explicit computation of beliefs, transport, and Fisher information provide insights that black-box attention cannot?
 \end{enumerate}
 
-Prior work on multi-agent communication~\citep{foerster2016learning,sukhbaatar2016learning} uses reinforcement learning without geometric structure. Geometric deep learning~\citep{bronstein2021geometric,fuchs2020se3} incorporates symmetries but not variational inference. Active inference~\citep{friston2010free,parr2022active} offers variational principles but has not been applied to transformer-scale modeling. To our knowledge, no previous work implements gauge-theoretic communication as a working attention mechanism.
+\subsection{Related Work}
+
+\textbf{Multi-agent communication and geometric deep learning.} Prior work on multi-agent communication~\citep{foerster2016learning,sukhbaatar2016learning} uses reinforcement learning without geometric structure. Geometric deep learning~\citep{bronstein2021geometric,fuchs2020se3} incorporates symmetries but not variational inference. Active inference~\citep{friston2010free,parr2022active} offers variational principles but has not been applied to transformer-scale modeling.
+
+\textbf{Hopfield networks and associative memory.} Modern Hopfield networks~\citep{ramsauer2020hopfield} establish a connection between classical associative memory and transformer attention, showing that attention can be viewed as energy-based retrieval with exponential storage capacity. Our KL-divergence attention shares this energy-based perspective: attention weights emerge from minimizing a free energy functional rather than learned projections. However, while Hopfield networks frame attention as memory retrieval, our framework frames it as belief alignment under parallel transport.
+
+\textbf{Energy-based models.} Our variational free energy functional places gauge-theoretic transformers within the broader family of energy-based models (EBMs)~\citep{lecun2006tutorial}. The VFE serves as an energy function whose minimization drives both attention (via $\beta_{ij}$ weights) and belief updates (via natural gradient descent). This connects to work on EBMs for sequence modeling~\citep{deng2020residual} and contrastive learning, though our approach is generative rather than discriminative.
+
+\textbf{Attention without softmax.} Recent work has questioned whether softmax is necessary for attention. Linear attention~\citep{katharopoulos2020transformers} removes softmax entirely, achieving linear complexity. Kernel attention methods~\citep{choromanski2020rethinking} approximate softmax via random features. Our KL-divergence attention provides a principled alternative: softmax emerges from the maximum entropy structure of attention weights (Eq.~1), but the underlying mechanism is belief comparison rather than learned dot products. This suggests softmax in standard transformers may be approximating a deeper geometric operation.
+
+To our knowledge, no previous work implements gauge-theoretic communication as a working attention mechanism at production scale.
 
 In this report we implement and compare:
     \begin{itemize}
@@ -551,7 +561,7 @@ Common settings across all architectures to ensure fair comparison:
 
 \begin{itemize}
   \item Context window: $L=128$ tokens
-  \item Batch size: 3 sequences
+  \item Batch size: 3 sequences (limited by GPU memory for $K=100$ gauge VFE on single RTX 5090)
   \item Training steps: 200,000
   \item Learning rate: $\eta = 0.01$
   \item Warmup steps: 50
@@ -561,6 +571,7 @@ Common settings across all architectures to ensure fair comparison:
   \item Temperature parameters: $\kappa_\beta = 1.0$ (gauge VFE only)
   \item Covariance: diagonal, initialized to $\Sigma_i = 0.1 \cdot I_{100}$
   \item Dataset: WikiText-103
+  \item Random seed: 6 (for reproducibility)
 \end{itemize}
 
 \subsection{Evaluation metrics.}
