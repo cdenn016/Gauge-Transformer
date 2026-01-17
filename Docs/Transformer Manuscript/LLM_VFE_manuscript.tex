@@ -932,6 +932,79 @@ The complete simulation suite that implements the gauge-theoretic variational in
 All experiments reported in the results section can be reproduced using the provided configuration files and random number generator seeds documented in the repository. Our codebase requires Python 3.9+ with NumPy, SciPy, and Joblib dependencies.
 
 
+\appendix
+
+\section{Vacuum Theory and Symmetry Breaking}
+\label{app:vacuum}
+
+This appendix provides mathematical details on how observations break gauge symmetry in the variational free energy framework, as referenced in Section~\ref{sec:background}.
+
+\subsection{The Vacuum Free Energy}
+
+In the absence of observations, the variational free energy reduces to:
+\begin{equation}
+\mathcal{F}_{\text{vacuum}}[\{q_i\}] = \sum_i D_{\mathrm{KL}}(q_i \| p_i) + \sum_{i,j} \beta_{ij} D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)
+\label{eq:vacuum_fe}
+\end{equation}
+
+For Gaussian agents $q_i = \mathcal{N}(\mu_i, \Sigma_i)$ with shared isotropic priors $p_i = \mathcal{N}(0, \sigma_p^2 I)$, the belief-prior term becomes:
+\begin{equation}
+D_{\mathrm{KL}}(q_i \| p_i) = \frac{1}{2}\left[\frac{\|\mu_i\|^2}{\sigma_p^2} + \frac{\mathrm{tr}(\Sigma_i)}{\sigma_p^2} - K - \log\frac{|\Sigma_i|}{\sigma_p^{2K}}\right]
+\end{equation}
+
+\subsection{Gauge Invariance of the Vacuum}
+
+Under a global gauge transformation $g \in G$, beliefs transform as $\mu_i \to g\mu_i$ and $\Sigma_i \to g\Sigma_i g^\top$. The vacuum free energy~\eqref{eq:vacuum_fe} is invariant under such transformations because:
+
+\begin{enumerate}
+    \item The belief-prior KL depends only on $\|\mu_i\|^2$ and $\mathrm{tr}(\Sigma_i)$, which are invariant under orthogonal transformations
+    \item The belief alignment KL involves $\Omega_{ij} = e^{\phi_i}e^{-\phi_j}$, which transforms covariantly: $\Omega_{ij} \to g\Omega_{ij}g^{-1}$
+\end{enumerate}
+
+This gauge invariance implies that the vacuum ground state forms a degenerate manifold---the \emph{Goldstone manifold}---where all configurations related by global gauge transformations have equal free energy.
+
+\subsection{Vacuum Ground State}
+
+Minimizing~\eqref{eq:vacuum_fe} with respect to $\mu_i$ yields the stationarity condition:
+\begin{equation}
+\frac{\partial \mathcal{F}_{\text{vacuum}}}{\partial \mu_i} = \frac{\mu_i}{\sigma_p^2} + \sum_j \beta_{ij} \Sigma_j^{-1}(\mu_i - \Omega_{ij}\mu_j) = 0
+\end{equation}
+
+In the symmetric phase where all agents align ($\mu_i = \mu_j = \mu^*$ and $\Omega_{ij} = I$), this reduces to:
+\begin{equation}
+\mu^* = 0
+\end{equation}
+
+However, for non-zero prior variance, there exists a family of degenerate minima where $\|\mu_i\| = \mu^*$ for all $i$, with the direction of $\mu^*$ arbitrary. This is the gauge-invariant ground state shown in Figure~\ref{fig:vacuum}.
+
+\subsection{Symmetry Breaking via Observations}
+
+Introducing the observation likelihood term:
+\begin{equation}
+\mathcal{F}[\{q_i\}] = \mathcal{F}_{\text{vacuum}}[\{q_i\}] - \sum_i \mathbb{E}_{q_i}[\log p(o_i \mid \mu_i)]
+\end{equation}
+
+For categorical observations with cross-entropy loss:
+\begin{equation}
+-\mathbb{E}_{q_i}[\log p(o_i \mid \mu_i)] \approx -\log \mathrm{softmax}(\mu_i)_{o_i} = -\mu_i^{(o_i)} + \log \sum_k e^{\mu_i^{(k)}}
+\end{equation}
+
+This term explicitly depends on the \emph{direction} of $\mu_i$, not just its magnitude. Different observations $o_i$ favor different directions, breaking the gauge symmetry and forcing agents to specialize.
+
+\subsection{Spontaneous Symmetry Breaking Dynamics}
+
+The gradient of the observation term:
+\begin{equation}
+\frac{\partial}{\partial \mu_i}\left[-\log p(o_i \mid \mu_i)\right] = \mathrm{softmax}(\mu_i) - e_{o_i}
+\end{equation}
+
+where $e_{o_i}$ is the one-hot vector for observation $o_i$. This drives $\mu_i$ toward configurations where component $o_i$ is maximized, selecting specific points on the Goldstone manifold.
+
+The result is spontaneous symmetry breaking: agents that began in the symmetric vacuum state flow to distinct, specialized configurations determined by their local observations (Figure~\ref{fig:symmetry_breaking}). In the language modeling context, different tokens ``observe'' different next-token targets, forcing their belief representations to differentiate according to semantic content.
+
+This mechanism explains why training produces diverse, specialized token representations despite identical initialization: the observation likelihood acts as a symmetry-breaking field that selects particular vacua from the degenerate Goldstone manifold.
+
+
 \bibliographystyle{plainnat}
 \bibliography{references}
 \end{document}
