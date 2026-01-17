@@ -606,33 +606,35 @@ Table~\ref{tab:main_results} presents our primary results on WikiText-103 token-
 
 \begin{table}[t]
 \centering
-\caption{Performance on WikiText-103 token-level modeling. All models trained for 200,000 steps with batch size 3 and context length 128. Learning rates: standard transformer uses $\eta = 3 \times 10^{-4}$; gauge VFE uses $\eta = 0.01$.}
+\small
+\caption{Performance on WikiText-103 token-level modeling. All models trained for 200k steps with batch size 3 and context length 128.}
 \label{tab:main_results}
-\begin{tabular}{lcccccc}
+\begin{tabular}{lccccc}
 \toprule
-\textbf{Architecture} & \textbf{Layers} & \textbf{Params} & \textbf{Val PPL} $\downarrow$ & \textbf{Test PPL} $\downarrow$ & \textbf{Loss} & \textbf{vs Random} \\
+\textbf{Architecture} & \textbf{Layers} & \textbf{Params} & \textbf{Val PPL} $\downarrow$ & \textbf{Loss} & \textbf{vs Random} \\
 \midrule
-Random baseline & --- & --- & 50,257 & 50,257 & 10.82 & 1$\times$ \\
+Random baseline & --- & --- & 50,257 & 10.82 & 1$\times$ \\
 \midrule
-Standard (param-matched) & 6 & 23.5M & 178 & --- & 5.18 & 282$\times$ \\
-Standard (embed-matched) & 6 & 5.76M & 260 & --- & 5.56 & 193$\times$ \\
+Standard (param-match) & 6 & 23.5M & 178 & 5.18 & 282$\times$ \\
+Standard (embed-match) & 6 & 5.76M & 260 & 5.56 & 193$\times$ \\
 \midrule
-Gauge VFE (SO(20)) & 1 & 24.6M & 230 & --- & 5.44 & 218$\times$ \\
+Gauge VFE (SO(20)) & 1 & 24.6M & 230 & 5.44 & 218$\times$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \begin{table}[t]
 \centering
-\caption{Architectural comparison of evaluated models. The gauge VFE allocates parameters primarily to variational embeddings rather than neural network weights.}
+\small
+\caption{Architectural comparison. Gauge VFE allocates parameters to variational embeddings rather than neural network weights.}
 \label{tab:arch_comparison}
-\begin{tabular}{lcccccc}
+\begin{tabular}{lccccc}
 \toprule
-\textbf{Architecture} & \textbf{embed\_dim} & \textbf{Layers} & \textbf{Heads} & \textbf{FFN} & \textbf{Params} \\
+\textbf{Architecture} & \textbf{Dim} & \textbf{Layers} & \textbf{Heads} & \textbf{FFN} & \textbf{Params} \\
 \midrule
-Standard (param-matched) & 320 & 6 & 8 & Learned MLP (1280) & 23.5M \\
-Standard (embed-matched) & 100 & 6 & 4 & Learned MLP (400) & 5.76M \\
-Gauge VFE (SO(20)) & 100 & 1 & 5 & VFE\_dynamic & 24.6M \\
+Standard (param-match) & 320 & 6 & 8 & MLP (1280) & 23.5M \\
+Standard (embed-match) & 100 & 6 & 4 & MLP (400) & 5.76M \\
+Gauge VFE (SO(20)) & 100 & 1 & 5 & VFE dynamic & 24.6M \\
 \bottomrule
 \end{tabular}
 \end{table}
