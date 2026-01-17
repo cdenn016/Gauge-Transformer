@@ -254,6 +254,7 @@ import sys
 
 **minimize itemizations when working on manuscripts:**
 - utilize academic prose 
+- minimize the usage of bullet points, itemizations, lists, etc.
 
 **Push back:**
 - Challenge gaps in derivations, ask for justification
@@ -414,4 +415,5 @@ This is a **symmetry-based prior** implementing compression geometrically.
 - Renormalization Group: Wilson, Kadanoff
 
 - Information Geometry: Amari
+
 
