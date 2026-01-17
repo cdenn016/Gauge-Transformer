@@ -184,7 +184,7 @@ where $q_i$ and $p_i$ are an agent's belief and prior at an individual base mani
 
 \textbf{Timescale separation and omitted terms.} In our present implementation, we omit the model prior term (2) and model alignment term (4), retaining only the belief prior (1), belief alignment (3), and observation likelihood (5). This simplification reflects a \emph{timescale separation} common in hierarchical Bayesian inference and active inference frameworks: beliefs $q_i$ serve as ``fast'' variables that update rapidly within the forward pass via VFE descent, while priors $p_i$ serve as ``slow'' variables that remain quasi-static during inference and update only via backpropagation (the M-step). The model terms $s_i$, $r_i$, and $\gamma_{ij}$ would represent an even slower ``meta-learning'' timescale governing how priors themselves communicate and adapt.
 
-This architectural choice parallels standard transformers, where token embeddings (analogous to our priors) are fixed during the forward pass and updated only via gradient descent on the loss. A complete ``pure FEP'' implementation could allow priors to evolve on an intermediate timescale and communicate via model alignment terms, potentially enabling online adaptation, continual learning, or hierarchical abstraction. We leave exploration of such multi-timescale dynamics to future work.
+This architectural choice parallels standard transformers, where token embeddings (analogous to our priors) are fixed during the forward pass and updated only via gradient descent on the loss. A complete ``pure FEP'' implementation could allow priors to evolve on an intermediate timescale and communicate via model alignment terms, potentially enabling online adaptation, continual learning, or hierarchical abstraction. We introduce one such intermediate-timescale mechanism, \emph{P-flow}, in Section~\ref{sec:p_flow}, which updates token priors via EMA toward successful beliefs after each E-step.
 
 In principle, our variational free energy could be regularized by a variety of terms (gauge frame smoothness, curvature, etc) which we consider elsewhere. In our present study, we do not implement such regularization terms. We consider all fields to occupy a $0$ dimensional base manifold. However, in full generality we can perform gradient descent of our variational free energy on arbitrary dimensionful base manifolds by integrating over agent supports $\chi_i(c)$ and overlaps $\chi_{ij}(c)$.
 
@@ -467,6 +467,38 @@ where $\theta = \{\mu_{\text{embed}}, \Sigma_{\text{embed}}, \phi_{\text{embed}}
 This differs from traditional EM where the E-step result is held fixed. Instead, our implementation uses end-to-end differentiable inference, where the ``E-step'' (VFE descent) is an inner optimization loop whose final result provides gradients to the ``M-step'' parameters via automatic differentiation.
 
 Note that there are no learned attention projection matrices $W_Q, W_K, W_V$. Attention weights $\beta_{ij}$ emerge directly from KL divergences between transported beliefs (Eq.~\ref{eq:beta_def}), computed using the learned gauge frames $\phi$ and embedding statistics $(\mu, \Sigma)$. This is a fundamental architectural distinction: attention structure emerges from geometric relationships rather than learned projections.
+
+\subsubsection{P-flow: EMA Prior Updates}
+\label{sec:p_flow}
+
+The standard M-step updates priors via backpropagation through the full VFE dynamics. An alternative approach, which we call \emph{P-flow} (prior flow), updates token embeddings directly toward successful beliefs using exponential moving averages (EMA). This provides an intermediate timescale between fast belief updates (E-step) and slow gradient-based learning (M-step).
+
+\paragraph{Motivation.} After the E-step converges, the final beliefs $\{q_i^*\}$ represent context-dependent interpretations that successfully minimize prediction error. Rather than discarding this information and relying solely on gradients, P-flow uses the beliefs directly to update the priors. This implements a form of Hebbian learning: priors for tokens that predict well should move toward the beliefs that succeeded.
+
+\paragraph{Weight computation.} Not all positions contribute equally to prior updates. Positions with low prediction error (high likelihood) should influence the prior more strongly. We compute position-dependent weights from the cross-entropy loss:
+\begin{equation}
+w_i = \frac{\exp(-\mathcal{L}_i / \tau)}{\sum_j \exp(-\mathcal{L}_j / \tau)},
+\label{eq:p_flow_weights}
+\end{equation}
+where $\mathcal{L}_i = -\log p(o_i | \mu_i^*)$ is the per-position cross-entropy and $\tau$ is a temperature parameter controlling weight sharpness.
+
+\paragraph{EMA update rule.} For each unique token $c$ appearing at positions $\{i : \text{token}(i) = c\}$ in the batch, we compute the weighted average belief and update the token prior via EMA:
+\begin{equation}
+\mu_p^c \leftarrow (1 - \eta) \, \mu_p^c + \eta \sum_{i : \text{token}(i) = c} \tilde{w}_i \, \mu_i^*,
+\label{eq:p_flow_ema}
+\end{equation}
+where $\tilde{w}_i = w_i / \sum_{j : \text{token}(j) = c} w_j$ normalizes weights within each token type, and $\eta \in (0, 1)$ is the EMA decay rate (typically $\eta = 0.01$, corresponding to decay $1 - \eta = 0.99$).
+
+\paragraph{Interpretation.} P-flow implements a biologically plausible learning rule where priors adapt toward successful predictions without requiring gradient computation through the full dynamics. The EMA provides temporal smoothing, preventing priors from changing too rapidly in response to individual examples. This connects to predictive coding theories in neuroscience where prediction errors drive synaptic updates~\citep{rao1999predictive}.
+
+\paragraph{Hybrid learning.} P-flow can be combined with standard backpropagation:
+\begin{enumerate}
+\item \textbf{E-step:} Update beliefs $\{q_i\} \to \{q_i^*\}$ via VFE descent
+\item \textbf{P-flow:} Update priors $\{p_c\}$ via EMA toward successful beliefs (Eq.~\ref{eq:p_flow_ema})
+\item \textbf{M-step:} Update all parameters $\theta$ via backpropagation (Eq.~\ref{eq:m_step})
+\end{enumerate}
+
+The P-flow step operates on the embedding table directly (outside the computation graph), while the M-step optimizes through the graph. This hybrid approach allows priors to learn both from direct belief transfer (P-flow) and from gradient signals about how prior initialization affects downstream predictions (backpropagation). In our experiments, we report results with and without P-flow to isolate its contribution.
 
 \section{Experimental Results}
 \label{sec:experiments}
