@@ -107,6 +107,10 @@ class FastTrainingConfig:
     # Mixed precision
     use_amp: bool = False
 
+    # P-FLOW: EMA update of token embeddings toward successful beliefs
+    use_p_flow: bool = False          # Enable P-flow updates
+    p_flow_ema_decay: float = 0.99    # EMA decay (0.99 = 1% update per step)
+
 
 # =============================================================================
 # Fast Trainer with Parameter Group Learning Rates

@@ -1553,7 +1553,9 @@ def run_single_experiment(
         # GPU optimizations
         use_amp=config.get('use_amp', False),
 
-       
+        # P-FLOW: EMA update of token embeddings toward successful beliefs
+        use_p_flow=config.get('use_p_flow', False),
+        p_flow_ema_decay=config.get('p_flow_ema_decay', 0.99),
     )
 
     print("\n" + "="*70)
@@ -1570,7 +1572,12 @@ def run_single_experiment(
     print(f"  β (belief align):     {train_config.beta}")
     print(f"  γ (model align):      {train_config.lambda_gamma}")
 
-    
+    # P-FLOW configuration
+    if train_config.use_p_flow:
+        print(f"\nP-FLOW (EMA prior updates): ENABLED")
+        print(f"  EMA decay: {train_config.p_flow_ema_decay} ({(1-train_config.p_flow_ema_decay)*100:.1f}% update per step)")
+    else:
+        print(f"\nP-FLOW: disabled")
 
     # =================================================================
     # Create Trainer (Pure FEP or Standard)
