@@ -43,7 +43,7 @@
 \begin{abstract}
 During the past decade transformers have achieved remarkable success in language, image, video generation and reasoning, yet their theoretical foundations remain obscure. In previous theoretical work, we derived transformer attention and feed-forward mechanisms from first principles using gauge-equivariant variational free energy defined on a principal bundle. Here, we present the first working implementation of this framework at production scale, demonstrating that explicit probabilistic inference (without neural architectures) achieves meaningful language modeling performance.
 
-We implement and validate gauge-theoretic transformers using natural gradient descent on statistical manifolds with multi-head attention defined by Lie group structure. On token-level language modeling (WikiText-103, vocabulary 50,257), our single-layer SO(20) gauge architecture achieves perplexity 230 using pure variational inference---without MLPs, activation functions, or learned weight matrices. We compare against standard transformers under parameter-matched ($\sim$24M) and embedding-matched (dimension 100) conditions.
+We implement and validate gauge-theoretic transformers using natural gradient descent on statistical manifolds with multi-head attention defined by Lie group structure. On token-level language modeling (WikiText-103, vocabulary 50,257), our single-layer SO(20) gauge architecture achieves perplexity 230 using pure variational inference---without MLPs, activation functions, or learned attention projections. We compare against standard transformers under parameter-matched ($\sim$24M) and embedding-matched (dimension 100) conditions.
 
 This proof-of-principle establishes that gauge-theoretic attention is not merely mathematically feasible but operationally viable at production scale. Our architecture achieves 218$\times$ improvement over random chance through geometric structure alone, validating that transformer-like behavior emerges from gauge-theoretic principles. While a parameter-matched standard transformer achieves better absolute performance (PPL 178 vs 230), the gauge VFE reaches 77\% of this using only geometric structure---a single layer with no learned projections or feed-forward networks. Notably, the VFE outperforms the embedding-matched standard transformer (230 vs 260 PPL), demonstrating superior parameter efficiency at fixed embedding dimension. We conclude that neural architectures are, in this view, computational approximations to a deeper information gauge geometry that transcends the field of machine learning.
 \end{abstract}
@@ -66,7 +66,7 @@ In previous theoretical work~\citep{Dennis2025}, we formalized attention as geom
 %
 This brings to light what standard attention obscures: communication succeeds when geometric transport minimizes belief disagreement. Standard attention ($\mathrm{softmax}(QK^\top/\sqrt{d})$) emerges as the degenerate limit when gauge frames trivialize, the base manifold collapses to zero dimensions, and beliefs become Dirac deltas.
 
-Feed-forward layers are then replaced by variational inference: agents update beliefs $q_i \to q_i'$ via natural gradient descent on Fisher-Rao metrics, minimizing free energy $\mathcal{F}[q,p, \phi]$ in response to observations, priors, and inter-agent comparison. Non-linear transformations (e.g. ReLU, GELU, etc) emerge from KL geometry rather than learned activation functions. Crucially, our full architecture contains no neural network components: no multi-layer perceptrons, no ReLU/GELU activations, no learned weight matrices. Table~\ref{tab:params} contrasts parameter allocation.
+Feed-forward layers are then replaced by variational inference: agents update beliefs $q_i \to q_i'$ via natural gradient descent on Fisher-Rao metrics, minimizing free energy $\mathcal{F}[q,p, \phi]$ in response to observations, priors, and inter-agent comparison. Non-linear transformations (e.g. ReLU, GELU, etc) emerge from KL geometry rather than learned activation functions. Crucially, our architecture eliminates the core neural network components of standard transformers: no multi-layer perceptrons, no ReLU/GELU activations, no learned attention projections ($W_Q, W_K, W_V$). Only a linear output projection to vocabulary logits remains. Table~\ref{tab:params} contrasts parameter allocation.
 
 \begin{table}[t]
 \centering
@@ -80,7 +80,8 @@ Variational embeddings ($\mu, \Sigma, \phi$) & 33\% & 95\% \\
 Neural network weights (MLP, attention) & 67\% & \textbf{0\%} \\
 Multi-layer perceptrons & Yes & \textbf{No} \\
 Activation functions (ReLU, etc.) & Yes & \textbf{No} \\
-Learned weight matrices & Yes & \textbf{No} \\
+Learned attention projections ($W_Q, W_K, W_V$) & Yes & \textbf{No} \\
+Output projection ($W_{\text{out}}$) & Yes & Yes \\
 Geometric hyperparameters & 0\% & 5\% \\
 \bottomrule
 \end{tabular}
@@ -641,7 +642,7 @@ Gauge VFE (SO(20)) & 100 & 1 & 5 & VFE dynamic & 24.6M \\
 \end{tabular}
 \end{table}
 
-The gauge VFE achieves perplexity 230, representing a 218$\times$ improvement over random chance (PPL 50,257). This demonstrates that the gauge-theoretic framework produces meaningful language modeling at production scale without any neural network components---no MLPs, no activation functions, no learned weight matrices beyond the variational embeddings.
+The gauge VFE achieves perplexity 230, representing a 218$\times$ improvement over random chance (PPL 50,257). This demonstrates that the gauge-theoretic framework produces meaningful language modeling at production scale without standard neural network components---no MLPs, no activation functions, no learned attention projections.
 
 The comparison reveals two key findings:
 
@@ -762,7 +763,7 @@ Our empirical results establish several key findings:
 \begin{enumerate}
   \item \textbf{Gauge-theoretic attention works at scale:} The framework successfully processes a vocabulary of 50,257 tokens with 128-token context, achieving substantial compression of language statistics through geometric structure.
 
-  \item \textbf{No neural networks required:} The gauge VFE contains zero MLPs, activation functions, or learned weight matrices beyond variational embeddings. All computation derives from KL divergences, parallel transport, and natural gradient descent.
+  \item \textbf{Minimal neural components:} The gauge VFE contains zero MLPs, activation functions, or learned attention projections. Only a linear output projection to vocabulary logits is retained. All other computation derives from KL divergences, parallel transport, and natural gradient descent.
 
   \item \textbf{Single geometric layer:} Unlike standard transformers requiring multiple layers for effective modeling, the gauge architecture achieves meaningful performance with a single layer, suggesting that geometric structure partially compensates for depth.
 
@@ -951,14 +952,14 @@ The key contributions of this work are:
 \begin{enumerate}
   \item \textbf{Theoretical validation at scale:} We demonstrate that gauge-theoretic attention---derived from first principles using fiber bundles and variational free energy---produces meaningful language modeling with vocabulary size 50,257 and context length 128.
 
-  \item \textbf{Neural-network-free architecture:} Our framework contains zero MLPs, activation functions, or learned weight matrices. All computation derives from KL divergences, parallel transport operators, and natural gradient descent on statistical manifolds.
+  \item \textbf{Minimal neural architecture:} Our framework contains zero MLPs, activation functions, or learned attention projections. Only a linear output projection remains. All other computation derives from KL divergences, parallel transport operators, and natural gradient descent on statistical manifolds.
 
   \item \textbf{Geometric multi-head attention:} The number of attention heads emerges from the irrep decomposition (5 copies of the SO(20) fundamental $\rightarrow$ 5 heads) rather than being an arbitrary hyperparameter.
 
   \item \textbf{Practical implementation:} With $\sim$29$\times$ computational overhead (improved from $\sim$800$\times$ in earlier prototypes), the approach is feasible for research-scale experiments.
 \end{enumerate}
 
-Our results suggest that neural networks and learned weights are not strictly necessary for transformer architectures---they are one computational instantiation of deeper geometric principles. This revelation opens the framework to general informational systems beyond machine learning, including physics, economics, and neuroscience.
+Our results suggest that the bulk of neural network machinery in standard transformers---MLPs, activation functions, and learned attention projections---can be replaced by geometric inference. This opens the framework to general informational systems beyond machine learning, including physics, economics, and neuroscience.
 
 Future work includes: (1) scaling to larger models and longer contexts, (2) exploring different gauge groups to discover optimal symmetry structures for language, (3) implementing spatial gauge theories beyond 0D for hierarchical and compositional structures, and (4) investigating whether standard transformers implicitly minimize gauge curvature. The convergence of gauge theory, information geometry, and machine learning suggests rich opportunities for cross-pollination of mathematical tools and conceptual insights.
 
