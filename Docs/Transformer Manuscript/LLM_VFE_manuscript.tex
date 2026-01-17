@@ -406,6 +406,8 @@ This provides 5 copies of the 20-dimensional fundamental representation. Each co
 
 This decomposition induces block-diagonal structure where different blocks transform according to the same geometric representation but can capture independent semantic features. The gauge group dimension determines the number of attention heads geometrically, in contrast to standard architectures where head count is an arbitrary hyperparameter.
 
+We employ the fundamental representation for computational simplicity, but the framework accommodates arbitrary irreducible representations. Mixed decompositions combining fundamental, adjoint, and higher tensor representations would yield attention heads with distinct transformation properties, potentially capturing different levels of semantic abstraction within a single layer. Exploring optimal irrep configurations for language modeling remains an open direction.
+
 \subsection{Absence of Explicit Positional Encoding}
 
 Standard transformers require explicit positional encoding to distinguish token positions, typically added to embeddings as sinusoidal functions or learned vectors~\citep{vaswani2017attention}:
