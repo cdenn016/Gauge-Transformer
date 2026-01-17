@@ -1281,9 +1281,10 @@ def create_dataloaders(
     cache_dir: Optional[str] = None,
     tokenizer_name: str = 'gpt2',
     dataset: str = 'wikitext-103',
-) -> Tuple[DataLoader, DataLoader, int]:
+    include_test: bool = False,
+) -> Tuple[DataLoader, DataLoader, int] | Tuple[DataLoader, DataLoader, DataLoader, int]:
     """
-    Create train and validation dataloaders for WikiText.
+    Create train, validation, and optionally test dataloaders for WikiText.
 
     Uses tiktoken (OpenAI's fast tokenizer) if available, falls back to
     transformers if not. Tiktoken is preferred as it has no heavy dependencies.
@@ -1296,11 +1297,18 @@ def create_dataloaders(
         cache_dir: Optional cache directory
         tokenizer_name: HuggingFace tokenizer name (only used if tiktoken unavailable)
         dataset: 'wikitext-2' (~2M tokens) or 'wikitext-103' (~103M tokens, default)
+        include_test: If True, also return test dataloader
 
     Returns:
-        train_loader: Training dataloader
-        val_loader: Validation dataloader
-        vocab_size: Actual vocabulary size
+        If include_test=False (default):
+            train_loader: Training dataloader
+            val_loader: Validation dataloader
+            vocab_size: Actual vocabulary size
+        If include_test=True:
+            train_loader: Training dataloader
+            val_loader: Validation dataloader
+            test_loader: Test dataloader
+            vocab_size: Actual vocabulary size
 
     Example:
         >>> train_loader, val_loader, vocab_size = create_dataloaders(
@@ -1308,6 +1316,12 @@ def create_dataloaders(
         ...     batch_size=8,
         ...     vocab_size=5000,
         ...     dataset='wikitext-103',  # Use larger dataset
+        ... )
+        >>> # Or with test set:
+        >>> train_loader, val_loader, test_loader, vocab_size = create_dataloaders(
+        ...     max_seq_len=128,
+        ...     batch_size=8,
+        ...     include_test=True,
         ... )
         >>> for batch_idx, (input_ids, target_ids) in enumerate(train_loader):
         ...     # input_ids: (B, T), target_ids: (B, T)
@@ -1400,16 +1414,52 @@ def create_dataloaders(
         worker_init_fn=_worker_init_fn,  # Reproducibility: seed workers
     )
 
+    # Create test dataloader if requested
+    test_loader = None
+    if include_test:
+        if TIKTOKEN_AVAILABLE:
+            test_dataset = WikiText2TiktokenDataset(
+                split='test',
+                max_seq_len=max_seq_len,
+                vocab_size=vocab_size,
+                cache_dir=cache_dir,
+                vocab_mapping=train_vocab_mapping,  # Use train's mapping!
+                dataset=dataset,
+            )
+        else:
+            test_dataset = WikiText2Dataset(
+                split='test',
+                max_seq_len=max_seq_len,
+                vocab_size=vocab_size,
+                tokenizer_name=tokenizer_name,
+                cache_dir=cache_dir,
+                vocab_mapping=train_vocab_mapping,  # Use train's mapping!
+            )
+
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=True if torch.cuda.is_available() else False,
+            drop_last=False,
+            worker_init_fn=_worker_init_fn,  # Reproducibility: seed workers
+        )
+
     print(f"\n{'='*70}")
     print(f"DATALOADERS CREATED")
     print(f"{'='*70}")
     print(f"Train batches: {len(train_loader):,}")
     print(f"Val batches:   {len(val_loader):,}")
+    if test_loader is not None:
+        print(f"Test batches:  {len(test_loader):,}")
     print(f"Vocabulary:    {actual_vocab_size:,} tokens")
     print(f"Batch size:    {batch_size}")
     print(f"Sequence len:  {max_seq_len}")
     print(f"{'='*70}\n")
 
+    if include_test:
+        return train_loader, val_loader, test_loader, actual_vocab_size
     return train_loader, val_loader, actual_vocab_size
 
 
