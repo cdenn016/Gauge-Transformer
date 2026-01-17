@@ -739,6 +739,38 @@ class GaugeTransformerLM(nn.Module):
 
         return n_params
 
+    # =========================================================================
+    # P-FLOW: EMA update of token embeddings toward successful beliefs
+    # =========================================================================
+    def p_flow_update(
+        self,
+        token_ids: torch.Tensor,           # (B, N) token IDs
+        mu_beliefs: torch.Tensor,          # (B, N, K) final beliefs after VFE
+        prediction_errors: torch.Tensor,   # (B, N) per-position CE loss
+        ema_decay: float = 0.99,           # EMA decay (higher = slower)
+    ):
+        """
+        P-flow: Update token embeddings toward successful beliefs.
+
+        This is the key learning mechanism from fep_transformer.py:
+        - After VFE dynamics produce final beliefs
+        - Update token priors (embeddings) toward beliefs that predicted well
+        - Uses EMA for stable, gradual updates
+
+        Args:
+            token_ids: (B, N) token indices
+            mu_beliefs: (B, N, K) final belief means after VFE
+            prediction_errors: (B, N) per-position CE loss
+            ema_decay: EMA decay rate (0.99 = slow, 0.9 = faster)
+        """
+        if hasattr(self.token_embed, 'update_embeddings_from_beliefs'):
+            self.token_embed.update_embeddings_from_beliefs(
+                token_ids=token_ids,
+                mu_beliefs=mu_beliefs,
+                prediction_errors=prediction_errors,
+                ema_decay=ema_decay,
+            )
+
 
 # =============================================================================
 # Testing

@@ -512,6 +512,11 @@ VFE_EM_CONFIG = {
     'ffn_pure_fep_mode': False,
     'ffn_prior_lr': 0.01,
 
+    # P-FLOW: EMA update of token embeddings toward successful beliefs
+    # This is the key learning mechanism from fep_transformer.py
+    'use_p_flow': True,           # Enable P-flow updates on token embeddings
+    'p_flow_ema_decay': 0.99,     # EMA decay (higher = slower update, 0.99 = 1% per step)
+
     # RG metrics (optional)
     'compute_rg_metrics': False,
     'rg_metrics_interval': 25,
@@ -1053,6 +1058,27 @@ class PublicationTrainer(FastTrainer):
         if self.scheduler is not None:
             self.scheduler.step()
         self.optimizer.zero_grad()
+
+        # =================================================================
+        # P-FLOW: EMA update of token embeddings toward successful beliefs
+        # =================================================================
+        # This is the key learning mechanism from fep_transformer.py
+        # After backprop updates W_out, P-flow updates token embeddings
+        # toward beliefs that predicted successfully (low CE)
+        use_p_flow = getattr(self.config, 'use_p_flow', False)
+        if use_p_flow and not is_standard and 'p_flow/mu_q' in full_metrics:
+            mu_beliefs = full_metrics['p_flow/mu_q']
+            ce_per_position = full_metrics['p_flow/ce_per_position']
+            ema_decay = getattr(self.config, 'p_flow_ema_decay', 0.99)
+
+            # Call P-flow update on the model
+            if hasattr(self.model, 'p_flow_update'):
+                self.model.p_flow_update(
+                    token_ids=input_ids,
+                    mu_beliefs=mu_beliefs,
+                    prediction_errors=ce_per_position,
+                    ema_decay=ema_decay,
+                )
 
         # Format comprehensive metrics
         metrics = {

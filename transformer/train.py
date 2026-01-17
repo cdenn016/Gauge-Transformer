@@ -511,6 +511,22 @@ def compute_free_energy_loss(
     if hamiltonian_diagnostics is not None:
         metrics['hamiltonian_diagnostics'] = hamiltonian_diagnostics
 
+    # =================================================================
+    # P-FLOW DATA: Include beliefs and per-position CE for optional P-flow updates
+    # =================================================================
+    # Compute per-position CE for weighting P-flow updates (low error = successful belief)
+    with torch.no_grad():
+        ce_per_position = F.cross_entropy(
+            logits.reshape(-1, logits.size(-1)),
+            targets.reshape(-1),
+            reduction='none',
+            ignore_index=pad_token_id,
+        ).reshape(targets.shape)  # (B, N)
+
+    # Store in metrics for optional P-flow in training loop
+    metrics['p_flow/mu_q'] = mu_q.detach()           # (B, N, K) final beliefs
+    metrics['p_flow/ce_per_position'] = ce_per_position  # (B, N) per-position CE
+
     return total_loss, metrics
 
 

@@ -331,6 +331,87 @@ class GaugeTokenEmbedding(nn.Module):
             f"use_positional_embedding={self.use_positional_embedding}"
         )
 
+    # =========================================================================
+    # P-FLOW: EMA update of token embeddings toward successful beliefs
+    # =========================================================================
+    def update_embeddings_from_beliefs(
+        self,
+        token_ids: torch.Tensor,           # (B, N) token IDs in this batch
+        mu_beliefs: torch.Tensor,          # (B, N, K) final beliefs after VFE
+        prediction_errors: torch.Tensor,   # (B, N) per-position CE loss
+        ema_decay: float = 0.99,           # EMA decay rate (higher = slower update)
+        min_weight: float = 0.01,          # Minimum weight to prevent dead tokens
+    ):
+        """
+        P-flow: Update token embeddings toward successful beliefs via EMA.
+
+        This is the key learning mechanism from fep_transformer.py:
+        - Beliefs with low prediction error are "successful"
+        - Token embeddings should drift toward successful beliefs
+        - EMA provides stable, gradual updates
+
+        Formula:
+            μ_token ← (1 - η·w) · μ_token + η·w · μ_belief
+
+        where w = softmax(-error) weights by prediction success.
+
+        Args:
+            token_ids: (B, N) token indices that were in this batch
+            mu_beliefs: (B, N, K) final belief means after VFE dynamics
+            prediction_errors: (B, N) per-position cross-entropy loss
+            ema_decay: EMA decay rate (0.99 = slow, 0.9 = faster)
+            min_weight: Minimum weight to ensure all tokens get some update
+        """
+        if self.gauge_fixed_priors:
+            # For gauge_fixed_priors, we'd need to update phi_embed instead
+            # This is more complex - skip for now
+            return
+
+        B, N, K = mu_beliefs.shape
+        device = mu_beliefs.device
+        lr = 1.0 - ema_decay  # Convert decay to learning rate
+
+        with torch.no_grad():
+            # Compute success weights from prediction errors
+            # Low error = high weight (successful predictions should update more)
+            errors_clamped = prediction_errors.clamp(min=1e-6, max=20.0)
+            weights = torch.softmax(-errors_clamped, dim=-1)  # (B, N)
+            weights = weights.clamp(min=min_weight)  # Ensure minimum update
+
+            # For each unique token in batch, accumulate weighted belief updates
+            # This handles repeated tokens correctly
+            unique_tokens = token_ids.unique()
+
+            for token_id in unique_tokens:
+                # Find all occurrences of this token
+                mask = (token_ids == token_id)  # (B, N)
+
+                if mask.sum() == 0:
+                    continue
+
+                # Get beliefs and weights for this token
+                token_beliefs = mu_beliefs[mask]  # (num_occurrences, K)
+                token_weights = weights[mask]     # (num_occurrences,)
+
+                # Weighted average belief for this token
+                total_weight = token_weights.sum()
+                weighted_belief = (token_beliefs * token_weights.unsqueeze(-1)).sum(dim=0) / total_weight
+
+                # EMA update: prior ← (1 - lr) · prior + lr · belief
+                current_embedding = self.mu_embed.weight[token_id]  # (K,)
+                new_embedding = (1.0 - lr) * current_embedding + lr * weighted_belief
+                self.mu_embed.weight[token_id] = new_embedding
+
+    def get_embedding_stats(self) -> dict:
+        """Get statistics about embeddings for logging."""
+        with torch.no_grad():
+            mu_weight = self.mu_embed.weight
+            return {
+                'embed_mu_mean': mu_weight.mean().item(),
+                'embed_mu_std': mu_weight.std().item(),
+                'embed_mu_norm_mean': mu_weight.norm(dim=-1).mean().item(),
+            }
+
 
 def so3_log_torch(R: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
     """
