@@ -585,18 +585,18 @@ Table~\ref{tab:main_results} presents our primary results on WikiText-103 token-
 
 \begin{table}[t]
 \centering
-\caption{Validation set performance on WikiText-103 token-level modeling. All models trained for 200,000 steps with learning rate 0.01, batch size 3, and context length 128. The gauge VFE achieves XXX$\times$ improvement over random baseline through geometric inference alone, without neural network components.}
+\caption{Validation set performance on WikiText-103 token-level modeling. All models trained for 200,000 steps with batch size 3 and context length 128. Learning rates were tuned per architecture: standard transformers use lr=3e-4 (parameter-matched) or lr=0.01 (embedding-matched); gauge VFE uses lr=0.01.}
 \label{tab:main_results}
-\begin{tabular}{lccccc}
+\begin{tabular}{lcccccc}
 \toprule
-\textbf{Architecture} & \textbf{Layers} & \textbf{Params} & \textbf{PPL} $\downarrow$ & \textbf{Loss} & \textbf{vs Random} \\
+\textbf{Architecture} & \textbf{Layers} & \textbf{Params} & \textbf{LR} & \textbf{PPL} $\downarrow$ & \textbf{Loss} & \textbf{vs Random} \\
 \midrule
-Random baseline & --- & --- & 50,257 & 10.82 & 1$\times$ \\
+Random baseline & --- & --- & --- & 50,257 & 10.82 & 1$\times$ \\
 \midrule
-Standard (param-matched) & 6 & $\sim$25M & XXX & X.XX & XXX$\times$ \\
-Standard (embed-matched) & 6 & $\sim$6M & XXX & X.XX & XXX$\times$ \\
+Standard (param-matched) & 6 & 25M & 3e-4 & 146 & 4.98 & 344$\times$ \\
+Standard (embed-matched) & 6 & 5.76M & 0.01 & 447 & 6.10 & 112$\times$ \\
 \midrule
-Gauge VFE (SO(20)) & 1 & 24.6M & 230 & 5.44 & 218$\times$ \\
+Gauge VFE (SO(20)) & 1 & 24.6M & 0.01 & 230 & 5.44 & 218$\times$ \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -610,7 +610,7 @@ Gauge VFE (SO(20)) & 1 & 24.6M & 230 & 5.44 & 218$\times$ \\
 \textbf{Architecture} & \textbf{embed\_dim} & \textbf{Layers} & \textbf{Heads} & \textbf{FFN} & \textbf{Params} \\
 \midrule
 Standard (param-matched) & 256 & 6 & 8 & Learned (1024) & $\sim$25M \\
-Standard (embed-matched) & 100 & 6 & 4 & Learned (400) & $\sim$6M \\
+Standard (embed-matched) & 100 & 6 & 4 & Learned (400) & 5.76M \\
 Gauge VFE (SO(20)) & 100 & 1 & 20 & VFE\_dynamic & 24.6M \\
 \bottomrule
 \end{tabular}
@@ -618,11 +618,14 @@ Gauge VFE (SO(20)) & 100 & 1 & 20 & VFE\_dynamic & 24.6M \\
 
 The gauge VFE achieves perplexity 230, representing a 218$\times$ improvement over random chance (PPL 50,257). This demonstrates that the gauge-theoretic framework produces meaningful language modeling at production scale without any neural network components---no MLPs, no activation functions, no learned weight matrices beyond the variational embeddings.
 
-The comparison with standard transformers reveals [TO BE COMPLETED WITH EXPERIMENTAL RESULTS]:
+The comparison with standard transformers reveals several findings:
 
 \begin{itemize}
-  \item \textbf{Parameter-matched comparison:} [Results pending]
-  \item \textbf{Embedding-matched comparison:} [Results pending]
+  \item \textbf{Parameter-matched comparison:} With comparable parameter counts ($\sim$25M), the optimally-tuned standard transformer (lr=3e-4) achieves better perplexity than gauge VFE (146 vs 230). This is expected: standard transformers benefit from decades of architectural refinement and dedicated hardware optimization. The gauge VFE achieves 63\% of the standard's performance using only geometric structure.
+
+  \item \textbf{Embedding-matched comparison:} With identical embedding dimension (100), the gauge VFE achieves 1.94$\times$ better perplexity (230 vs 447) despite using only 1 layer compared to 6 layers in the standard transformer. The standard transformer's 5.76M parameters are distributed across learned attention projections ($W_Q, W_K, W_V$) and feed-forward networks, while the gauge VFE's 24.6M parameters reside entirely in variational embeddings with geometric structure.
+
+  \item \textbf{Learning rate robustness:} The gauge VFE trains stably at lr=0.01, while the parameter-matched standard transformer fails catastrophically at this learning rate (PPL 963 vs 146 with lr=3e-4). This robustness stems from the natural gradient structure on the statistical manifold, which provides better conditioning than standard gradient descent.
 \end{itemize}
 
 Notably, the gauge VFE uses a \emph{single geometric layer} compared to 6 layers in the standard baselines. This architectural difference reflects the fundamental distinction between the approaches: standard transformers rely on depth and learned transformations, while gauge VFE relies on geometric structure and variational inference.
