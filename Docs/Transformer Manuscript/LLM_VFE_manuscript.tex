@@ -1007,49 +1007,31 @@ This mechanism explains why training produces diverse, specialized token represe
 \section{Generalizations}
 \label{app:generalizations}
 
-The gauge-theoretic framework presented in this paper specializes to SO($N$) gauge groups and multivariate Gaussian belief distributions. Here we briefly outline the general formulation, which encompasses arbitrary compact Lie groups and exponential family distributions. Full derivations are deferred to future work.
+The gauge-theoretic framework presented in this paper specializes to SO($N$) gauge groups and multivariate Gaussian belief distributions. Here we outline how the formulation extends to arbitrary compact Lie groups and exponential family distributions, with particular attention to the interplay between gauge group structure and the choice of statistical divergence. Full derivations are deferred to future work.
 
-\subsection{Arbitrary Gauge Groups}
+\subsection{Arbitrary Gauge Groups and Divergence Selection}
 
-The framework extends to any compact Lie group $G$ with finite-dimensional unitary representations $\rho: G \to \mathrm{GL}(V)$. The key structures generalize as:
+The framework naturally extends to any compact Lie group $G$ equipped with finite-dimensional unitary representations $\rho: G \to \mathrm{GL}(V)$. Gauge frames live in the Lie algebra $\phi_i \in \mathfrak{g}$, and parallel transport takes the form $\Omega_{ij} = \rho(\exp(\phi_i))\rho(\exp(-\phi_j))$. The multi-head structure emerges from the irreducible decomposition $\rho = \bigoplus_k n_k \rho_k$, where each irreducible component defines an independent attention head with its own transformation properties. Non-Abelian groups such as SU($N$), Sp($N$), and exceptional groups provide richer decompositions than SO($N$), while Abelian groups like U(1)$^N$ recover diagonal attention patterns.
 
-\begin{itemize}
-    \item \textbf{Gauge frames:} $\phi_i \in \mathfrak{g}$ (the Lie algebra of $G$)
-    \item \textbf{Parallel transport:} $\Omega_{ij} = \rho(\exp(\phi_i))\rho(\exp(-\phi_j)) \in \mathrm{GL}(V)$
-    \item \textbf{Multi-head structure:} Determined by the irreducible decomposition $\rho = \bigoplus_k n_k \rho_k$
-\end{itemize}
+However, the choice of gauge group is not independent of the choice of statistical divergence. The KL divergence employed throughout this work is particularly well-suited to orthogonal groups acting on Gaussian beliefs for several interrelated reasons. For multivariate Gaussians, the KL divergence admits the closed-form expression $D_{\mathrm{KL}}(\mathcal{N}(\mu_1, \Sigma_1) \| \mathcal{N}(\mu_2, \Sigma_2)) = \frac{1}{2}[\mathrm{tr}(\Sigma_2^{-1}\Sigma_1) + (\mu_2 - \mu_1)^\top \Sigma_2^{-1}(\mu_2 - \mu_1) - K + \log|\Sigma_2|/|\Sigma_1|]$, which depends on quadratic forms that transform covariantly under orthogonal transformations. When $g \in \mathrm{SO}(N)$ acts via $\mu \to g\mu$ and $\Sigma \to g\Sigma g^\top$, the terms $\|\mu\|^2$ and $\mathrm{tr}(\Sigma)$ remain invariant, ensuring that the KL divergence respects the gauge symmetry in a computationally tractable manner.
 
-For non-Abelian groups (SU($N$), Sp($N$), exceptional groups), the irrep decomposition provides richer multi-head structures with different transformation properties. Abelian groups (U(1)$^N$) recover diagonal attention patterns.
+This compatibility between KL divergence and orthogonal groups is not universal. For gauge groups acting on complex vector spaces, such as SU($N$) with its natural action on $\mathbb{C}^N$, the real-valued KL divergence may not capture the full structure of the transformation. Complex Gaussian distributions (proper and improper) have distinct information geometries, and divergences respecting the complex structure---such as those derived from the Kähler metric on complex statistical manifolds---may prove more natural. Similarly, symplectic groups Sp($N$) preserve a skew-symmetric bilinear form, suggesting that divergences incorporating symplectic structure could provide better-behaved attention mechanisms for beliefs transforming under symplectic representations.
+
+More generally, the family of $f$-divergences $D_f(p \| q) = \int q(x) f(p(x)/q(x)) dx$ offers a spectrum of choices indexed by convex functions $f$. The KL divergence corresponds to $f(t) = t \log t$, but other choices---such as the $\alpha$-divergences interpolating between KL and reverse KL, or the Hellinger distance with $f(t) = (\sqrt{t} - 1)^2$---may exhibit different invariance properties under gauge transformations. A principled approach would select the divergence whose level sets are preserved (or transform simply) under the chosen gauge group, ensuring that attention weights $\beta_{ij} \propto \exp(-\kappa D(q_i \| \Omega_{ij} q_j))$ respect the geometric structure. This represents an open direction: characterizing which $f$-divergences are ``compatible'' with which gauge groups in the sense of yielding well-behaved, geometrically meaningful attention mechanisms.
 
 \subsection{Exponential Family Beliefs}
 
-Gaussian distributions are a special case of exponential families. The general formulation uses:
+Gaussian distributions are a special case of exponential families, and the framework generalizes accordingly. An exponential family distribution takes the form $q_i(\xi) = h(\xi) \exp[\eta_i^\top T(\xi) - A(\eta_i)]$, where $\eta_i$ are natural parameters, $T(\xi)$ are sufficient statistics, and $A(\eta)$ is the log-partition function. In this parameterization, the KL divergence reduces to the Bregman divergence $D_{\mathrm{KL}}(q_i \| q_j) = D_A(\eta_j \| \eta_i) = A(\eta_j) - A(\eta_i) - \nabla A(\eta_i)^\top(\eta_j - \eta_i)$, and the Fisher-Rao metric becomes the Hessian $g_{ab} = \partial_a \partial_b A(\eta)$.
 
-\begin{equation}
-q_i(\xi) = h(\xi) \exp\left[\eta_i^\top T(\xi) - A(\eta_i)\right]
-\end{equation}
-
-where $\eta_i \in \mathcal{H}$ are natural parameters, $T(\xi)$ are sufficient statistics, and $A(\eta)$ is the log-partition function. The KL divergence becomes the Bregman divergence:
-
-\begin{equation}
-D_{\mathrm{KL}}(q_i \| q_j) = D_A(\eta_j \| \eta_i) = A(\eta_j) - A(\eta_i) - \nabla A(\eta_i)^\top(\eta_j - \eta_i)
-\end{equation}
-
-Parallel transport acts on natural parameters via the representation $\rho$: $\eta_i \to \Omega_{ij}\eta_i$. The Fisher-Rao metric $g_{ab} = \partial_a \partial_b A(\eta)$ provides the natural gradient structure.
+Parallel transport in this setting acts on natural parameters via the group representation: $\eta_i \to \Omega_{ij} \eta_i$. For this to be well-defined, the representation must preserve the natural parameter space, which imposes constraints on compatible group-distribution pairings. The Fisher-Rao metric provides the natural gradient structure for belief updates, generalizing the inverse-covariance weighting used for Gaussians.
 
 \subsection{Mixture Distributions}
 
-For discrete latent structure, beliefs can be mixtures:
-
-\begin{equation}
-q_i(\xi) = \sum_{k=1}^K \pi_i^{(k)} q_i^{(k)}(\xi)
-\end{equation}
-
-where $\pi_i \in \Delta^{K-1}$ are mixing weights. The gauge group acts on both the component parameters and potentially the mixture weights. This enables modeling of multi-modal beliefs and compositional semantics.
+For beliefs with discrete latent structure, mixture distributions $q_i(\xi) = \sum_{k=1}^K \pi_i^{(k)} q_i^{(k)}(\xi)$ extend the framework to multi-modal representations. Here $\pi_i \in \Delta^{K-1}$ are mixing weights on the probability simplex, and each component $q_i^{(k)}$ may itself be an exponential family distribution. The gauge group can act on both the component parameters and the mixture weights, with the latter potentially transforming under a separate representation. This structure enables modeling of compositional semantics where tokens carry multiple possible interpretations weighted by context.
 
 \subsection{Scope of Current Work}
 
-This paper restricts to SO($N$) groups and Gaussians for several reasons: (1) closed-form KL divergences enable efficient computation, (2) the fundamental representation provides interpretable attention heads, and (3) the orthogonal group preserves Euclidean structure natural for embedding spaces. The generalizations above indicate that the framework is not limited to these choices, with richer group structures potentially capturing more complex linguistic phenomena.
+This paper restricts to SO($N$) groups and Gaussians because this pairing admits closed-form computations throughout: the KL divergence, Fisher information, natural gradients, and parallel transport all have explicit expressions. The orthogonal group preserves the Euclidean structure natural for embedding spaces, and its fundamental representation provides interpretable attention heads. The generalizations sketched above indicate that the framework is not limited to these choices---richer group structures and distribution families may capture more complex phenomena---but realizing these extensions requires careful attention to the compatibility between gauge symmetry and statistical divergence.
 
 \bibliographystyle{plainnat}
 \bibliography{references}
