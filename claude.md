@@ -251,8 +251,9 @@ import sys
 - State errors and concerns plainly without excessive hedging
 - "This is wrong because X" not "This might potentially be slightly off"
 
-**minimize itemizations when working on manuscripts**
--utilize academic prose 
+
+**minimize itemizations when working on manuscripts:**
+- utilize academic prose 
 
 **Push back:**
 - Challenge gaps in derivations, ask for justification
@@ -413,3 +414,4 @@ This is a **symmetry-based prior** implementing compression geometrically.
 - Renormalization Group: Wilson, Kadanoff
 
 - Information Geometry: Amari
+
