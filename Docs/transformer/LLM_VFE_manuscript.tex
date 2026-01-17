@@ -201,7 +201,13 @@ where $\exp$ denotes the matrix exponential and $\eta$ is the learning rate. Thi
 
 \subsubsection{Gauge Frame Updates.}
 
-Our framework allows the interesting option to study gauge frame updates $\phi_i \in \mathfrak{so}(N)$ which evolve via standard gradients on the Lie algebra, as the exponential map $\exp: \mathfrak{so}(N) \to \mathrm{SO}(N)$ provides natural coordinates. For $\mathrm{SO}(N)$, we use the matrix exponential and its derivative~\citep{gallier2020differential}. In our current study we consider these rotations to be frozen and consider only the statistics under gradient descent.
+Gauge frames $\phi_i \in \mathfrak{so}(N)$ evolve via standard gradients on the Lie algebra, as the exponential map $\exp: \mathfrak{so}(N) \to \mathrm{SO}(N)$ provides natural coordinates. For $\mathrm{SO}(N)$, we use the matrix exponential and its derivative~\citep{gallier2020differential}. In our experiments, gauge frames are learned alongside the belief statistics:
+
+\begin{equation}
+\phi_i \leftarrow \phi_i - \eta_\phi \nabla_{\phi_i} \mathcal{F},
+\end{equation}
+
+where $\eta_\phi$ is the gauge frame learning rate (0.005 in our experiments). The gradient $\nabla_{\phi_i} \mathcal{F}$ flows through the parallel transport operator $\Omega_{ij} = \exp(\phi_i G) \exp(-\phi_j G)$, allowing the model to learn optimal gauge configurations that minimize belief misalignment across tokens. This learned gauge structure enables semantic clustering in the $\phi$ representation space, as demonstrated in our PCA analysis (Section~\ref{sec:semantic_emergence}).
 
 \subsection{Training as Free Energy Minimization}
 \subsubsection{Observation Likelihood as Loss Function}
