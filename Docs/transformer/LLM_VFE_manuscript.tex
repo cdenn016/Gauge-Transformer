@@ -817,8 +817,16 @@ Each has trade-offs between computational cost, architectural purity, and perfor
 
 
 \subsubsection{Semantic Emergence in Gauge Frames}
+\label{sec:semantic_emergence}
 
-A striking empirical finding is that the learned gauge frames $\phi_i$ develop semantically meaningful structure during training. Principal component analysis (PCA) of the gauge frame parameters reveals that tokens spontaneously cluster according to linguistic categories: punctuation marks, letters, and other token types separate into distinct regions of gauge frame space.
+A striking empirical finding is that the learned gauge frames $\phi_i$ develop semantically meaningful structure during training. Principal component analysis (PCA) of the gauge frame parameters reveals that tokens spontaneously cluster according to linguistic categories: punctuation marks, function words, content words, letters, and digits separate into distinct regions of gauge frame space (Figure~\ref{fig:gauge_clustering}).
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\textwidth]{../Transformer Experimental Data/gauge_frame_clustering_SO20_K=100.png}
+    \caption{Semantic clustering in learned gauge frames for SO(20) with $K=100$. Left: 3D PCA projection of the 190-dimensional gauge frame space $\mathfrak{so}(20)$. Right: 2D projection (PC1 vs PC2). Punctuation (green) forms a tight cluster near the origin, while content words (orange) and function words (purple) separate along PC2. The first three principal components capture $\sim$15\% of variance (6.8\% + 4.8\% + 3.3\%), yet reveal clear linguistic organization. This structure emerges without supervision, purely from variational free energy minimization.}
+    \label{fig:gauge_clustering}
+\end{figure}
 
 This emergent clustering occurs without any explicit supervision or architectural bias toward such organization. The gauge frames are initialized randomly and optimized purely through variational free energy minimization. Yet the resulting structure reflects genuine linguistic categories, suggesting that the geometric framework naturally discovers meaningful coordinate systems for language.
 
