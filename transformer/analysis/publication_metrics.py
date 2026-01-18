@@ -566,15 +566,11 @@ class PublicationFigures:
 
         ax.set_xlabel('Training Step')
         ax.set_ylabel('Val BPC - Train BPC')
-        ax.set_title('Generalization Gap')
-        ax.grid(True, alpha=0.3)
 
-        # Add annotation
+        # Title with final gap as subtitle
         final_gap = gaps_bpc[-1]
-        ax.annotate(f'Final gap: {final_gap:+.3f}',
-                   xy=(val_steps[-1], final_gap),
-                   xytext=(10, 10), textcoords='offset points',
-                   fontsize=10, ha='left')
+        ax.set_title(f'Generalization Gap\nFinal: {final_gap:+.3f}')
+        ax.grid(True, alpha=0.3)
 
         # Format x-axis to show steps as k notation (150000 -> 150k)
         format_step_axis(ax)
