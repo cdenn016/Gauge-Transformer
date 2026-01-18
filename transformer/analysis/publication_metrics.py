@@ -29,6 +29,9 @@ import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 import matplotlib.ticker as ticker
 
+# Import gauge frame semantic analysis
+from .semantics import analyze_gauge_semantics, plot_gauge_frame_clustering
+
 
 # =============================================================================
 # Publication Style Settings
@@ -727,6 +730,10 @@ class PublicationMetrics:
         self.comparison_results: List[ExperimentResult] = []
         self.scaling_data: Dict[str, List] = {'k': [], 'ppl': [], 'params': []}
 
+        # Gauge frame semantic analysis history
+        self.semantic_analysis_history: List[Dict[str, Any]] = []
+        self.semantic_analysis_interval: int = 10000  # Default: analyze every 10k steps
+
         print(f"[PublicationMetrics] Initialized: {self.experiment_dir}")
 
     def record_step(
@@ -775,6 +782,101 @@ class PublicationMetrics:
         self.scaling_data['k'].append(k)
         self.scaling_data['ppl'].append(ppl)
         self.scaling_data['params'].append(params)
+
+    def set_semantic_analysis_interval(self, interval: int):
+        """Set how often to run gauge frame semantic analysis (in steps)."""
+        self.semantic_analysis_interval = interval
+
+    def should_run_semantic_analysis(self, step: int) -> bool:
+        """Check if semantic analysis should run at this step."""
+        if self.semantic_analysis_interval <= 0:
+            return False
+        return step % self.semantic_analysis_interval == 0
+
+    def run_semantic_analysis(
+        self,
+        model: Any,
+        step: int,
+        verbose: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Run gauge frame semantic analysis on the model.
+
+        This analyzes whether gauge frames φ encode semantic relationships
+        by computing distance metrics between token classes and word pairs.
+
+        Args:
+            model: The model with mu_embed and phi_embed attributes
+            step: Current training step
+            verbose: Whether to print analysis results
+
+        Returns:
+            Dictionary with analysis results
+        """
+        figures_dir = self.experiment_dir / "figures"
+        figures_dir.mkdir(parents=True, exist_ok=True)
+
+        results = analyze_gauge_semantics(
+            model=model,
+            step=step,
+            save_dir=figures_dir,
+            save_plots=True,
+            verbose=verbose,
+        )
+
+        # Store in history
+        self.semantic_analysis_history.append(results)
+
+        # Log key metrics
+        if 'token_classes' in results:
+            tc = results['token_classes']
+            phi_ratio = tc.get('phi_class_ratio', 0)
+            if phi_ratio > 0:
+                print(f"[Semantic] Step {step}: phi class ratio = {phi_ratio:.2f}x"
+                      f" {'(structure!)' if phi_ratio > 1.2 else ''}")
+
+        return results
+
+    def run_final_semantic_analysis(self, model: Any, verbose: bool = True) -> Dict[str, Any]:
+        """
+        Run final comprehensive semantic analysis at end of training.
+
+        Args:
+            model: The trained model
+            verbose: Whether to print detailed results
+
+        Returns:
+            Dictionary with analysis results
+        """
+        print("\n[PublicationMetrics] Running final gauge frame semantic analysis...")
+
+        figures_dir = self.experiment_dir / "figures"
+        figures_dir.mkdir(parents=True, exist_ok=True)
+
+        results = analyze_gauge_semantics(
+            model=model,
+            step=None,  # Final analysis, no step number
+            save_dir=figures_dir,
+            save_plots=True,
+            verbose=verbose,
+        )
+
+        # Save analysis history to JSON
+        if self.semantic_analysis_history:
+            history_path = self.experiment_dir / "semantic_analysis_history.json"
+            with open(history_path, 'w') as f:
+                # Convert non-serializable items
+                serializable_history = []
+                for entry in self.semantic_analysis_history:
+                    serializable_entry = {}
+                    for k, v in entry.items():
+                        if isinstance(v, (int, float, str, bool, type(None), list, dict)):
+                            serializable_entry[k] = v
+                    serializable_history.append(serializable_entry)
+                json.dump(serializable_history, f, indent=2)
+            print(f"  Saved semantic analysis history to: {history_path}")
+
+        return results
 
     def save_all(self):
         """Save all metrics to files."""
