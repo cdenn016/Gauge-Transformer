@@ -54,7 +54,7 @@ This proof-of-principle establishes that gauge-theoretic attention is not merely
 
 Transformer architectures~\citep{vaswani2017attention} have revolutionized natural language processing, achieving remarkable performance on tasks from translation to reasoning~\citep{devlin2018bert,radford2019language,brown2020language}. Yet their theoretical foundations remain obscure. Why does dot-product attention work? What makes the specific combination of multi-head attention and feed-forward networks so effective? Standard transformers provide no principled answers---attention weights emerge from learned projections, and feed-forward layers apply arbitrary nonlinearities. This opacity limits our ability to understand, improve, or generalize these architectures.
 
-In previous theoretical work~\citep{Dennis2025}, we proposed that transformers implicitly implement geometric operations on statistical manifolds. We derived attention mechanisms from first principles using gauge theory on principal bundles, where tokens are autonomous agents maintaining probabilistic beliefs, attention weights emerge from KL divergences measuring belief alignment, and feed-forward computation reduces to variational free energy minimization. This framework predicts that transformer-like behavior should emerge from pure geometric structure---without neural networks, learned weight matrices, or activation functions.
+In companion theoretical work, we proposed that transformers implicitly implement geometric operations on statistical manifolds. We derived attention mechanisms from first principles using gauge theory on principal bundles, where tokens are autonomous agents maintaining probabilistic beliefs, attention weights emerge from KL divergences measuring belief alignment, and feed-forward computation reduces to variational free energy minimization. This framework predicts that transformer-like behavior should emerge from pure geometric structure---without neural networks, learned weight matrices, or activation functions.
 
 This paper presents the first implementation of gauge-theoretic transformers at production scale, testing whether explicit geometric inference can perform meaningful language modeling. We implement a complete gauge variational free energy (VFE) architecture using SO(20) gauge symmetry, KL-divergence attention, and natural gradient descent on statistical manifolds. The architecture contains \emph{zero neural network components}: no MLPs, no ReLU/GELU activations, no learned attention projections $W_Q, W_K, W_V$. All computation derives from geometric operations on probability distributions.
 
@@ -64,7 +64,7 @@ Beyond performance metrics, we observe emergent semantic structure in the learne
 
 \subsection{Gauge-Theoretic Attention}
 
-The gauge-theoretic framework~\citep{Dennis2025} treats each token as an autonomous agent maintaining probabilistic beliefs. Agent $i$ has beliefs $q_i(x)$, priors $p_i(x)$ (probability distributions over latent semantic content), and a gauge frame $\phi_i \in \mathfrak{g}$ encoding its local coordinate system. Communication between agents occurs via parallel transport $\Omega_{ij} = \exp(\phi_i) \cdot \exp(-\phi_j)$, which aligns agent $j$'s belief into agent $i$'s reference frame. Attention weights emerge from KL divergence measuring belief alignment after transport:
+The gauge-theoretic framework treats each token as an autonomous agent maintaining probabilistic beliefs. Agent $i$ has beliefs $q_i(x)$, priors $p_i(x)$ (probability distributions over latent semantic content), and a gauge frame $\phi_i \in \mathfrak{g}$ encoding its local coordinate system. Communication between agents occurs via parallel transport $\Omega_{ij} = \exp(\phi_i) \cdot \exp(-\phi_j)$, which aligns agent $j$'s belief into agent $i$'s reference frame. Attention weights emerge from KL divergence measuring belief alignment after transport:
 %
 \begin{equation}
 \beta_{ij} = \frac{\exp\!\left[-\kappa_\beta^{-1} \, \mathrm{KL}(q_i \| \Omega_{ij}[q_j])\right]}{\sum_k \exp\!\left[-\kappa_\beta^{-1} \, \mathrm{KL}(q_i \| \Omega_{ik}[q_k])\right]}
@@ -135,7 +135,7 @@ Our contribution is establishing that transformers can be implemented without ne
 
 \subsection{Gauge-Theoretic Framework}
 
-Full details of our gauge theoretic geometry may be found in \cite{Dennis2025}. Briefly, agents are modeled as smooth sections of an associated bundle $\mathcal{E}$ to a principal $G$ bundle with statistical fibers $\mathcal{B}$. In our present consideration the fibers,  $\mathcal{B}$, are statistical manifolds of the exponential family of multi-variate Gaussians (MVG) $q_i(c)$, $p_i(c)$ with $K$-dimensional irreducible representations of the structure group $G$ acting on statistics $\mu_q(c)$ and $\Sigma_q(c)$ as
+Full details of our gauge theoretic geometry are presented in a companion paper. Briefly, agents are modeled as smooth sections of an associated bundle $\mathcal{E}$ to a principal $G$ bundle with statistical fibers $\mathcal{B}$. In our present consideration the fibers,  $\mathcal{B}$, are statistical manifolds of the exponential family of multi-variate Gaussians (MVG) $q_i(c)$, $p_i(c)$ with $K$-dimensional irreducible representations of the structure group $G$ acting on statistics $\mu_q(c)$ and $\Sigma_q(c)$ as
 
 \begin{equation}
     \rho(\Omega) \cdot (\mu, \Sigma) = (\Omega\mu, \Omega\Sigma\Omega^\top)
@@ -173,7 +173,7 @@ $$
 \Omega_{ij}\Sigma_j \Omega_{ij}^T \longmapsto \Sigma_i
 $$
 
-Given the action of the group $G$ on the statistical fibers we are able to derive (from a simple generative model\cite{Dennis2025}) a generalized variational free energy functional at a single point $c \in \mathcal{C}$ as
+Given the action of the group $G$ on the statistical fibers we are able to derive (from a simple generative model) a generalized variational free energy functional at a single point $c \in \mathcal{C}$ as
 
 
 \begin{align}
