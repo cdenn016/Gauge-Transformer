@@ -324,15 +324,8 @@ VFE_EM_CONFIG = {
     'pos_encoding_scale': 0.3,
     'use_prior_bank': True,
 
-    # Not used in VFE_EM mode
-    'ffn_pure_fep_mode': False,
-    'ffn_prior_lr': 0.01,
-
-    # RG metrics (optional)
-    'compute_rg_metrics': False,
-    'rg_metrics_interval': 25,
-    'rg_auto_cluster': True,
-    'rg_n_clusters': None,
+    'semantic_analysis_interval': 500,
+   
 }
 
 
@@ -2162,5 +2155,4 @@ def main():
 if __name__ == '__main__':
 
     main()
-
 
