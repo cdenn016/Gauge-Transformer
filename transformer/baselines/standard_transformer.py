@@ -20,7 +20,7 @@ Date: November 2025
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Optional, Dict
+from typing import Optional, Dict, Tuple
 import math
 
 
@@ -62,14 +62,20 @@ class StandardMultiHeadAttention(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+        return_attention: bool = False,
+    ) -> torch.Tensor:
         """
         Args:
             x: (B, N, embed_dim) input
             mask: (N, N) or (B, N, N) causal mask
+            return_attention: If True, also return attention weights
 
         Returns:
-            (B, N, embed_dim) attended output
+            (B, N, embed_dim) attended output, or tuple with attention weights
         """
         B, N, embed_dim = x.shape
 
@@ -94,10 +100,10 @@ class StandardMultiHeadAttention(nn.Module):
             scores = scores.masked_fill(mask == 0, float('-inf'))
 
         attn_weights = F.softmax(scores, dim=-1)  # (B, H, N, N)
-        attn_weights = self.dropout(attn_weights)
+        attn_weights_dropped = self.dropout(attn_weights)
 
         # Apply attention to values
-        out = torch.matmul(attn_weights, V)  # (B, H, N, D)
+        out = torch.matmul(attn_weights_dropped, V)  # (B, H, N, D)
 
         # Concatenate heads
         out = out.transpose(1, 2).contiguous().view(B, N, embed_dim)  # (B, N, embed_dim)
@@ -105,6 +111,8 @@ class StandardMultiHeadAttention(nn.Module):
         # Output projection
         out = self.W_O(out)
 
+        if return_attention:
+            return out, attn_weights  # Return pre-dropout weights for visualization
         return out
 
 
@@ -154,19 +162,29 @@ class StandardTransformerBlock(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+        return_attention: bool = False,
+    ) -> torch.Tensor:
         """
         Args:
             x: (B, N, K) input
             mask: (N, N) causal mask
+            return_attention: If True, also return attention weights
 
         Returns:
-            (B, N, K) output
+            (B, N, K) output, or tuple with attention weights
         """
         # Attention block (pre-norm)
         residual = x
         x = self.ln1(x)
-        x = self.attn(x, mask)
+        if return_attention:
+            x, attn_weights = self.attn(x, mask, return_attention=True)
+        else:
+            x = self.attn(x, mask)
+            attn_weights = None
         x = self.dropout(x)
         x = residual + x
 
@@ -177,6 +195,8 @@ class StandardTransformerBlock(nn.Module):
         x = self.dropout(x)
         x = residual + x
 
+        if return_attention:
+            return x, attn_weights
         return x
 
 
@@ -293,6 +313,56 @@ class StandardTransformerLM(nn.Module):
             output['loss'] = loss
 
         return output
+
+    def forward_with_attention(
+        self,
+        input_ids: torch.Tensor,
+        targets: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """
+        Forward pass that also returns attention weights for visualization.
+
+        Args:
+            input_ids: (B, N) token indices
+            targets: Unused, for API compatibility with GaugeTransformerLM
+
+        Returns:
+            logits: (B, N, vocab_size) prediction logits
+            attn_info: Dict with 'beta' key containing attention weights (B, H, N, N)
+        """
+        B, N = input_ids.shape
+        device = input_ids.device
+
+        # Embed tokens
+        x = self.token_embed(input_ids)  # (B, N, K)
+
+        # Add positional embeddings
+        pos_ids = torch.arange(N, device=device).unsqueeze(0)  # (1, N)
+        x = x + self.pos_embed(pos_ids)
+
+        x = self.dropout(x)
+
+        # Apply transformer blocks, collecting attention weights
+        mask = self.causal_mask[:, :N, :N]
+        all_attn_weights = []
+        for block in self.blocks:
+            x, attn_weights = block(x, mask, return_attention=True)
+            all_attn_weights.append(attn_weights)
+
+        # Final layer norm
+        x = self.ln_final(x)
+
+        # LM head
+        logits = self.lm_head(x)  # (B, N, vocab_size)
+
+        # Stack attention weights: (n_layers, B, H, N, N) -> use last layer for viz
+        # For compatibility with GaugeTransformerLM, return 'beta' key
+        attn_info = {
+            'beta': all_attn_weights[-1],  # Last layer attention (B, H, N, N)
+            'all_attention': all_attn_weights,  # All layers
+        }
+
+        return logits, attn_info
 
     def generate(
         self,
