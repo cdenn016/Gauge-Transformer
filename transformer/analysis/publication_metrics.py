@@ -60,6 +60,15 @@ def apply_publication_style():
     plt.rcParams.update(PUBLICATION_STYLE)
 
 
+def format_step_axis(ax):
+    """Format x-axis to show steps as 'k' notation (e.g., 150000 -> 150k)."""
+    def step_formatter(x, pos):
+        if x >= 1000:
+            return f'{x/1000:.0f}k'
+        return f'{x:.0f}'
+    ax.xaxis.set_major_formatter(ticker.FuncFormatter(step_formatter))
+
+
 # =============================================================================
 # Data Classes
 # =============================================================================
@@ -316,6 +325,10 @@ class PublicationFigures:
             ax.legend(loc='upper right', ncol=2)
             ax.grid(True, alpha=0.3)
 
+        # Format x-axis to show steps as k notation (150000 -> 150k)
+        for ax in axes.flat:
+            format_step_axis(ax)
+
         plt.tight_layout()
 
         # Save
@@ -563,6 +576,9 @@ class PublicationFigures:
                    xytext=(10, 10), textcoords='offset points',
                    fontsize=10, ha='left')
 
+        # Format x-axis to show steps as k notation (150000 -> 150k)
+        format_step_axis(ax)
+
         plt.tight_layout()
 
         fig.savefig(self.save_dir / f"{save_name}.pdf")
@@ -663,6 +679,10 @@ class PublicationFigures:
                        arrowprops=dict(arrowstyle='->', color='black', lw=0.5))
 
         ax.legend(loc='upper left')
+
+        # Format x-axis to show steps as k notation (150000 -> 150k)
+        for ax in axes:
+            format_step_axis(ax)
 
         plt.tight_layout()
 
