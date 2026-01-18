@@ -2,244 +2,69 @@
 """
 Analyze whether gauge frames φ encode semantic relationships.
 
-SET THESE PATHS, then run: python analyze_gauge_semantics.py
+This module provides functions for:
+1. Analyzing gauge frame semantic structure during training
+2. Generating visualization plots of φ embeddings
+3. Computing distance metrics between token classes
+
+Can be used as a standalone script or imported for use during training.
 """
 
 import torch
 import numpy as np
-import json
 from pathlib import Path
-import sys
-
-sys.path.insert(0, str(Path(__file__).parent))
-
-# =============================================================================
-# CONFIGURATION - SET THESE PATHS
-# =============================================================================
-
-EXPERIMENT_CONFIG_PATH = "runs/your_experiment/experiment_config.json"  # <-- CHANGE THIS
-CHECKPOINT_PATH = "runs/your_experiment/best_model.pt"                   # <-- CHANGE THIS
+from typing import Optional, Dict, Any, List, Tuple
+import matplotlib
+matplotlib.use('Agg')  # Non-interactive backend for training
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
 
 # =============================================================================
-# LOAD TOKENIZER
+# Tokenizer Setup
 # =============================================================================
 
-try:
-    import tiktoken
-    tokenizer = tiktoken.get_encoding("gpt2")
-    print("Loaded GPT-2 tokenizer")
-except ImportError:
-    print("ERROR: Install tiktoken: pip install tiktoken")
-    sys.exit(1)
+_tokenizer = None
+
+def get_tokenizer():
+    """Lazily load the GPT-2 tokenizer."""
+    global _tokenizer
+    if _tokenizer is None:
+        try:
+            import tiktoken
+            _tokenizer = tiktoken.get_encoding("gpt2")
+        except ImportError:
+            print("WARNING: tiktoken not installed. Install with: pip install tiktoken")
+            return None
+    return _tokenizer
+
 
 # =============================================================================
-# LOAD MODEL
+# Helper Functions
 # =============================================================================
 
-print(f"\nLoading config: {EXPERIMENT_CONFIG_PATH}")
-config_path = Path(EXPERIMENT_CONFIG_PATH)
-if config_path.exists():
-    with open(config_path) as f:
-        config = json.load(f)
-    print(f"  embed_dim: {config.get('embed_dim', 'N/A')}")
-    print(f"  lambda_beta: {config.get('lambda_beta', 'N/A')}")
-else:
-    print(f"  WARNING: Config not found")
-    config = {}
-
-print(f"\nLoading checkpoint: {CHECKPOINT_PATH}")
-ckpt_path = Path(CHECKPOINT_PATH)
-if not ckpt_path.exists():
-    print(f"ERROR: Checkpoint not found: {ckpt_path}")
-    sys.exit(1)
-
-checkpoint = torch.load(ckpt_path, map_location='cpu', weights_only=False)
-
-if 'model_state_dict' in checkpoint:
-    state_dict = checkpoint['model_state_dict']
-elif 'state_dict' in checkpoint:
-    state_dict = checkpoint['state_dict']
-else:
-    state_dict = checkpoint
-
-mu_embed = None
-phi_embed = None
-
-for key, value in state_dict.items():
-    if 'mu_embed' in key and 'weight' in key:
-        mu_embed = value
-        print(f"  Found mu_embed: {value.shape}")
-    if 'phi_embed' in key and 'weight' in key:
-        phi_embed = value
-        print(f"  Found phi_embed: {value.shape}")
-
-if mu_embed is None:
-    print("ERROR: No mu_embed found!")
-    sys.exit(1)
-
-if phi_embed is None:
-    print("WARNING: No phi_embed found (model may use fixed gauge frames)")
-
-# =============================================================================
-# HELPER FUNCTIONS
-# =============================================================================
-
-def dist(t1, t2, embed):
+def dist(t1: int, t2: int, embed: torch.Tensor) -> float:
     """Euclidean distance between embeddings."""
     if embed is None or t1 >= len(embed) or t2 >= len(embed):
         return float('nan')
     return torch.norm(embed[t1] - embed[t2]).item()
 
 
-def get_token_id(word):
+def get_token_id(word: str) -> Optional[int]:
     """Get token ID if word is a single BPE token."""
+    tokenizer = get_tokenizer()
+    if tokenizer is None:
+        return None
     tokens = tokenizer.encode(word)
     if len(tokens) == 1:
         return tokens[0]
     return None
 
-# =============================================================================
-# ANALYSIS 1: BPE VOCABULARY CHECK
-# =============================================================================
 
-print("\n" + "=" * 60)
-print("BPE VOCABULARY CHECK")
-print("=" * 60)
-
-test_words = ["cat", "dog", "the", "and", "run", "big", "kitten", "airplane", "happy"]
-for word in test_words:
-    tokens = tokenizer.encode(word)
-    if len(tokens) == 1:
-        print(f"  '{word}' -> token {tokens[0]} (single)")
-    else:
-        decoded = [tokenizer.decode([t]) for t in tokens]
-        print(f"  '{word}' -> {decoded} (multi-token)")
-
-# =============================================================================
-# ANALYSIS 2: TOKEN CLASS DISTANCES
-# =============================================================================
-
-print("\n" + "=" * 60)
-print("TOKEN CLASS ANALYSIS")
-print("=" * 60)
-print("Comparing: letters vs digits vs punctuation")
-
-letter_ids = []
-digit_ids = []
-punct_ids = []
-
-for tid in range(256):
-    try:
-        s = tokenizer.decode([tid])
-        if len(s) == 1:
-            if s.isalpha():
-                letter_ids.append(tid)
-            elif s.isdigit():
-                digit_ids.append(tid)
-            elif not s.isalnum() and not s.isspace():
-                punct_ids.append(tid)
-    except:
-        pass
-
-print(f"\nFound: {len(letter_ids)} letters, {len(digit_ids)} digits, {len(punct_ids)} punct")
-
-# Intra-class (letter-letter)
-intra_mu, intra_phi = [], []
-for i, t1 in enumerate(letter_ids[:10]):
-    for t2 in letter_ids[i+1:10]:
-        intra_mu.append(dist(t1, t2, mu_embed))
-        intra_phi.append(dist(t1, t2, phi_embed))
-
-# Inter-class (letter-digit, letter-punct)
-inter_mu, inter_phi = [], []
-for t1 in letter_ids[:10]:
-    for t2 in digit_ids[:5] + punct_ids[:5]:
-        inter_mu.append(dist(t1, t2, mu_embed))
-        inter_phi.append(dist(t1, t2, phi_embed))
-
-# Clean NaNs
-intra_mu = [x for x in intra_mu if not np.isnan(x)]
-intra_phi = [x for x in intra_phi if not np.isnan(x)]
-inter_mu = [x for x in inter_mu if not np.isnan(x)]
-inter_phi = [x for x in inter_phi if not np.isnan(x)]
-
-print(f"\nmu embeddings:")
-print(f"  Intra-class (letter-letter): {np.mean(intra_mu):.4f}")
-print(f"  Inter-class (letter-other):  {np.mean(inter_mu):.4f}")
-if intra_mu and inter_mu:
-    print(f"  Ratio: {np.mean(inter_mu) / np.mean(intra_mu):.2f}x")
-
-if intra_phi and inter_phi:
-    print(f"\nphi embeddings (gauge frames):")
-    print(f"  Intra-class (letter-letter): {np.mean(intra_phi):.4f}")
-    print(f"  Inter-class (letter-other):  {np.mean(inter_phi):.4f}")
-    ratio = np.mean(inter_phi) / np.mean(intra_phi)
-    print(f"  Ratio: {ratio:.2f}x")
-
-    if ratio > 1.2:
-        print(f"\n  --> phi DOES show class structure!")
-    else:
-        print(f"\n  --> phi does NOT show clear class structure.")
-
-# =============================================================================
-# ANALYSIS 3: WORD PAIR DISTANCES
-# =============================================================================
-
-print("\n" + "=" * 60)
-print("WORD PAIR ANALYSIS (single-token words only)")
-print("=" * 60)
-
-pairs = [
-    ("cat", "dog", "related"),
-    ("cat", "the", "unrelated"),
-    ("man", "day", "unrelated"),
-    ("big", "new", "unrelated"),
-    ("run", "see", "related (verbs)"),
-    ("has", "had", "related"),
-]
-
-related_phi = []
-unrelated_phi = []
-
-for w1, w2, rel in pairs:
-    t1 = get_token_id(w1)
-    t2 = get_token_id(w2)
-
-    if t1 is None or t2 is None:
-        print(f"  {w1:8} - {w2:8}: SKIP (multi-token)")
-        continue
-
-    phi_d = dist(t1, t2, phi_embed) if phi_embed is not None else float('nan')
-    mu_d = dist(t1, t2, mu_embed)
-
-    print(f"  {w1:8} - {w2:8} [{rel:15}]: phi={phi_d:.4f}, mu={mu_d:.4f}")
-
-    if not np.isnan(phi_d):
-        if "related" in rel:
-            related_phi.append(phi_d)
-        else:
-            unrelated_phi.append(phi_d)
-
-if related_phi and unrelated_phi:
-    print(f"\nRelated mean:   {np.mean(related_phi):.4f}")
-    print(f"Unrelated mean: {np.mean(unrelated_phi):.4f}")
-    ratio = np.mean(unrelated_phi) / np.mean(related_phi)
-    print(f"Ratio: {ratio:.2f}x")
-
-# =============================================================================
-# VISUALIZATION
-# =============================================================================
-
-print("\n" + "=" * 60)
-print("VISUALIZATION")
-print("=" * 60)
-
-import matplotlib.pyplot as plt
-from sklearn.decomposition import PCA
-from mpl_toolkits.mplot3d import Axes3D
-
-def categorize_token(tid):
+def categorize_token(tid: int) -> str:
     """Categorize a token by type."""
+    tokenizer = get_tokenizer()
+    if tokenizer is None:
+        return 'other'
     try:
         s = tokenizer.decode([tid])
         if len(s) == 1:
@@ -255,74 +80,326 @@ def categorize_token(tid):
     except:
         return 'other'
 
-# Get tokens to visualize (first 500 for speed)
-n_viz = min(500, len(phi_embed) if phi_embed is not None else 0)
 
-if phi_embed is not None and n_viz > 0:
-    phi_np = phi_embed[:n_viz].numpy()
-    phi_dim = phi_np.shape[1]
-
-    # Categorize tokens
-    categories = [categorize_token(tid) for tid in range(n_viz)]
-    category_colors = {
-        'letter': '#E74C3C',    # red
-        'digit': '#3498DB',     # blue
-        'punct': '#2ECC71',     # green
-        'function': '#9B59B6',  # purple
-        'content': '#F39C12',   # orange
-        'other': '#95A5A6',     # gray
-    }
-    colors = [category_colors.get(c, '#95A5A6') for c in categories]
-
-    # Identify gauge group from dimension
+def identify_gauge_group(phi_dim: int) -> str:
+    """Identify gauge group from embedding dimension."""
     # SO(2): 1 generator, SO(3): 3 generators, SO(N): N(N-1)/2 generators
     if phi_dim == 1:
-        gauge_str = "SO(2)"
+        return "SO(2)"
     elif phi_dim == 3:
-        gauge_str = "SO(3)"
+        return "SO(3)"
     else:
         # Solve N(N-1)/2 = phi_dim for N
         n_approx = int((1 + np.sqrt(1 + 8 * phi_dim)) / 2)
-        gauge_str = f"SO({n_approx})"
-    print(f"phi_dim = {phi_dim} ({gauge_str})")
+        return f"SO({n_approx})"
 
-    # Normalize to unit sphere for visualization
-    phi_norms = np.linalg.norm(phi_np, axis=1, keepdims=True)
-    phi_norms = np.clip(phi_norms, 1e-8, None)  # avoid div by zero
-    phi_unit = phi_np / phi_norms
+
+# =============================================================================
+# Analysis Functions
+# =============================================================================
+
+def analyze_token_classes(
+    mu_embed: torch.Tensor,
+    phi_embed: Optional[torch.Tensor] = None,
+) -> Dict[str, Any]:
+    """
+    Analyze distances between token classes (letters, digits, punctuation).
+
+    Returns metrics indicating whether embeddings show class structure.
+    """
+    tokenizer = get_tokenizer()
+    if tokenizer is None:
+        return {'error': 'tokenizer not available'}
+
+    # Identify token classes
+    letter_ids = []
+    digit_ids = []
+    punct_ids = []
+
+    for tid in range(256):
+        try:
+            s = tokenizer.decode([tid])
+            if len(s) == 1:
+                if s.isalpha():
+                    letter_ids.append(tid)
+                elif s.isdigit():
+                    digit_ids.append(tid)
+                elif not s.isalnum() and not s.isspace():
+                    punct_ids.append(tid)
+        except:
+            pass
+
+    # Compute intra-class distances (letter-letter)
+    intra_mu, intra_phi = [], []
+    for i, t1 in enumerate(letter_ids[:10]):
+        for t2 in letter_ids[i+1:10]:
+            intra_mu.append(dist(t1, t2, mu_embed))
+            if phi_embed is not None:
+                intra_phi.append(dist(t1, t2, phi_embed))
+
+    # Compute inter-class distances (letter-digit, letter-punct)
+    inter_mu, inter_phi = [], []
+    for t1 in letter_ids[:10]:
+        for t2 in digit_ids[:5] + punct_ids[:5]:
+            inter_mu.append(dist(t1, t2, mu_embed))
+            if phi_embed is not None:
+                inter_phi.append(dist(t1, t2, phi_embed))
+
+    # Clean NaNs
+    intra_mu = [x for x in intra_mu if not np.isnan(x)]
+    intra_phi = [x for x in intra_phi if not np.isnan(x)]
+    inter_mu = [x for x in inter_mu if not np.isnan(x)]
+    inter_phi = [x for x in inter_phi if not np.isnan(x)]
+
+    results = {
+        'n_letters': len(letter_ids),
+        'n_digits': len(digit_ids),
+        'n_punct': len(punct_ids),
+        'mu_intra_class_dist': np.mean(intra_mu) if intra_mu else 0,
+        'mu_inter_class_dist': np.mean(inter_mu) if inter_mu else 0,
+        'mu_class_ratio': (np.mean(inter_mu) / np.mean(intra_mu)) if intra_mu and inter_mu else 0,
+    }
+
+    if intra_phi and inter_phi:
+        results['phi_intra_class_dist'] = np.mean(intra_phi)
+        results['phi_inter_class_dist'] = np.mean(inter_phi)
+        results['phi_class_ratio'] = np.mean(inter_phi) / np.mean(intra_phi)
+        results['phi_shows_structure'] = results['phi_class_ratio'] > 1.2
+
+    return results
+
+
+def analyze_word_pairs(
+    mu_embed: torch.Tensor,
+    phi_embed: Optional[torch.Tensor] = None,
+) -> Dict[str, Any]:
+    """
+    Analyze distances between related vs unrelated word pairs.
+    """
+    pairs = [
+        ("cat", "dog", "related"),
+        ("cat", "the", "unrelated"),
+        ("man", "day", "unrelated"),
+        ("big", "new", "unrelated"),
+        ("run", "see", "related"),
+        ("has", "had", "related"),
+    ]
+
+    related_mu, unrelated_mu = [], []
+    related_phi, unrelated_phi = [], []
+    pair_results = []
+
+    for w1, w2, rel in pairs:
+        t1 = get_token_id(w1)
+        t2 = get_token_id(w2)
+
+        if t1 is None or t2 is None:
+            continue
+
+        mu_d = dist(t1, t2, mu_embed)
+        phi_d = dist(t1, t2, phi_embed) if phi_embed is not None else float('nan')
+
+        pair_results.append({
+            'word1': w1,
+            'word2': w2,
+            'relation': rel,
+            'mu_dist': mu_d,
+            'phi_dist': phi_d,
+        })
+
+        if "related" in rel:
+            related_mu.append(mu_d)
+            if not np.isnan(phi_d):
+                related_phi.append(phi_d)
+        else:
+            unrelated_mu.append(mu_d)
+            if not np.isnan(phi_d):
+                unrelated_phi.append(phi_d)
+
+    results = {
+        'pairs': pair_results,
+        'mu_related_mean': np.mean(related_mu) if related_mu else 0,
+        'mu_unrelated_mean': np.mean(unrelated_mu) if unrelated_mu else 0,
+    }
+
+    if related_phi and unrelated_phi:
+        results['phi_related_mean'] = np.mean(related_phi)
+        results['phi_unrelated_mean'] = np.mean(unrelated_phi)
+        results['phi_semantic_ratio'] = np.mean(unrelated_phi) / np.mean(related_phi)
+
+    return results
+
+
+def analyze_gauge_semantics(
+    model: Any = None,
+    mu_embed: Optional[torch.Tensor] = None,
+    phi_embed: Optional[torch.Tensor] = None,
+    step: Optional[int] = None,
+    save_dir: Optional[Path] = None,
+    save_plots: bool = True,
+    verbose: bool = True,
+) -> Dict[str, Any]:
+    """
+    Comprehensive gauge frame semantic analysis.
+
+    Can be called with either a model object or directly with embeddings.
+
+    Args:
+        model: Model with mu_embed and phi_embed attributes
+        mu_embed: Alternatively, provide mu embeddings directly
+        phi_embed: Alternatively, provide phi embeddings directly
+        step: Training step (for labeling plots)
+        save_dir: Directory to save plots
+        save_plots: Whether to generate and save plots
+        verbose: Print analysis results
+
+    Returns:
+        Dictionary with analysis results
+    """
+    # Extract embeddings from model if provided
+    if model is not None:
+        if hasattr(model, 'mu_embed'):
+            mu_embed = model.mu_embed.weight.detach().cpu()
+        if hasattr(model, 'phi_embed'):
+            phi_embed = model.phi_embed.weight.detach().cpu()
+
+    if mu_embed is None:
+        return {'error': 'No mu embeddings provided'}
+
+    # Ensure CPU tensors
+    if isinstance(mu_embed, torch.Tensor) and mu_embed.device.type != 'cpu':
+        mu_embed = mu_embed.detach().cpu()
+    if phi_embed is not None and isinstance(phi_embed, torch.Tensor) and phi_embed.device.type != 'cpu':
+        phi_embed = phi_embed.detach().cpu()
+
+    results = {
+        'step': step,
+        'mu_shape': list(mu_embed.shape),
+        'phi_shape': list(phi_embed.shape) if phi_embed is not None else None,
+    }
+
+    if phi_embed is not None:
+        results['gauge_group'] = identify_gauge_group(phi_embed.shape[1])
+
+    # Token class analysis
+    class_results = analyze_token_classes(mu_embed, phi_embed)
+    results['token_classes'] = class_results
+
+    # Word pair analysis
+    pair_results = analyze_word_pairs(mu_embed, phi_embed)
+    results['word_pairs'] = pair_results
+
+    if verbose:
+        step_str = f" (step {step})" if step is not None else ""
+        print(f"\n{'='*60}")
+        print(f"GAUGE FRAME SEMANTIC ANALYSIS{step_str}")
+        print(f"{'='*60}")
+        print(f"mu shape: {results['mu_shape']}")
+        if results['phi_shape']:
+            print(f"phi shape: {results['phi_shape']} ({results.get('gauge_group', 'N/A')})")
+
+        print(f"\nToken Class Analysis:")
+        print(f"  mu inter/intra ratio: {class_results.get('mu_class_ratio', 0):.2f}x")
+        if 'phi_class_ratio' in class_results:
+            print(f"  phi inter/intra ratio: {class_results['phi_class_ratio']:.2f}x")
+            if class_results.get('phi_shows_structure'):
+                print(f"  --> phi DOES show class structure!")
+            else:
+                print(f"  --> phi does NOT show clear class structure")
+
+        if 'phi_semantic_ratio' in pair_results:
+            print(f"\nWord Pair Analysis:")
+            print(f"  phi unrelated/related ratio: {pair_results['phi_semantic_ratio']:.2f}x")
+
+    # Generate plots
+    if save_plots and phi_embed is not None:
+        save_dir = Path(save_dir) if save_dir else Path("./outputs/figures")
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            fig = plot_gauge_frame_clustering(
+                phi_embed,
+                step=step,
+                save_path=save_dir / f"gauge_frame_clustering{'_step'+str(step) if step else ''}.png"
+            )
+            plt.close(fig)
+            results['plot_saved'] = True
+        except Exception as e:
+            if verbose:
+                print(f"  [WARN] Could not generate plot: {e}")
+            results['plot_saved'] = False
+            results['plot_error'] = str(e)
+
+    return results
+
+
+# =============================================================================
+# Visualization Functions
+# =============================================================================
+
+CATEGORY_COLORS = {
+    'letter': '#E74C3C',    # red
+    'digit': '#3498DB',     # blue
+    'punct': '#2ECC71',     # green
+    'function': '#9B59B6',  # purple
+    'content': '#F39C12',   # orange
+    'other': '#95A5A6',     # gray
+}
+
+
+def plot_gauge_frame_clustering(
+    phi_embed: torch.Tensor,
+    step: Optional[int] = None,
+    save_path: Optional[Path] = None,
+    n_tokens: int = 500,
+) -> plt.Figure:
+    """
+    Visualize gauge frame embeddings colored by token category.
+
+    Handles SO(2), SO(3), and higher-dimensional gauge groups appropriately.
+    """
+    phi_np = phi_embed[:n_tokens].numpy() if isinstance(phi_embed, torch.Tensor) else phi_embed[:n_tokens]
+    phi_dim = phi_np.shape[1]
+    gauge_str = identify_gauge_group(phi_dim)
+
+    # Categorize tokens
+    categories = [categorize_token(tid) for tid in range(len(phi_np))]
+    colors = [CATEGORY_COLORS.get(c, '#95A5A6') for c in categories]
+
+    step_str = f" (Step {step})" if step is not None else ""
 
     if phi_dim == 1:
-        # SO(2): 1D gauge frames - show as histogram and jittered scatter
+        # SO(2): 1D gauge frames - histogram and jittered scatter
         fig = plt.figure(figsize=(14, 6))
 
-        # Histogram of phi values by category
+        # Histogram
         ax1 = fig.add_subplot(121)
-        for cat in category_colors:
+        for cat in CATEGORY_COLORS:
             mask = [c == cat for c in categories]
             if any(mask):
                 idx = [i for i, m in enumerate(mask) if m]
                 vals = phi_np[idx, 0]
-                ax1.hist(vals, bins=30, alpha=0.5, label=cat, color=category_colors[cat])
+                ax1.hist(vals, bins=30, alpha=0.5, label=cat, color=CATEGORY_COLORS[cat])
 
         ax1.set_xlabel('φ (SO(2) angle)')
         ax1.set_ylabel('Count')
-        ax1.set_title('SO(2) Gauge Frame Distribution')
+        ax1.set_title(f'SO(2) Gauge Frame Distribution{step_str}')
         ax1.legend(loc='upper right', fontsize=8)
 
-        # Jittered scatter plot (add random y for visibility)
+        # Jittered scatter
         ax2 = fig.add_subplot(122)
         np.random.seed(42)
-        for cat in category_colors:
+        for cat in CATEGORY_COLORS:
             mask = [c == cat for c in categories]
             if any(mask):
                 idx = [i for i, m in enumerate(mask) if m]
                 x_vals = phi_np[idx, 0]
                 y_jitter = np.random.uniform(-0.4, 0.4, len(idx))
-                ax2.scatter(x_vals, y_jitter, c=category_colors[cat], label=cat, alpha=0.6, s=20)
+                ax2.scatter(x_vals, y_jitter, c=CATEGORY_COLORS[cat], label=cat, alpha=0.6, s=20)
 
         ax2.set_xlabel('φ (SO(2) angle)')
         ax2.set_ylabel('(jittered for visibility)')
-        ax2.set_title('SO(2) Gauge Frames by Token Type')
+        ax2.set_title(f'SO(2) Gauge Frames by Token Type{step_str}')
         ax2.legend(loc='upper right', fontsize=8)
         ax2.grid(True, alpha=0.3, axis='x')
         ax2.set_ylim(-0.6, 0.6)
@@ -330,6 +407,11 @@ if phi_embed is not None and n_viz > 0:
     elif phi_dim == 3:
         # SO(3): Direct 3D visualization on sphere
         fig = plt.figure(figsize=(14, 6))
+
+        # Normalize to unit sphere
+        phi_norms = np.linalg.norm(phi_np, axis=1, keepdims=True)
+        phi_norms = np.clip(phi_norms, 1e-8, None)
+        phi_unit = phi_np / phi_norms
 
         # 3D sphere plot
         ax1 = fig.add_subplot(121, projection='3d')
@@ -343,104 +425,162 @@ if phi_embed is not None and n_viz > 0:
         ax1.plot_wireframe(x_sphere, y_sphere, z_sphere, alpha=0.1, color='gray')
 
         # Plot points
-        for cat in category_colors:
+        for cat in CATEGORY_COLORS:
             mask = [c == cat for c in categories]
             if any(mask):
                 idx = [i for i, m in enumerate(mask) if m]
                 ax1.scatter(phi_unit[idx, 0], phi_unit[idx, 1], phi_unit[idx, 2],
-                           c=category_colors[cat], label=cat, alpha=0.6, s=20)
+                           c=CATEGORY_COLORS[cat], label=cat, alpha=0.6, s=20)
 
         ax1.set_xlabel('φ₁')
         ax1.set_ylabel('φ₂')
         ax1.set_zlabel('φ₃')
-        ax1.set_title('SO(3) Gauge Frames on Unit Sphere')
+        ax1.set_title(f'SO(3) Gauge Frames on Unit Sphere{step_str}')
         ax1.legend(loc='upper left', fontsize=8)
 
-        # 2D projection (first two components)
+        # 2D projection
         ax2 = fig.add_subplot(122)
-        for cat in category_colors:
+        for cat in CATEGORY_COLORS:
             mask = [c == cat for c in categories]
             if any(mask):
                 idx = [i for i, m in enumerate(mask) if m]
                 ax2.scatter(phi_np[idx, 0], phi_np[idx, 1],
-                           c=category_colors[cat], label=cat, alpha=0.6, s=20)
+                           c=CATEGORY_COLORS[cat], label=cat, alpha=0.6, s=20)
 
         ax2.set_xlabel('φ₁')
         ax2.set_ylabel('φ₂')
-        ax2.set_title('SO(3) Gauge Frames (φ₁ vs φ₂)')
+        ax2.set_title(f'SO(3) Gauge Frames (φ₁ vs φ₂){step_str}')
         ax2.legend(loc='upper left', fontsize=8)
         ax2.grid(True, alpha=0.3)
         ax2.set_aspect('equal')
 
     else:
-        # SO(N) with N > 3: Use PCA to reduce to 2D/3D
+        # SO(N) with N > 3: Use PCA
         n_components = min(3, phi_dim)
-        print(f"Using PCA to reduce {phi_dim}D -> {n_components}D for visualization")
-
         pca = PCA(n_components=n_components)
         phi_pca = pca.fit_transform(phi_np)
 
         var_explained = pca.explained_variance_ratio_
         var_str = " + ".join([f"{v:.1%}" for v in var_explained])
-        print(f"PCA variance explained: {var_str}")
 
         fig = plt.figure(figsize=(14, 6))
 
         if n_components >= 3:
             # 3D PCA plot
             ax1 = fig.add_subplot(121, projection='3d')
-            for cat in category_colors:
+            for cat in CATEGORY_COLORS:
                 mask = [c == cat for c in categories]
                 if any(mask):
                     idx = [i for i, m in enumerate(mask) if m]
                     ax1.scatter(phi_pca[idx, 0], phi_pca[idx, 1], phi_pca[idx, 2],
-                               c=category_colors[cat], label=cat, alpha=0.6, s=20)
+                               c=CATEGORY_COLORS[cat], label=cat, alpha=0.6, s=20)
 
             ax1.set_xlabel(f'PC1 ({var_explained[0]:.1%})')
             ax1.set_ylabel(f'PC2 ({var_explained[1]:.1%})')
             ax1.set_zlabel(f'PC3 ({var_explained[2]:.1%})')
-            ax1.set_title(f'{gauge_str} Gauge Frames (PCA from {phi_dim}D)')
+            ax1.set_title(f'{gauge_str} Gauge Frames (PCA){step_str}')
             ax1.legend(loc='upper left', fontsize=8)
 
             # 2D PCA plot
             ax2 = fig.add_subplot(122)
-        elif n_components == 2:
-            # Only 2D available
-            ax2 = fig.add_subplot(111)
         else:
-            # Only 1D - shouldn't happen here but handle gracefully
             ax2 = fig.add_subplot(111)
 
         if n_components >= 2:
-            for cat in category_colors:
+            for cat in CATEGORY_COLORS:
                 mask = [c == cat for c in categories]
                 if any(mask):
                     idx = [i for i, m in enumerate(mask) if m]
                     ax2.scatter(phi_pca[idx, 0], phi_pca[idx, 1],
-                               c=category_colors[cat], label=cat, alpha=0.6, s=20)
+                               c=CATEGORY_COLORS[cat], label=cat, alpha=0.6, s=20)
 
             ax2.set_xlabel(f'PC1 ({var_explained[0]:.1%})')
             ax2.set_ylabel(f'PC2 ({var_explained[1]:.1%})')
-            ax2.set_title(f'{gauge_str} Gauge Frames (PCA from {phi_dim}D)')
+            ax2.set_title(f'{gauge_str} Gauge Frames (PCA from {phi_dim}D){step_str}')
             ax2.legend(loc='upper left', fontsize=8)
             ax2.grid(True, alpha=0.3)
 
     plt.tight_layout()
 
-    # Save figure
-    save_path = Path(CHECKPOINT_PATH).parent / 'gauge_frame_clustering.png'
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
-    print(f"\nSaved: {save_path}")
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
 
-    plt.show()
+    return fig
 
-else:
-    print("No phi embeddings to visualize")
 
 # =============================================================================
-# DONE
+# Standalone Script Mode
 # =============================================================================
 
-print("\n" + "=" * 60)
-print("ANALYSIS COMPLETE")
-print("=" * 60)
+if __name__ == "__main__":
+    import sys
+    import json
+
+    print("=" * 60)
+    print("Gauge Frame Semantic Analysis")
+    print("=" * 60)
+
+    # Configuration - set these paths when running as script
+    EXPERIMENT_CONFIG_PATH = "runs/your_experiment/experiment_config.json"
+    CHECKPOINT_PATH = "runs/your_experiment/best_model.pt"
+
+    if len(sys.argv) > 1:
+        CHECKPOINT_PATH = sys.argv[1]
+    if len(sys.argv) > 2:
+        EXPERIMENT_CONFIG_PATH = sys.argv[2]
+
+    # Load config
+    config_path = Path(EXPERIMENT_CONFIG_PATH)
+    if config_path.exists():
+        with open(config_path) as f:
+            config = json.load(f)
+        print(f"Loaded config: {config_path}")
+    else:
+        print(f"Config not found: {config_path}")
+        config = {}
+
+    # Load checkpoint
+    ckpt_path = Path(CHECKPOINT_PATH)
+    if not ckpt_path.exists():
+        print(f"ERROR: Checkpoint not found: {ckpt_path}")
+        sys.exit(1)
+
+    print(f"Loading checkpoint: {ckpt_path}")
+    checkpoint = torch.load(ckpt_path, map_location='cpu', weights_only=False)
+
+    if 'model_state_dict' in checkpoint:
+        state_dict = checkpoint['model_state_dict']
+    elif 'state_dict' in checkpoint:
+        state_dict = checkpoint['state_dict']
+    else:
+        state_dict = checkpoint
+
+    # Extract embeddings
+    mu_embed = None
+    phi_embed = None
+
+    for key, value in state_dict.items():
+        if 'mu_embed' in key and 'weight' in key:
+            mu_embed = value
+            print(f"Found mu_embed: {value.shape}")
+        if 'phi_embed' in key and 'weight' in key:
+            phi_embed = value
+            print(f"Found phi_embed: {value.shape}")
+
+    if mu_embed is None:
+        print("ERROR: No mu_embed found!")
+        sys.exit(1)
+
+    # Run analysis
+    save_dir = ckpt_path.parent
+    results = analyze_gauge_semantics(
+        mu_embed=mu_embed,
+        phi_embed=phi_embed,
+        save_dir=save_dir,
+        save_plots=True,
+        verbose=True,
+    )
+
+    print("\n" + "=" * 60)
+    print("ANALYSIS COMPLETE")
+    print("=" * 60)

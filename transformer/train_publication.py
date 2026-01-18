@@ -1339,6 +1339,17 @@ class PublicationTrainer(FastTrainer):
                 self.save_checkpoint(is_best=False)
                 self.metrics_tracker.save()
 
+            # Periodic gauge frame semantic analysis
+            if self.pub_metrics and self.pub_metrics.should_run_semantic_analysis(step + 1):
+                try:
+                    self.pub_metrics.run_semantic_analysis(
+                        model=self.model,
+                        step=step + 1,
+                        verbose=False,  # Minimal output during training
+                    )
+                except Exception as e:
+                    print(f"[WARN] Semantic analysis failed at step {step+1}: {e}")
+
         # Save final metrics
         self.metrics_tracker.save()
         print(f"\n[INFO] Final metrics saved to: {self.metrics_tracker.save_path}")
@@ -1347,6 +1358,15 @@ class PublicationTrainer(FastTrainer):
         if self.pub_metrics:
             self.pub_metrics.save_all()
             self.pub_metrics.generate_all_figures()
+
+            # Run final gauge frame semantic analysis
+            try:
+                self.pub_metrics.run_final_semantic_analysis(
+                    model=self.model,
+                    verbose=True,
+                )
+            except Exception as e:
+                print(f"[WARN] Final semantic analysis failed: {e}")
 
             # Generate interpretability outputs using a sample batch from validation
             try:
@@ -1865,6 +1885,12 @@ def run_single_experiment(
                 base_dir=exp_checkpoint_dir / "publication_outputs"
             )
 
+            # Configure gauge frame semantic analysis interval
+            # Default: run at 10k, 20k, 30k, etc. steps
+            semantic_interval = getattr(args, 'semantic_analysis_interval', 10000)
+            pub_metrics.set_semantic_analysis_interval(semantic_interval)
+            print(f"[Config] Gauge frame semantic analysis every {semantic_interval} steps")
+
         trainer = PublicationTrainer(
             model=model,
             train_loader=train_loader,
@@ -1992,6 +2018,8 @@ def main():
     parser.add_argument('--dataset', type=str, default=DEFAULT_DATASET,
                         choices=['wikitext-2', 'wikitext-103'],
                         help='Dataset to use: wikitext-2 (~2M tokens) or wikitext-103 (~103M tokens)')
+    parser.add_argument('--semantic_analysis_interval', type=int, default=10000,
+                        help='Run gauge frame semantic analysis every N steps (0 to disable)')
 
     args = parser.parse_args()
 
