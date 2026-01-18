@@ -1886,8 +1886,9 @@ def run_single_experiment(
             )
 
             # Configure gauge frame semantic analysis interval
-            # Default: run at 10k, 20k, 30k, etc. steps
-            semantic_interval = getattr(args, 'semantic_analysis_interval', 10000)
+            # Priority: config dict > CLI args > default (10000)
+            semantic_interval = config.get('semantic_analysis_interval',
+                                           getattr(args, 'semantic_analysis_interval', 10000) if args else 10000)
             pub_metrics.set_semantic_analysis_interval(semantic_interval)
             print(f"[Config] Gauge frame semantic analysis every {semantic_interval} steps")
 
