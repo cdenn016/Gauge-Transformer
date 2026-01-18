@@ -107,8 +107,8 @@ class GaugeTransformerLM(nn.Module):
         kappa_beta = config['kappa_beta']
         dropout = config.get('dropout', 0.1)
         pos_mode = config.get('pos_encoding_mode', 'none')  # Default: no position in gauge space
-        evolve_sigma = config.get('evolve_sigma', False)
-        evolve_phi = config.get('evolve_phi', False)
+        evolve_sigma = config.get('evolve_sigma', True)
+        evolve_phi = config.get('evolve_phi', True)
         tie_embeddings = config.get('tie_embeddings', True)
 
         # VFE FFN config
@@ -158,9 +158,8 @@ class GaugeTransformerLM(nn.Module):
         self.diagonal_covariance = diagonal_covariance
 
         # Positional embedding added to μ (like standard transformers)
-        # DEFAULT: True - position in μ, not gauge frame φ. This is more principled
-        # because it keeps transport Ω_ij content-based (not position-based).
-        use_positional_embedding = config.get('use_positional_embedding', True)
+        # DEFAULT: True - position in μ, not gauge frame φ. 
+        use_positional_embedding = config.get('use_positional_embedding', False)
 
         # Position encoding scale (for φ gauge frame encoding)
         pos_encoding_scale = config.get('pos_encoding_scale', 0.1)
@@ -243,7 +242,7 @@ class GaugeTransformerLM(nn.Module):
             irrep_spec=irrep_spec,
             init_std=config.get('mu_init_std', None),  # Embedding init std (None = default 2.0)
             init_sigma_scale=1.0,  # Scaled to match init_std for O(1) KL
-            learnable_sigma=config.get('evolve_sigma', False),  # Learn per-token covariances
+            learnable_sigma=config.get('evolve_sigma', True),  # Learn per-token covariances
             learnable_phi=True,  # Always learn phi for gauge structure. Required for non-trivial transport Ω_ij.
             gauge_fixed_priors=gauge_fixed_priors,
             generators=self.generators,  # Always pass generators for gauge transport
@@ -290,7 +289,7 @@ class GaugeTransformerLM(nn.Module):
                 embed_dim=embed_dim,
                 init_std=config.get('mu_init_std', None),
                 init_sigma_scale=1.0,
-                learnable_sigma=config.get('evolve_sigma', False),
+                learnable_sigma=config.get('evolve_sigma', True),
                 gauge_fixed_priors=gauge_fixed_priors,  # Can use gauge-fixed priors in PriorBank too
                 generators=self.generators if gauge_fixed_priors else None,
                 phi_dim=self.phi_dim,
@@ -338,9 +337,9 @@ class GaugeTransformerLM(nn.Module):
             ffn_irrep_dims=self._compute_irrep_dims(irrep_spec) if config.get('use_block_diagonal_kl', True) else None,
             ffn_chunk_size=config.get('ffn_chunk_size', None),
             # Pure VFE mode: disable ad-hoc transformer components
-            use_layernorm=config.get('use_layernorm', False),
-            use_dropout=config.get('use_dropout', False),
-            use_residual=config.get('use_residual', False),
+            use_layernorm=config.get('use_layernorm', True),
+            use_dropout=config.get('use_dropout', True),
+            use_residual=config.get('use_residual', True),
             # ALiBi positional bias
             alibi_slope=alibi_slope,
             # Identity transport mode
