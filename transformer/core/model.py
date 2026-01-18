@@ -771,6 +771,54 @@ class GaugeTransformerLM(nn.Module):
                 ema_decay=ema_decay,
             )
 
+    def delta_rule_update_w_out(
+        self,
+        mu_beliefs: torch.Tensor,          # (B, N, K) final beliefs after VFE
+        targets: torch.Tensor,             # (B, N) target token IDs
+        lr: float = 0.001,                 # Learning rate for delta rule
+    ):
+        """
+        Delta rule update for W_out - backprop-free learning.
+
+        Instead of backpropagating through the full computation graph,
+        update W_out using the local delta rule (Widrow-Hoff):
+
+            ΔW = η · (target - prediction) ⊗ μ^T
+
+        This is biologically plausible and doesn't require storing
+        intermediate activations for backprop.
+
+        Args:
+            mu_beliefs: (B, N, K) final belief means after VFE
+            targets: (B, N) target token indices
+            lr: Learning rate for delta rule update
+        """
+        with torch.no_grad():
+            B, N, K = mu_beliefs.shape
+            V = self.config['vocab_size']
+
+            # Get current predictions: softmax(W_out @ mu)
+            logits = self.out_proj(mu_beliefs)  # (B, N, V)
+            predictions = F.softmax(logits, dim=-1)  # (B, N, V)
+
+            # One-hot encode targets
+            targets_onehot = F.one_hot(targets, num_classes=V).float()  # (B, N, V)
+
+            # Prediction error: (target - prediction)
+            error = targets_onehot - predictions  # (B, N, V)
+
+            # Delta rule: ΔW = error^T @ mu (outer product averaged over batch & positions)
+            # W_out shape is (V, K), so we need: (V, K) += (B*N, V)^T @ (B*N, K)
+            error_flat = error.reshape(-1, V)  # (B*N, V)
+            mu_flat = mu_beliefs.reshape(-1, K)  # (B*N, K)
+
+            # Compute delta: (V, K) = (V, B*N) @ (B*N, K)
+            delta_W = error_flat.t() @ mu_flat  # (V, K)
+            delta_W /= (B * N)  # Average over batch and positions
+
+            # Apply update to W_out
+            self.out_proj.weight.add_(lr * delta_W)
+
 
 # =============================================================================
 # Testing

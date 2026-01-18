@@ -517,6 +517,12 @@ VFE_EM_CONFIG = {
     'use_p_flow': True,           # Enable P-flow updates on token embeddings
     'p_flow_ema_decay': 0.99,     # EMA decay (higher = slower update, 0.99 = 1% per step)
 
+    # DELTA RULE: Backprop-free learning for W_out
+    # If True, W_out is updated via delta rule instead of backpropagation
+    # Combined with P-flow, this makes learning fully backprop-free!
+    'use_delta_rule_w_out': False,  # Enable delta rule for W_out (instead of backprop)
+    'delta_rule_lr': 0.001,         # Learning rate for delta rule updates
+
     # RG metrics (optional)
     'compute_rg_metrics': False,
     'rg_metrics_interval': 25,
@@ -984,6 +990,13 @@ class PublicationTrainer(FastTrainer):
         # Check if using standard transformer (no VFE loss)
         is_standard = isinstance(self.model, StandardTransformerLM)
 
+        # Check if using delta rule for W_out (backprop-free)
+        use_delta_rule = getattr(self.config, 'use_delta_rule_w_out', False) and not is_standard
+
+        # If delta rule is enabled, exclude W_out from backprop
+        if use_delta_rule and hasattr(self.model, 'out_proj'):
+            self.model.out_proj.weight.requires_grad = False
+
         # Forward pass with full metrics (with optional AMP)
         if self.scaler is not None:
             # Mixed precision forward pass
@@ -1059,6 +1072,10 @@ class PublicationTrainer(FastTrainer):
             self.scheduler.step()
         self.optimizer.zero_grad()
 
+        # Re-enable requires_grad for W_out if it was disabled
+        if use_delta_rule and hasattr(self.model, 'out_proj'):
+            self.model.out_proj.weight.requires_grad = True
+
         # =================================================================
         # P-FLOW: EMA update of token embeddings toward successful beliefs
         # =================================================================
@@ -1078,6 +1095,23 @@ class PublicationTrainer(FastTrainer):
                     mu_beliefs=mu_beliefs,
                     prediction_errors=ce_per_position,
                     ema_decay=ema_decay,
+                )
+
+        # =================================================================
+        # DELTA RULE: Backprop-free update of W_out
+        # =================================================================
+        # Uses local learning rule: ΔW = η · (target - prediction) ⊗ μ^T
+        # Combined with P-flow, this makes learning fully backprop-free!
+        if use_delta_rule and 'p_flow/mu_q' in full_metrics:
+            mu_beliefs = full_metrics['p_flow/mu_q']
+            delta_lr = getattr(self.config, 'delta_rule_lr', 0.001)
+
+            # Call delta rule update on the model
+            if hasattr(self.model, 'delta_rule_update_w_out'):
+                self.model.delta_rule_update_w_out(
+                    mu_beliefs=mu_beliefs,
+                    targets=target_ids,
+                    lr=delta_lr,
                 )
 
         # Format comprehensive metrics
@@ -1649,6 +1683,10 @@ def run_single_experiment(
         # P-FLOW: EMA update of token embeddings toward successful beliefs
         use_p_flow=config.get('use_p_flow', False),
         p_flow_ema_decay=config.get('p_flow_ema_decay', 0.99),
+
+        # DELTA RULE: Backprop-free learning for W_out
+        use_delta_rule_w_out=config.get('use_delta_rule_w_out', False),
+        delta_rule_lr=config.get('delta_rule_lr', 0.001),
     )
 
     print("\n" + "="*70)
@@ -1671,6 +1709,15 @@ def run_single_experiment(
         print(f"  EMA decay: {train_config.p_flow_ema_decay} ({(1-train_config.p_flow_ema_decay)*100:.1f}% update per step)")
     else:
         print(f"\nP-FLOW: disabled")
+
+    # DELTA RULE configuration
+    if train_config.use_delta_rule_w_out:
+        print(f"\nDELTA RULE (backprop-free W_out): ENABLED")
+        print(f"  Learning rate: {train_config.delta_rule_lr}")
+        if train_config.use_p_flow:
+            print(f"  ** FULLY BACKPROP-FREE MODE **")
+    else:
+        print(f"\nDELTA RULE: disabled (using backprop for W_out)")
 
     # =================================================================
     # Create Trainer (Pure FEP or Standard)
