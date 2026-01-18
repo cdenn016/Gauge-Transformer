@@ -907,6 +907,28 @@ This finding has several implications:
 
 This semantic organization in gauge frames provides evidence that the geometric structure is not merely a mathematical curiosity but captures functionally relevant aspects of language processing.
 
+\subsubsection{Why Gauge Frames Encode Semantics: The $AB^\top \sim \Omega$ Connection}
+\label{sec:ab_omega}
+
+The emergence of semantic structure in gauge frames is not accidental but follows from a precise mathematical relationship between gauge-theoretic and standard transformer attention. In companion theoretical work (under review), we derive that standard transformer attention emerges from the gauge framework under three successive limits: (1) deterministic beliefs ($\Sigma_i \to 0$), (2) flat bundle ($\Omega_{ij} = \Omega$ for all pairs), and (3) learned projections.
+
+Under these limits, the attention compatibility score reduces to:
+\begin{equation}
+s_{ij} = D_{\mathrm{KL}}(q_i \| \Omega q_j) \to \frac{1}{2\sigma^2}\|\mu_i - \Omega\mu_j\|^2 \to \frac{1}{\sigma^2}\mu_i^\top \Omega \mu_j + O(1),
+\end{equation}
+where the final form emerges after softmax cancellation of query-independent terms. Defining learned projection matrices $A, B \in \mathbb{R}^{d \times d_k}$ such that
+\begin{equation}
+AB^\top = \frac{1}{\sigma^2} \Omega,
+\label{eq:ab_omega}
+\end{equation}
+we recover the standard dot-product attention: $Q_i K_j^\top = \mu_i^\top A B^\top \mu_j = \frac{1}{\sigma^2}\mu_i^\top \Omega \mu_j$, which yields the familiar $\mathrm{softmax}(QK^\top/\sqrt{d_k})V$ after temperature scaling.
+
+This factorization has a profound implication: \textbf{whatever semantic comparison structure standard transformers learn in $W_Q W_K^\top$, the gauge framework must encode in $\Omega_{ij}$}. Since the parallel transport operator $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$ is constructed from gauge frames, the gauge frames must encode semantic structure to enable meaningful attention comparisons.
+
+In standard transformers, the learned matrices $W_Q$ and $W_K$ discover how to project tokens into a space where dot products reflect semantic relationships. The gauge framework achieves the same effect geometrically: gauge frames $\phi_i$ define local coordinate systems such that parallel transport $\Omega_{ij}$ between frames captures semantic compatibility. Tokens with similar semantic roles (e.g., punctuation) develop similar gauge frames, leading to the observed clustering in $\mathfrak{so}(N)$ space (Figure~\ref{fig:gauge_clustering}).
+
+This connection explains why semantic structure emerges in gauge frames without explicit supervision: the frames are learning the ``semantic coordinate system'' that in standard transformers would be implicitly encoded in the learned Q/K projections. The gauge-theoretic formulation makes this structure geometrically explicit and interpretable.
+
 \subsubsection{Attention Dynamics: From Structure to Uniformity}
 \label{sec:attention_dynamics}
 
@@ -1137,6 +1159,94 @@ For beliefs with discrete latent structure, mixture distributions $q_i(\xi) = \s
 \subsection{Scope of Current Work}
 
 This paper restricts to SO($N$) groups and Gaussians because this pairing admits closed-form computations throughout: the KL divergence, Fisher information, natural gradients, and parallel transport all have explicit expressions. The orthogonal group preserves the Euclidean structure natural for embedding spaces, and its fundamental representation provides interpretable attention heads. The generalizations sketched above indicate that the framework is not limited to these choices---richer group structures and distribution families may capture more complex phenomena---but realizing these extensions requires careful attention to the compatibility between gauge symmetry and statistical divergence.
+
+\section{Reduction to Standard Transformer Attention}
+\label{app:transformer_reduction}
+
+This appendix summarizes how standard transformer self-attention emerges as a limiting case of the gauge-theoretic framework. Full derivations are presented in companion theoretical work (under review).
+
+\subsection{Setup and Three Successive Limits}
+
+In the general formulation, each agent $i$ maintains a Gaussian belief $q_i = \mathcal{N}(\mu_i, \Sigma_i)$, and communication is mediated by gauge transport $\Omega_{ij} \in G \subset \mathrm{GL}(d)$. Attention weights emerge from KL-divergence compatibility:
+\begin{equation}
+\beta_{ij} = \mathrm{softmax}_j\left(-\frac{1}{\tau} D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)\right).
+\end{equation}
+
+We impose three simplifying assumptions:
+
+\paragraph{Limit 1: Deterministic beliefs ($\Sigma_i \to 0$).}
+With isotropic covariances $\Sigma_i = \Sigma_j = \sigma^2 I$, the KL divergence simplifies to a squared Euclidean distance:
+\begin{equation}
+D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j) \to \frac{1}{2\sigma^2}\|\mu_i - \Omega_{ij}\mu_j\|^2.
+\end{equation}
+
+\paragraph{Limit 2: Flat bundle ($\Omega_{ij} = \Omega$).}
+Assuming a single global frame shared by all agents (trivial principal bundle with path-independent transport):
+\begin{equation}
+\Omega_{ij} = \Omega \in \mathbb{R}^{d \times d} \quad \text{for all } i,j.
+\end{equation}
+
+\paragraph{Limit 3: Learned projections.}
+We absorb the gauge structure into learned projection matrices.
+
+\subsection{Derivation of Dot-Product Attention}
+
+Expanding the compatibility score under these limits:
+\begin{equation}
+s_{ij} = \frac{1}{2\sigma^2}\|\mu_i - \Omega\mu_j\|^2 = \frac{1}{2\sigma^2}\|\mu_i\|^2 + \frac{1}{2\sigma^2}\|\Omega\mu_j\|^2 - \frac{1}{\sigma^2}\mu_i^\top \Omega \mu_j.
+\end{equation}
+
+Under softmax normalization:
+\begin{itemize}
+    \item The query-dependent term $\frac{1}{2\sigma^2}\|\mu_i\|^2$ cancels (independent of $j$)
+    \item The key-dependent term $\frac{1}{2\sigma^2}\|\Omega\mu_j\|^2$ approximately cancels due to high-dimensional concentration or layer normalization
+\end{itemize}
+
+The dominant contribution is the bilinear term $\frac{1}{\sigma^2}\mu_i^\top \Omega \mu_j$.
+
+\subsection{Factorization into Query-Key Products}
+
+We define learned matrices $A, B \in \mathbb{R}^{d \times d_k}$ such that:
+\begin{equation}
+AB^\top = \frac{1}{\sigma^2} \Omega.
+\end{equation}
+
+Such factorizations always exist (e.g., via SVD). Defining queries and keys:
+\begin{equation}
+Q_i = \mu_i^\top A, \qquad K_j = \mu_j^\top B,
+\end{equation}
+we obtain:
+\begin{equation}
+Q_i K_j^\top = \mu_i^\top A B^\top \mu_j = \frac{1}{\sigma^2}\mu_i^\top \Omega \mu_j.
+\end{equation}
+
+\subsection{Temperature Scaling and Final Form}
+
+Normalizing by $\sqrt{d_k}$ to produce $O(1)$ pre-softmax logits identifies the natural temperature:
+\begin{equation}
+\tau = \sigma^2\sqrt{d_k},
+\end{equation}
+encoding both belief uncertainty ($\sigma^2$) and embedding dimension ($d_k$).
+
+The attention weights become:
+\begin{equation}
+\boxed{\beta_{ij} = \mathrm{softmax}_j\left(\frac{Q_i K_j^\top}{\sqrt{d_k}}\right)},
+\end{equation}
+exactly recovering standard transformer attention. With value projection $V_j = \mu_j^\top W_V$ absorbing the transport operator, the message aggregation $m_i = \sum_j \beta_{ij} \Omega\mu_j$ reduces to:
+\begin{equation}
+\boxed{\mathrm{Attention}(Q,K,V) = \mathrm{softmax}\left(\frac{QK^\top}{\sqrt{d_k}}\right)V}.
+\end{equation}
+
+\subsection{Interpretation}
+
+This derivation establishes that standard transformer attention is the \emph{degenerate limit} of gauge-theoretic attention when:
+\begin{enumerate}
+    \item Beliefs collapse to point estimates (no uncertainty)
+    \item The gauge bundle is trivial (no position-dependent frame structure)
+    \item Gauge transport is absorbed into learned projections
+\end{enumerate}
+
+The key insight is Equation~\eqref{eq:ab_omega}: the learned $W_Q W_K^\top$ in standard transformers plays the role of $\Omega/\sigma^2$---the (scaled) gauge transport operator. This explains why gauge frames encode semantic structure: they are learning the geometric relationships that standard transformers encode in learned projections.
 
 \bibliographystyle{plainnat}
 \bibliography{references}
