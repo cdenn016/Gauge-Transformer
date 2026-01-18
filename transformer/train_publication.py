@@ -518,6 +518,7 @@ def run_test_evaluation(
     test_loader: torch.utils.data.DataLoader,
     device: torch.device,
     vocab_size: int,
+    max_batches: int = 2000,
 ) -> Dict[str, float]:
     """
     Run final evaluation on test set.
@@ -530,6 +531,7 @@ def run_test_evaluation(
         test_loader: Test set dataloader
         device: Device to run evaluation on
         vocab_size: Vocabulary size for random baseline comparison
+        max_batches: Maximum number of batches to evaluate (default: 2000)
 
     Returns:
         Dictionary with test metrics:
@@ -543,12 +545,19 @@ def run_test_evaluation(
     print("FINAL TEST SET EVALUATION")
     print("="*70)
 
+    total_batches = len(test_loader)
+    eval_batches = min(max_batches, total_batches)
+    print(f"  Evaluating {eval_batches} / {total_batches} batches...")
+
     model.eval()
     total_loss = 0.0
     total_tokens = 0
 
     with torch.no_grad():
         for batch_idx, (input_ids, target_ids) in enumerate(test_loader):
+            if batch_idx >= max_batches:
+                break
+
             input_ids = input_ids.to(device)
             target_ids = target_ids.to(device)
 
@@ -575,7 +584,7 @@ def run_test_evaluation(
 
             # Progress indicator
             if (batch_idx + 1) % 100 == 0:
-                print(f"  Evaluated {batch_idx + 1}/{len(test_loader)} batches...")
+                print(f"  Evaluated {batch_idx + 1}/{eval_batches} batches...")
 
     # Compute metrics
     test_ce = total_loss / total_tokens if total_tokens > 0 else float('inf')
