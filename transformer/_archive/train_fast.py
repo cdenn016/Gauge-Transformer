@@ -111,6 +111,10 @@ class FastTrainingConfig:
     use_p_flow: bool = False          # Enable P-flow updates
     p_flow_ema_decay: float = 0.99    # EMA decay (0.99 = 1% update per step)
 
+    # DELTA RULE: Backprop-free learning for W_out
+    use_delta_rule_w_out: bool = False  # Enable delta rule for W_out
+    delta_rule_lr: float = 0.001        # Learning rate for delta rule
+
 
 # =============================================================================
 # Fast Trainer with Parameter Group Learning Rates
