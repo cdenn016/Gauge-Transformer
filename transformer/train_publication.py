@@ -25,23 +25,14 @@ if _project_root not in sys.path:
 Publication Proof-of-Principle Training Script
 ===============================================
 
-Language modeling on WikiText-2 with byte-level encoding for minimal publishable claim.
+Language modeling on WikiText-2/103 with byte-level encoding for minimal publishable claim.
 
 Demonstrates:
 1. Variational FFN works - inference comparable to learned MLP
 2. Architecture is trainable - converges to reasonable performance
 3. Theoretical framework is sound - gauge-invariant inference holds
-4. Hamiltonian dynamics - energy-conserving symplectic integration (NEW!)
 
-Five FFN Modes for Ablation Study:
-    - learned: Standard MLP baseline (GELU activation)
-    - variational_approx: First-order active inference (O(N²K), legacy)
-    - variational_full: Complete gauge-invariant with second-order terms (O(N³K), legacy)
-    - variational_gradient_engine: Full active inference via gradient_engine.py
-    - hamiltonian: Symplectic Hamiltonian dynamics on belief space (NEW!)
-      * Energy-conserving leapfrog integration
-      * Full faithful SPD geometry with curvature corrections
-      * NO learned weights - pure physics!
+  
 
 Comprehensive Metrics Tracking:
     - Free energy components (α, β, γ terms)
@@ -62,9 +53,6 @@ Usage:
     # Just click Run (edit defaults below)
     python transformer/train_publication.py
 
-    # Or use command-line args:
-    python transformer/train_publication.py --ffn_mode learned
-    python transformer/train_publication.py --ffn_mode hamiltonian
 
 Author: Designed for minimal publishable claim
 Date: December 2025
@@ -2133,4 +2121,5 @@ def main():
 if __name__ == '__main__':
 
     main()
+
 
