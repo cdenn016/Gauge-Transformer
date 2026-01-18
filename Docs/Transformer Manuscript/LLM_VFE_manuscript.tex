@@ -910,18 +910,22 @@ This semantic organization in gauge frames provides evidence that the geometric 
 \subsubsection{Why Gauge Frames Encode Semantics: The $AB^\top \sim \Omega$ Connection}
 \label{sec:ab_omega}
 
-The emergence of semantic structure in gauge frames is not accidental but follows from a precise mathematical relationship between gauge-theoretic and standard transformer attention. In companion theoretical work (under review), we derive that standard transformer attention emerges from the gauge framework under three successive limits: (1) isotropic covariances ($\Sigma_i = \sigma^2 I$), (2) flat bundle ($\Omega_{ij} = \Omega$ for all pairs), and (3) learned projections.
+The emergence of semantic structure in gauge frames is not accidental but follows from a precise mathematical relationship between gauge-theoretic and standard transformer attention. In companion theoretical work (under review), we derive that standard transformer attention emerges from the gauge framework in the \emph{Dirac limit}: beliefs collapse to point estimates while temperature scales inversely to maintain finite attention logits.
 
-Under these limits, the attention compatibility score reduces to:
+Specifically, for isotropic Gaussian beliefs $q_i = \mathcal{N}(\mu_i, \sigma^2 I)$, the KL-based compatibility score is:
 \begin{equation}
-s_{ij} = D_{\mathrm{KL}}(q_i \| \Omega q_j) \to \frac{1}{2}\|\mu_i - \Omega\mu_j\|^2 \to \mu_i^\top \Omega \mu_j + O(1),
+s_{ij} = D_{\mathrm{KL}}(q_i \| \Omega q_j) = \frac{1}{2\sigma^2}\|\mu_i - \Omega\mu_j\|^2.
 \end{equation}
-where the final form emerges after softmax cancellation of query-independent terms (with scaling absorbed into temperature). Defining learned projection matrices $A, B \in \mathbb{R}^{d \times d_k}$ such that
+The attention weights involve the ratio $s_{ij}/\tau$, where $\tau$ is the temperature. Taking the \textbf{coupled limit} $\sigma^2 \to 0$ with $\tau \propto 1/\sigma^2$ (i.e., $\sigma^2 \tau = c$ for constant $c$):
+\begin{equation}
+\frac{s_{ij}}{\tau} = \frac{\|\mu_i - \Omega\mu_j\|^2}{2\sigma^2 \tau} = \frac{\|\mu_i - \Omega\mu_j\|^2}{2c} \to \text{finite as } \sigma^2 \to 0.
+\end{equation}
+This yields well-defined attention in the Dirac limit. After softmax cancellation of query-independent terms, the effective logit becomes $\mu_i^\top \Omega \mu_j + O(1)$. Defining learned projection matrices $A, B \in \mathbb{R}^{d \times d_k}$ such that
 \begin{equation}
 AB^\top \propto \Omega,
 \label{eq:ab_omega}
 \end{equation}
-we recover the standard dot-product attention: $Q_i K_j^\top = \mu_i^\top A B^\top \mu_j \propto \mu_i^\top \Omega \mu_j$, which yields the familiar $\mathrm{softmax}(QK^\top/\sqrt{d_k})V$ after temperature scaling.
+we recover the standard dot-product attention: $Q_i K_j^\top = \mu_i^\top A B^\top \mu_j \propto \mu_i^\top \Omega \mu_j$, which yields $\mathrm{softmax}(QK^\top/\sqrt{d_k})V$. The $1/\sqrt{d_k}$ scaling in standard transformers plays precisely the role of the coupled limit---normalizing logits to $O(1)$ as embedding dimension grows.
 
 This factorization has a profound implication: \textbf{whatever semantic comparison structure standard transformers learn in $W_Q W_K^\top$, the gauge framework must encode in $\Omega_{ij}$}. Since the parallel transport operator $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$ is constructed from gauge frames, the gauge frames must encode semantic structure to enable meaningful attention comparisons.
 
@@ -1174,11 +1178,16 @@ In the general formulation, each agent $i$ maintains a Gaussian belief $q_i = \m
 
 We impose three simplifying assumptions:
 
-\paragraph{Limit 1: Isotropic covariances ($\Sigma_i = \sigma^2 I$).}
-With shared isotropic covariances, the KL divergence simplifies to a squared Euclidean distance (up to scaling):
+\paragraph{Limit 1: Dirac limit via coupled scaling.}
+For isotropic Gaussian beliefs $q_i = \mathcal{N}(\mu_i, \sigma^2 I)$, the KL divergence is:
 \begin{equation}
-D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j) \propto \|\mu_i - \Omega_{ij}\mu_j\|^2.
+D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j) = \frac{1}{2\sigma^2}\|\mu_i - \Omega_{ij}\mu_j\|^2.
 \end{equation}
+Taking $\sigma^2 \to 0$ alone would cause this to diverge. However, the attention weights depend on the ratio $s_{ij}/\tau$. Taking the \textbf{coupled limit} $\sigma^2 \to 0$ with $\tau \propto 1/\sigma^2$ (so that $\sigma^2 \tau = c$ remains constant):
+\begin{equation}
+\frac{s_{ij}}{\tau} = \frac{\|\mu_i - \Omega_{ij}\mu_j\|^2}{2\sigma^2 \tau} = \frac{\|\mu_i - \Omega_{ij}\mu_j\|^2}{2c} \to \text{finite}.
+\end{equation}
+This yields well-defined attention as beliefs become Dirac distributions.
 
 \paragraph{Limit 2: Flat bundle ($\Omega_{ij} = \Omega$).}
 Assuming a single global frame shared by all agents (trivial principal bundle with path-independent transport):
@@ -1235,14 +1244,16 @@ exactly recovering standard transformer attention. With value projection $V_j = 
 
 \subsection{Interpretation}
 
-This derivation establishes that standard transformer attention is the \emph{degenerate limit} of gauge-theoretic attention when:
+This derivation establishes that standard transformer attention is the \emph{Dirac limit} of gauge-theoretic attention when:
 \begin{enumerate}
-    \item Covariances are isotropic (scaling absorbed into temperature)
+    \item Beliefs collapse to point estimates ($\sigma^2 \to 0$) with temperature scaling inversely ($\tau \propto 1/\sigma^2$), maintaining finite attention logits
     \item The gauge bundle is trivial (no position-dependent frame structure)
     \item Gauge transport is absorbed into learned projections
 \end{enumerate}
 
-The key insight is Equation~\eqref{eq:ab_omega}: the learned $W_Q W_K^\top$ in standard transformers plays the role of $\Omega$---the gauge transport operator (up to scaling). This explains why gauge frames encode semantic structure: they are learning the geometric relationships that standard transformers encode in learned projections.
+The coupled limit $\sigma^2 \tau = c$ is essential: it ensures that attention remains well-defined as beliefs become deterministic. The $1/\sqrt{d_k}$ scaling in standard transformers serves precisely this role---normalizing logits to $O(1)$ regardless of embedding dimension.
+
+The key insight is Equation~\eqref{eq:ab_omega}: the learned $W_Q W_K^\top$ in standard transformers plays the role of $\Omega$---the gauge transport operator. This explains why gauge frames encode semantic structure: they are learning the geometric relationships that standard transformers encode in learned projections.
 
 \bibliographystyle{plainnat}
 \bibliography{references}
