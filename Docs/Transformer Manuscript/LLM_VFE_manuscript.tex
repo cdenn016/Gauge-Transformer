@@ -515,15 +515,7 @@ We validate our gauge-theoretic framework on token-level language modeling at pr
 \label{sec:setup}
 
 \paragraph{Dataset and task.}
-We use WikiText-103~\citep{merity2016pointer}, a large-scale benchmark for language modeling comprising over 100 million tokens from Wikipedia articles. We perform token-level modeling using the GPT-2 BPE tokenizer with vocabulary size $V = 50{,}257$. The dataset splits into:
-
-\begin{itemize}
-  \item Training: $\sim$103 million tokens
-  \item Validation: $\sim$218,000 tokens
-  \item Test: $\sim$246,000 tokens
-\end{itemize}
-
-The task is next-token prediction: given a context window of $L$ tokens, predict the probability distribution over the next token. We use context window length $L=128$ for all experiments.
+We use WikiText-103~\citep{merity2016pointer}, a large-scale benchmark for language modeling comprising approximately 103 million training tokens, 218,000 validation tokens, and 246,000 test tokens from Wikipedia articles. We perform token-level next-token prediction using the GPT-2 BPE tokenizer (vocabulary size $V = 50{,}257$) with context window $L=128$.
 
 \subsection{Architecture configurations.}
 We implement and compare three architectures under controlled conditions, summarized in Table~\ref{tab:arch_details}.
@@ -571,8 +563,7 @@ q_i(t=0) = p_{\text{token}(i)},
 
 where $\text{token}(i)$ denotes the token type at position $i$. Thus $\mu_i(0) = \mu_p^{\text{token}(i)}$ and $\Sigma_i(0) = \Sigma_p^{\text{token}(i)}$. This provides a uniform starting point: all instances of the same token begin with identical beliefs, regardless of their position in the sequence.
 
-
-\paragraph{Multi-head structure from group generators}
+\paragraph{Multi-head structure.}
 
 The number of attention heads is determined by the irrep decomposition: with 5 copies of the 20-dimensional fundamental representation, we obtain $H = 5$ independent attention heads. Each head operates on a 20-dimensional subspace where SO(20) acts via its 190 generators. Each head $h$ computes transport via:
 \begin{equation}
@@ -585,19 +576,7 @@ The embedding dimension $K = 100$ accommodates the SO(20) fundamental representa
 \rho = 5 \times \ell_{\text{fund}} \quad (K = 5 \times 20 = 100)
 \end{equation}
 
-The generators act block-diagonally across these 5 independent copies, providing:
-
-\begin{itemize}
-\item \textbf{5 attention heads}: Each corresponding to one copy of the fundamental representation
-\item \textbf{Geometric interpretability}: Features within each 20-dimensional block transform equivariantly under SO(20)
-\item \textbf{Cross-block independence}: The 5 copies allow for diverse semantic representations
-\end{itemize}
-
-This provides geometric interpretability absent in standard transformers, where the number of attention heads is an arbitrary hyperparameter rather than emerging from symmetry structure.
-
-\subsection{Positional encoding.}
-
-Standard transformer baselines use learned positional embeddings added to token embeddings. The gauge VFE architecture does not use explicit positional encoding; instead, positional information emerges implicitly through the sequential processing of the attention mechanism and the gauge frame structure.
+The generators act block-diagonally across these 5 independent copies, yielding 5 attention heads (one per irrep copy) where features within each 20-dimensional block transform equivariantly under SO(20). This provides geometric interpretability absent in standard transformers, where the number of attention heads is an arbitrary hyperparameter rather than emerging from symmetry structure.
 
 \subsection{Hyperparameters.}
 
@@ -605,19 +584,11 @@ All architectures share common training settings to ensure fair comparison: cont
 
 \subsection{Evaluation metrics.}
 
-We report standard metrics for language modeling:
-
-\begin{itemize}
-  \item \textbf{Perplexity (PPL):} $\exp(\mathcal{L})$ where $\mathcal{L}$ is cross-entropy loss
-  \item \textbf{Cross-entropy loss:} $-\frac{1}{N}\sum_{i=1}^N \log p(t_i | t_{<i})$
-  \item \textbf{Improvement factor:} Ratio of random baseline PPL to model PPL
-\end{itemize}
-
-computed on the validation set. Random baseline (uniform distribution over 50,257 tokens) achieves PPL = 50,257.
+We report perplexity $\text{PPL} = \exp(\mathcal{L})$ where $\mathcal{L} = -\frac{1}{N}\sum_{i=1}^N \log p(t_i | t_{<i})$ is cross-entropy loss, computed on the validation set. We also report improvement factor (ratio of random baseline PPL to model PPL), where random baseline achieves PPL = 50,257.
 
 \subsection{Implementation details.}
 
-All models implemented in Python 3.12 using PyTorch 2.x with CUDA support. Natural gradient computations for the gauge VFE use diagonal covariance approximation for computational efficiency. Matrix exponentials for transport operators computed via PyTorch's \texttt{matrix\_exp}. Training performed on a single NVIDIA RTX 5090 GPU (32GB). Code available at \url{https://github.com/cdenn016/Gauge-Transformer}.
+All models implemented in Python 3.12 using PyTorch 2.x with CUDA support. Standard transformer baselines use learned positional embeddings; the gauge VFE uses no explicit positional encoding, with positional information emerging implicitly through the attention mechanism and gauge frame structure. Natural gradient computations use diagonal covariance approximation for efficiency, and transport operators are computed via PyTorch's \texttt{matrix\_exp}. Training performed on a single NVIDIA RTX 5090 GPU (32GB). Code available at \url{https://github.com/cdenn016/Gauge-Transformer}.
 
 
 
