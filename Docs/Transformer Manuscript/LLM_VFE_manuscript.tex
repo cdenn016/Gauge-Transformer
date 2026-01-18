@@ -901,6 +901,29 @@ This finding has several implications:
 
 This semantic organization in gauge frames provides evidence that the geometric structure is not merely a mathematical curiosity but captures functionally relevant aspects of language processing.
 
+\subsubsection{Attention Dynamics: From Structure to Uniformity}
+\label{sec:attention_dynamics}
+
+A notable empirical observation is that gauge attention exhibits structured patterns early in training that progressively converge toward uniformity. At step 500, the attention weights $\beta_{ij}$ display differentiated patterns across heads, with visible variation in how each head distributes attention over context positions. However, by step 15,000, all heads converge to approximately uniform distributions over valid (causally masked) positions, with attention entropy reaching 3.84 nats---close to the maximum of $\ln(128) \approx 4.85$ for uniform attention over 128 positions.
+
+This convergence to uniformity occurs despite the gauge frames learning highly structured, semantically meaningful representations (Section~\ref{sec:semantic_emergence}). The attention mechanism has access to diverse, discriminative features but does not leverage them for selective focus. Instead, the model achieves its performance through the variational embeddings $(\mu_i, \Sigma_i, \phi_i)$ while aggregating context uniformly.
+
+This finding admits several interpretations:
+
+\begin{enumerate}
+    \item \textbf{Embedding dominance:} The variational free energy landscape may favor solutions where contextual information is encoded in the embeddings rather than through discriminative attention. The semantic clustering in gauge frames supports this interpretation: the model learns meaningful token representations but aggregates context uniformly.
+
+    \item \textbf{Uniform attention as a local minimum:} The optimization may converge to a basin where uniform attention provides sufficient gradient signal for embedding learning, creating no pressure to develop selective attention patterns.
+
+    \item \textbf{KL equalization:} As embeddings train, the transported beliefs $\Omega_{ij}[q_j]$ may become approximately equidistant from $q_i$ in KL divergence, eliminating the signal that would produce discriminative attention.
+
+    \item \textbf{Temperature sensitivity:} The attention temperature $\kappa_\beta = 1.0$ may flatten small differences in KL divergence. Lower temperatures could preserve the initial structure, though this remains to be tested.
+\end{enumerate}
+
+This observation has implications for both understanding and improving the framework. The fact that meaningful language modeling (218$\times$ improvement over random) is achievable with effectively uniform attention suggests that the gauge-theoretic embeddings carry substantial predictive information. However, it also indicates that the current KL-divergence attention formulation may require modification---such as temperature annealing, entropy regularization, or alternative divergence measures---to produce the discriminative attention patterns observed in standard transformers.
+
+Notably, this ``attention collapse'' phenomenon differs from the failure mode in standard transformers where attention becomes degenerate due to poor optimization. Here, attention starts structured and systematically converges to uniformity as the embeddings improve, suggesting that uniform attention is not a pathology but rather the equilibrium configuration for this architecture under current hyperparameters.
+
 \subsubsection{Curvature minimization hypothesis}
 
 The framework naturally supports learnable gauge frames optimized via $\nabla_{\phi_i} \mathcal{F}$. We conjecture that free optimization over $\{\mu_i, \Sigma_i, \phi_i\}$ leads agents toward configurations that balance expressivity with geometric coherence.

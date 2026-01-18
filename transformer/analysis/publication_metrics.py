@@ -84,8 +84,8 @@ class TrainingSnapshot:
     tokens_per_sec: float = 0.0
     step_time: float = 0.0
     beta_loss: float = 0.0  # Belief alignment term
-    attention_entropy: float = 0.0  # How diffuse is attention?
-    attention_concentration: float = 0.0  # How peaked is attention?
+    attention_entropy: float = 0.0  # Entropy of attention weights (higher = more uniform)
+    attention_concentration: float = 0.0  # Concentration of attention (higher = more peaked)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -797,7 +797,7 @@ class PublicationMetrics:
         except Exception as e:
             print(f"[WARN] Could not generate train-val gap: {e}")
 
-        # Attention entropy
+        # Attention entropy over training
         try:
             self.figures.plot_attention_entropy(self.tracker)
             figures_generated.append("attention_entropy")

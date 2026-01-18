@@ -568,8 +568,8 @@ class GaugePositionalEncoding(nn.Module):
         if phi_dim != 3:
             if composition == 'exact':
                 print(f"[WARNING] Composition 'exact' only supported for SO(3) (phi_dim=3). "
-                      f"Falling back to 'bch1' for phi_dim={phi_dim}.")
-                composition = 'bch1'
+                      f"Falling back to 'bch2' for phi_dim={phi_dim}.")
+                composition = 'bch2'
             if composition in ['bch1', 'bch2'] and generators is None and not SON_BCH_AVAILABLE:
                 print(f"[WARNING] SO(N) BCH requires generators. "
                       f"Falling back to 'add' for phi_dim={phi_dim}.")

@@ -154,6 +154,96 @@ def get_system_info() -> Dict[str, Any]:
     return info
 
 
+def run_test_evaluation(
+    model: torch.nn.Module,
+    test_loader: torch.utils.data.DataLoader,
+    device: torch.device,
+    vocab_size: int,
+) -> Dict[str, float]:
+    """
+    Run final evaluation on test set.
+
+    This should be called at the end of training to get the final test metrics
+    that will be reported in publications.
+
+    Args:
+        model: Trained model
+        test_loader: Test set dataloader
+        device: Device to run evaluation on
+        vocab_size: Vocabulary size for random baseline comparison
+
+    Returns:
+        Dictionary with test metrics:
+            - test_loss: Cross-entropy loss on test set
+            - test_ppl: Perplexity on test set
+            - test_bpc: Bits per character
+            - random_ppl: Random baseline perplexity
+            - improvement: Factor improvement over random
+    """
+    print("\n" + "="*70)
+    print("FINAL TEST SET EVALUATION")
+    print("="*70)
+
+    model.eval()
+    total_loss = 0.0
+    total_tokens = 0
+
+    with torch.no_grad():
+        for batch_idx, (input_ids, target_ids) in enumerate(test_loader):
+            input_ids = input_ids.to(device)
+            target_ids = target_ids.to(device)
+
+            # Forward pass
+            if hasattr(model, 'forward'):
+                output = model(input_ids)
+                if isinstance(output, dict):
+                    logits = output.get('logits', output.get('output'))
+                elif isinstance(output, tuple):
+                    logits = output[0]
+                else:
+                    logits = output
+            else:
+                logits = model(input_ids)
+
+            # Compute cross-entropy loss
+            loss = F.cross_entropy(
+                logits.view(-1, vocab_size),
+                target_ids.view(-1),
+                reduction='sum'
+            )
+            total_loss += loss.item()
+            total_tokens += target_ids.numel()
+
+            # Progress indicator
+            if (batch_idx + 1) % 100 == 0:
+                print(f"  Evaluated {batch_idx + 1}/{len(test_loader)} batches...")
+
+    # Compute metrics
+    test_ce = total_loss / total_tokens if total_tokens > 0 else float('inf')
+    test_ppl = math.exp(min(test_ce, 20))  # Clamp to prevent overflow
+    test_bpc = test_ce / math.log(2)
+    random_ppl = vocab_size
+    improvement = random_ppl / test_ppl if test_ppl > 0 else 0
+
+    print(f"\nTest Set Results:")
+    print(f"  Cross-entropy loss: {test_ce:.4f}")
+    print(f"  Perplexity:         {test_ppl:.2f}")
+    print(f"  Bits per character: {test_bpc:.3f}")
+    print(f"  Random baseline:    {random_ppl:.0f}")
+    print(f"  Improvement:        {improvement:.1f}x better than random")
+    print("="*70 + "\n")
+
+    model.train()
+
+    return {
+        'test_loss': test_ce,
+        'test_ppl': test_ppl,
+        'test_bpc': test_bpc,
+        'random_ppl': random_ppl,
+        'improvement': improvement,
+    }
+
+
 def save_experiment_config(
     config: Dict[str, Any],
     ffn_mode: str,
@@ -1398,8 +1488,10 @@ def run_single_experiment(
     else:
         use_char = (tokenizer_mode == 'char')
 
+    test_loader = None  # Will be set if available
     if use_char:
         print(f"Using CHARACTER-LEVEL tokenizer (vocab_size={config['vocab_size']})")
+        # Note: create_char_dataloaders doesn't support test set yet
         train_loader, val_loader, actual_vocab_size = create_char_dataloaders(
             max_seq_len=config['max_seq_len'],
             batch_size=config['batch_size'],
@@ -1407,12 +1499,13 @@ def run_single_experiment(
         )
     else:
         print(f"Using BPE tokenizer (vocab_size={config['vocab_size']})")
-        train_loader, val_loader, actual_vocab_size = create_dataloaders(
+        train_loader, val_loader, test_loader, actual_vocab_size = create_dataloaders(
             max_seq_len=config['max_seq_len'],
             batch_size=config['batch_size'],
             vocab_size=config['vocab_size'],  # Top K BPE tokens
             num_workers=config.get('num_workers', 0),
             dataset=dataset_name,
+            include_test=True,  # Include test set for final evaluation
         )
 
     config['vocab_size'] = actual_vocab_size
@@ -1744,17 +1837,27 @@ def run_single_experiment(
             print("✓ PURE FEP TRAINING COMPLETE!")
             print("="*70)
 
-            # Final metrics
+            # Final validation metrics
             final_ppl = best_val_ppl
             random_ppl = actual_vocab_size
             improvement = random_ppl / final_ppl if final_ppl > 0 else 0
 
-            print(f"\nFinal Results:")
+            print(f"\nValidation Results:")
             print(f"  Best Val PPL: {final_ppl:.2f}")
             print(f"  Random PPL:   {random_ppl:.0f}")
             print(f"  Improvement:  {improvement:.1f}x better!")
 
-            return {
+            # Run test set evaluation if test loader is available
+            test_metrics = None
+            if test_loader is not None:
+                test_metrics = run_test_evaluation(
+                    model=model,
+                    test_loader=test_loader,
+                    device=device,
+                    vocab_size=actual_vocab_size,
+                )
+
+            result = {
                 'ffn_mode': 'pure_fep',
                 'pure_fep': True,
                 'final_loss': math.log(final_ppl) if final_ppl > 0 else float('inf'),
@@ -1765,6 +1868,15 @@ def run_single_experiment(
                 'vocab_size': actual_vocab_size,
                 'checkpoint': str(exp_checkpoint_dir / 'best_model.pt'),
             }
+
+            # Add test metrics if available
+            if test_metrics is not None:
+                result['test_loss'] = test_metrics['test_loss']
+                result['test_ppl'] = test_metrics['test_ppl']
+                result['test_bpc'] = test_metrics['test_bpc']
+                result['test_improvement'] = test_metrics['improvement']
+
+            return result
 
         except KeyboardInterrupt:
             print("\n\n" + "="*70)
@@ -1841,7 +1953,7 @@ def run_single_experiment(
             # vs random baseline
             random_ppl = actual_vocab_size
             improvement = random_ppl / final_metrics['perplexity']
-            print(f"\nImprovement over random:")
+            print(f"\nValidation improvement over random:")
             print(f"  Random:     {random_ppl:.0f}")
             print(f"  Model:      {final_metrics['perplexity']:.2f}")
             print(f"  Factor:     {improvement:.1f}x better!")
@@ -1850,8 +1962,18 @@ def run_single_experiment(
             final_ckpt = trainer.save_checkpoint(is_best=True)
             print(f"\n✓ Saved: {final_ckpt}")
 
+            # Run test set evaluation if test loader is available
+            test_metrics = None
+            if test_loader is not None:
+                test_metrics = run_test_evaluation(
+                    model=model,
+                    test_loader=test_loader,
+                    device=device,
+                    vocab_size=actual_vocab_size,
+                )
+
             # Return metrics
-            return {
+            result = {
                 'ffn_mode': ffn_mode,
                 'pure_fep': False,
                 'final_loss': final_metrics['loss'],
@@ -1862,6 +1984,15 @@ def run_single_experiment(
                 'vocab_size': actual_vocab_size,
                 'checkpoint': str(final_ckpt),
             }
+
+            # Add test metrics if available
+            if test_metrics is not None:
+                result['test_loss'] = test_metrics['test_loss']
+                result['test_ppl'] = test_metrics['test_ppl']
+                result['test_bpc'] = test_metrics['test_bpc']
+                result['test_improvement'] = test_metrics['improvement']
+
+            return result
 
         except KeyboardInterrupt:
             print("\n\n" + "="*70)
