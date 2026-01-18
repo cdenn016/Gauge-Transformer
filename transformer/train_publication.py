@@ -276,6 +276,7 @@ VFE_EM_CONFIG = {
     'log_interval': 50,
     'eval_interval': 500,
     'checkpoint_interval': 5000,
+    'semantic_analysis_interval': 500,
     'patience': 5,
 
     # =================================================================
@@ -324,7 +325,7 @@ VFE_EM_CONFIG = {
     'pos_encoding_scale': 0.3,
     'use_prior_bank': True,
 
-    'semantic_analysis_interval': 500,
+    
    
 }
 
