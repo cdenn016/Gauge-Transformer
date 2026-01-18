@@ -910,18 +910,18 @@ This semantic organization in gauge frames provides evidence that the geometric 
 \subsubsection{Why Gauge Frames Encode Semantics: The $AB^\top \sim \Omega$ Connection}
 \label{sec:ab_omega}
 
-The emergence of semantic structure in gauge frames is not accidental but follows from a precise mathematical relationship between gauge-theoretic and standard transformer attention. In companion theoretical work (under review), we derive that standard transformer attention emerges from the gauge framework under three successive limits: (1) deterministic beliefs ($\Sigma_i \to 0$), (2) flat bundle ($\Omega_{ij} = \Omega$ for all pairs), and (3) learned projections.
+The emergence of semantic structure in gauge frames is not accidental but follows from a precise mathematical relationship between gauge-theoretic and standard transformer attention. In companion theoretical work (under review), we derive that standard transformer attention emerges from the gauge framework under three successive limits: (1) isotropic covariances ($\Sigma_i = \sigma^2 I$), (2) flat bundle ($\Omega_{ij} = \Omega$ for all pairs), and (3) learned projections.
 
 Under these limits, the attention compatibility score reduces to:
 \begin{equation}
-s_{ij} = D_{\mathrm{KL}}(q_i \| \Omega q_j) \to \frac{1}{2\sigma^2}\|\mu_i - \Omega\mu_j\|^2 \to \frac{1}{\sigma^2}\mu_i^\top \Omega \mu_j + O(1),
+s_{ij} = D_{\mathrm{KL}}(q_i \| \Omega q_j) \to \frac{1}{2}\|\mu_i - \Omega\mu_j\|^2 \to \mu_i^\top \Omega \mu_j + O(1),
 \end{equation}
-where the final form emerges after softmax cancellation of query-independent terms. Defining learned projection matrices $A, B \in \mathbb{R}^{d \times d_k}$ such that
+where the final form emerges after softmax cancellation of query-independent terms (with scaling absorbed into temperature). Defining learned projection matrices $A, B \in \mathbb{R}^{d \times d_k}$ such that
 \begin{equation}
-AB^\top = \frac{1}{\sigma^2} \Omega,
+AB^\top \propto \Omega,
 \label{eq:ab_omega}
 \end{equation}
-we recover the standard dot-product attention: $Q_i K_j^\top = \mu_i^\top A B^\top \mu_j = \frac{1}{\sigma^2}\mu_i^\top \Omega \mu_j$, which yields the familiar $\mathrm{softmax}(QK^\top/\sqrt{d_k})V$ after temperature scaling.
+we recover the standard dot-product attention: $Q_i K_j^\top = \mu_i^\top A B^\top \mu_j \propto \mu_i^\top \Omega \mu_j$, which yields the familiar $\mathrm{softmax}(QK^\top/\sqrt{d_k})V$ after temperature scaling.
 
 This factorization has a profound implication: \textbf{whatever semantic comparison structure standard transformers learn in $W_Q W_K^\top$, the gauge framework must encode in $\Omega_{ij}$}. Since the parallel transport operator $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$ is constructed from gauge frames, the gauge frames must encode semantic structure to enable meaningful attention comparisons.
 
@@ -1174,10 +1174,10 @@ In the general formulation, each agent $i$ maintains a Gaussian belief $q_i = \m
 
 We impose three simplifying assumptions:
 
-\paragraph{Limit 1: Deterministic beliefs ($\Sigma_i \to 0$).}
-With isotropic covariances $\Sigma_i = \Sigma_j = \sigma^2 I$, the KL divergence simplifies to a squared Euclidean distance:
+\paragraph{Limit 1: Isotropic covariances ($\Sigma_i = \sigma^2 I$).}
+With shared isotropic covariances, the KL divergence simplifies to a squared Euclidean distance (up to scaling):
 \begin{equation}
-D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j) \to \frac{1}{2\sigma^2}\|\mu_i - \Omega_{ij}\mu_j\|^2.
+D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j) \propto \|\mu_i - \Omega_{ij}\mu_j\|^2.
 \end{equation}
 
 \paragraph{Limit 2: Flat bundle ($\Omega_{ij} = \Omega$).}
@@ -1193,40 +1193,36 @@ We absorb the gauge structure into learned projection matrices.
 
 Expanding the compatibility score under these limits:
 \begin{equation}
-s_{ij} = \frac{1}{2\sigma^2}\|\mu_i - \Omega\mu_j\|^2 = \frac{1}{2\sigma^2}\|\mu_i\|^2 + \frac{1}{2\sigma^2}\|\Omega\mu_j\|^2 - \frac{1}{\sigma^2}\mu_i^\top \Omega \mu_j.
+s_{ij} \propto \|\mu_i - \Omega\mu_j\|^2 = \|\mu_i\|^2 + \|\Omega\mu_j\|^2 - 2\mu_i^\top \Omega \mu_j.
 \end{equation}
 
 Under softmax normalization:
 \begin{itemize}
-    \item The query-dependent term $\frac{1}{2\sigma^2}\|\mu_i\|^2$ cancels (independent of $j$)
-    \item The key-dependent term $\frac{1}{2\sigma^2}\|\Omega\mu_j\|^2$ approximately cancels due to high-dimensional concentration or layer normalization
+    \item The query-dependent term $\|\mu_i\|^2$ cancels (independent of $j$)
+    \item The key-dependent term $\|\Omega\mu_j\|^2$ approximately cancels due to high-dimensional concentration or layer normalization
 \end{itemize}
 
-The dominant contribution is the bilinear term $\frac{1}{\sigma^2}\mu_i^\top \Omega \mu_j$.
+The dominant contribution is the bilinear term $\mu_i^\top \Omega \mu_j$.
 
 \subsection{Factorization into Query-Key Products}
 
 We define learned matrices $A, B \in \mathbb{R}^{d \times d_k}$ such that:
 \begin{equation}
-AB^\top = \frac{1}{\sigma^2} \Omega.
+AB^\top \propto \Omega.
 \end{equation}
 
-Such factorizations always exist (e.g., via SVD). Defining queries and keys:
+Such factorizations always exist (e.g., via SVD), with scaling absorbed into the matrices. Defining queries and keys:
 \begin{equation}
 Q_i = \mu_i^\top A, \qquad K_j = \mu_j^\top B,
 \end{equation}
 we obtain:
 \begin{equation}
-Q_i K_j^\top = \mu_i^\top A B^\top \mu_j = \frac{1}{\sigma^2}\mu_i^\top \Omega \mu_j.
+Q_i K_j^\top = \mu_i^\top A B^\top \mu_j \propto \mu_i^\top \Omega \mu_j.
 \end{equation}
 
 \subsection{Temperature Scaling and Final Form}
 
-Normalizing by $\sqrt{d_k}$ to produce $O(1)$ pre-softmax logits identifies the natural temperature:
-\begin{equation}
-\tau = \sigma^2\sqrt{d_k},
-\end{equation}
-encoding both belief uncertainty ($\sigma^2$) and embedding dimension ($d_k$).
+Normalizing by $\sqrt{d_k}$ to produce $O(1)$ pre-softmax logits, with all scaling factors (including the original covariance $\sigma^2$) absorbed into the temperature $\tau$ and learned projections.
 
 The attention weights become:
 \begin{equation}
@@ -1241,12 +1237,12 @@ exactly recovering standard transformer attention. With value projection $V_j = 
 
 This derivation establishes that standard transformer attention is the \emph{degenerate limit} of gauge-theoretic attention when:
 \begin{enumerate}
-    \item Beliefs collapse to point estimates (no uncertainty)
+    \item Covariances are isotropic (scaling absorbed into temperature)
     \item The gauge bundle is trivial (no position-dependent frame structure)
     \item Gauge transport is absorbed into learned projections
 \end{enumerate}
 
-The key insight is Equation~\eqref{eq:ab_omega}: the learned $W_Q W_K^\top$ in standard transformers plays the role of $\Omega/\sigma^2$---the (scaled) gauge transport operator. This explains why gauge frames encode semantic structure: they are learning the geometric relationships that standard transformers encode in learned projections.
+The key insight is Equation~\eqref{eq:ab_omega}: the learned $W_Q W_K^\top$ in standard transformers plays the role of $\Omega$---the gauge transport operator (up to scaling). This explains why gauge frames encode semantic structure: they are learning the geometric relationships that standard transformers encode in learned projections.
 
 \bibliographystyle{plainnat}
 \bibliography{references}
