@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 """
 Created on Thu Dec 11 19:24:37 2025
@@ -98,192 +99,6 @@ from transformer.experimental.pure_fep_transformer import (
     PureFEPTransformer,
     PureFEPConfig as PureFEPTransformerConfig,
 )
-
-
-def get_git_info() -> Dict[str, str]:
-    """Get current git commit info."""
-    try:
-        commit = subprocess.check_output(
-            ['git', 'rev-parse', 'HEAD'],
-            stderr=subprocess.DEVNULL
-        ).decode('utf-8').strip()
-
-        branch = subprocess.check_output(
-            ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
-            stderr=subprocess.DEVNULL
-        ).decode('utf-8').strip()
-
-        # Check for uncommitted changes
-        status = subprocess.check_output(
-            ['git', 'status', '--porcelain'],
-            stderr=subprocess.DEVNULL
-        ).decode('utf-8').strip()
-        dirty = len(status) > 0
-
-        return {
-            'commit': commit,
-            'branch': branch,
-            'dirty': dirty,
-        }
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return {'commit': 'unknown', 'branch': 'unknown', 'dirty': False}
-
-
-def get_system_info() -> Dict[str, Any]:
-    """Get system/hardware information."""
-    info = {
-        'platform': platform.platform(),
-        'python_version': platform.python_version(),
-        'torch_version': torch.__version__,
-        'cuda_available': torch.cuda.is_available(),
-    }
-
-    if torch.cuda.is_available():
-        info['cuda_version'] = torch.version.cuda
-        info['gpu_name'] = torch.cuda.get_device_name(0)
-        info['gpu_count'] = torch.cuda.device_count()
-        info['gpu_memory_gb'] = torch.cuda.get_device_properties(0).total_memory / 1e9
-
-    return info
-
-
-def run_test_evaluation(
-    model: torch.nn.Module,
-    test_loader: torch.utils.data.DataLoader,
-    device: torch.device,
-    vocab_size: int,
-) -> Dict[str, float]:
-    """
-    Run final evaluation on test set.
-
-    This should be called at the end of training to get the final test metrics
-    that will be reported in publications.
-
-    Args:
-        model: Trained model
-        test_loader: Test set dataloader
-        device: Device to run evaluation on
-        vocab_size: Vocabulary size for random baseline comparison
-
-    Returns:
-        Dictionary with test metrics:
-            - test_loss: Cross-entropy loss on test set
-            - test_ppl: Perplexity on test set
-            - test_bpc: Bits per character
-            - random_ppl: Random baseline perplexity
-            - improvement: Factor improvement over random
-    """
-    print("\n" + "="*70)
-    print("FINAL TEST SET EVALUATION")
-    print("="*70)
-
-    model.eval()
-    total_loss = 0.0
-    total_tokens = 0
-
-    with torch.no_grad():
-        for batch_idx, (input_ids, target_ids) in enumerate(test_loader):
-            input_ids = input_ids.to(device)
-            target_ids = target_ids.to(device)
-
-            # Forward pass
-            if hasattr(model, 'forward'):
-                output = model(input_ids)
-                if isinstance(output, dict):
-                    logits = output.get('logits', output.get('output'))
-                elif isinstance(output, tuple):
-                    logits = output[0]
-                else:
-                    logits = output
-            else:
-                logits = model(input_ids)
-
-            # Compute cross-entropy loss
-            loss = F.cross_entropy(
-                logits.view(-1, vocab_size),
-                target_ids.view(-1),
-                reduction='sum'
-            )
-            total_loss += loss.item()
-            total_tokens += target_ids.numel()
-
-            # Progress indicator
-            if (batch_idx + 1) % 100 == 0:
-                print(f"  Evaluated {batch_idx + 1}/{len(test_loader)} batches...")
-
-    # Compute metrics
-    test_ce = total_loss / total_tokens if total_tokens > 0 else float('inf')
-    test_ppl = math.exp(min(test_ce, 20))  # Clamp to prevent overflow
-    test_bpc = test_ce / math.log(2)
-    random_ppl = vocab_size
-    improvement = random_ppl / test_ppl if test_ppl > 0 else 0
-
-    print(f"\nTest Set Results:")
-    print(f"  Cross-entropy loss: {test_ce:.4f}")
-    print(f"  Perplexity:         {test_ppl:.2f}")
-    print(f"  Bits per character: {test_bpc:.3f}")
-    print(f"  Random baseline:    {random_ppl:.0f}")
-    print(f"  Improvement:        {improvement:.1f}x better than random")
-    print("="*70 + "\n")
-
-    model.train()
-
-    return {
-        'test_loss': test_ce,
-        'test_ppl': test_ppl,
-        'test_bpc': test_bpc,
-        'random_ppl': random_ppl,
-        'improvement': improvement,
-    }
-
-
-def save_experiment_config(
-    config: Dict[str, Any],
-    ffn_mode: str,
-    checkpoint_dir: Path,
-    args: argparse.Namespace = None,
-) -> Path:
-    """
-    Save complete experiment configuration to JSON.
-
-    Args:
-        config: Model/training configuration dictionary
-        ffn_mode: FFN mode being used
-        checkpoint_dir: Directory to save config
-        args: Command-line arguments (if available)
-
-    Returns:
-        Path to saved config file
-    """
-    experiment_config = {
-        # Metadata
-        'experiment_id': datetime.now().strftime('%Y%m%d_%H%M%S'),
-        'timestamp': datetime.now().isoformat(),
-        'ffn_mode': ffn_mode,
-
-        # Full model/training config
-        'config': config,
-
-        # Command-line args (if available)
-        'args': vars(args) if args else None,
-
-        # Git info for reproducibility
-        'git': get_git_info(),
-
-        # System info
-        'system': get_system_info(),
-    }
-
-    # Save to checkpoint directory
-    config_path = checkpoint_dir / 'experiment_config.json'
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(config_path, 'w') as f:
-        json.dump(experiment_config, f, indent=2, default=str)
-
-    print(f"📋 Saved experiment config: {config_path}")
-
-    return config_path
 
 
 # ============================================================================
@@ -667,6 +482,194 @@ PURE_FEP_CONFIG = {
     'rg_auto_cluster': True,
     'rg_n_clusters': None,
 }
+
+
+def get_git_info() -> Dict[str, str]:
+    """Get current git commit info."""
+    try:
+        commit = subprocess.check_output(
+            ['git', 'rev-parse', 'HEAD'],
+            stderr=subprocess.DEVNULL
+        ).decode('utf-8').strip()
+
+        branch = subprocess.check_output(
+            ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+            stderr=subprocess.DEVNULL
+        ).decode('utf-8').strip()
+
+        # Check for uncommitted changes
+        status = subprocess.check_output(
+            ['git', 'status', '--porcelain'],
+            stderr=subprocess.DEVNULL
+        ).decode('utf-8').strip()
+        dirty = len(status) > 0
+
+        return {
+            'commit': commit,
+            'branch': branch,
+            'dirty': dirty,
+        }
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return {'commit': 'unknown', 'branch': 'unknown', 'dirty': False}
+
+
+def get_system_info() -> Dict[str, Any]:
+    """Get system/hardware information."""
+    info = {
+        'platform': platform.platform(),
+        'python_version': platform.python_version(),
+        'torch_version': torch.__version__,
+        'cuda_available': torch.cuda.is_available(),
+    }
+
+    if torch.cuda.is_available():
+        info['cuda_version'] = torch.version.cuda
+        info['gpu_name'] = torch.cuda.get_device_name(0)
+        info['gpu_count'] = torch.cuda.device_count()
+        info['gpu_memory_gb'] = torch.cuda.get_device_properties(0).total_memory / 1e9
+
+    return info
+
+
+def run_test_evaluation(
+    model: torch.nn.Module,
+    test_loader: torch.utils.data.DataLoader,
+    device: torch.device,
+    vocab_size: int,
+) -> Dict[str, float]:
+    """
+    Run final evaluation on test set.
+
+    This should be called at the end of training to get the final test metrics
+    that will be reported in publications.
+
+    Args:
+        model: Trained model
+        test_loader: Test set dataloader
+        device: Device to run evaluation on
+        vocab_size: Vocabulary size for random baseline comparison
+
+    Returns:
+        Dictionary with test metrics:
+            - test_loss: Cross-entropy loss on test set
+            - test_ppl: Perplexity on test set
+            - test_bpc: Bits per character
+            - random_ppl: Random baseline perplexity
+            - improvement: Factor improvement over random
+    """
+    print("\n" + "="*70)
+    print("FINAL TEST SET EVALUATION")
+    print("="*70)
+
+    model.eval()
+    total_loss = 0.0
+    total_tokens = 0
+
+    with torch.no_grad():
+        for batch_idx, (input_ids, target_ids) in enumerate(test_loader):
+            input_ids = input_ids.to(device)
+            target_ids = target_ids.to(device)
+
+            # Forward pass
+            if hasattr(model, 'forward'):
+                output = model(input_ids)
+                if isinstance(output, dict):
+                    logits = output.get('logits', output.get('output'))
+                elif isinstance(output, tuple):
+                    logits = output[0]
+                else:
+                    logits = output
+            else:
+                logits = model(input_ids)
+
+            # Compute cross-entropy loss
+            loss = F.cross_entropy(
+                logits.view(-1, vocab_size),
+                target_ids.view(-1),
+                reduction='sum'
+            )
+            total_loss += loss.item()
+            total_tokens += target_ids.numel()
+
+            # Progress indicator
+            if (batch_idx + 1) % 100 == 0:
+                print(f"  Evaluated {batch_idx + 1}/{len(test_loader)} batches...")
+
+    # Compute metrics
+    test_ce = total_loss / total_tokens if total_tokens > 0 else float('inf')
+    test_ppl = math.exp(min(test_ce, 20))  # Clamp to prevent overflow
+    test_bpc = test_ce / math.log(2)
+    random_ppl = vocab_size
+    improvement = random_ppl / test_ppl if test_ppl > 0 else 0
+
+    print(f"\nTest Set Results:")
+    print(f"  Cross-entropy loss: {test_ce:.4f}")
+    print(f"  Perplexity:         {test_ppl:.2f}")
+    print(f"  Bits per character: {test_bpc:.3f}")
+    print(f"  Random baseline:    {random_ppl:.0f}")
+    print(f"  Improvement:        {improvement:.1f}x better than random")
+    print("="*70 + "\n")
+
+    model.train()
+
+    return {
+        'test_loss': test_ce,
+        'test_ppl': test_ppl,
+        'test_bpc': test_bpc,
+        'random_ppl': random_ppl,
+        'improvement': improvement,
+    }
+
+
+def save_experiment_config(
+    config: Dict[str, Any],
+    ffn_mode: str,
+    checkpoint_dir: Path,
+    args: argparse.Namespace = None,
+) -> Path:
+    """
+    Save complete experiment configuration to JSON.
+
+    Args:
+        config: Model/training configuration dictionary
+        ffn_mode: FFN mode being used
+        checkpoint_dir: Directory to save config
+        args: Command-line arguments (if available)
+
+    Returns:
+        Path to saved config file
+    """
+    experiment_config = {
+        # Metadata
+        'experiment_id': datetime.now().strftime('%Y%m%d_%H%M%S'),
+        'timestamp': datetime.now().isoformat(),
+        'ffn_mode': ffn_mode,
+
+        # Full model/training config
+        'config': config,
+
+        # Command-line args (if available)
+        'args': vars(args) if args else None,
+
+        # Git info for reproducibility
+        'git': get_git_info(),
+
+        # System info
+        'system': get_system_info(),
+    }
+
+    # Save to checkpoint directory
+    config_path = checkpoint_dir / 'experiment_config.json'
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(config_path, 'w') as f:
+        json.dump(experiment_config, f, indent=2, default=str)
+
+    print(f"📋 Saved experiment config: {config_path}")
+
+    return config_path
+
+
 
 
 class PublicationMetricsTracker:
