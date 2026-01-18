@@ -1,12 +1,5 @@
 # -*- coding: utf-8 -*-
 """
-Created on Wed Dec 31 12:53:25 2025
-
-@author: chris and christine
-"""
-
-# -*- coding: utf-8 -*-
-"""
 Created on Thu Dec 11 19:24:37 2025
 
 @author: chris and christine
@@ -328,22 +321,25 @@ DEFAULT_DATASET = 'wikitext-103'  # 'wikitext-2' (~2M tokens) or 'wikitext-103' 
 # =============================================================================
 STANDARD_CONFIG = {
     # Model architecture
-    'vocab_size': 50257,          # Will be overridden by tokenizer
-    'embed_dim': 128,             # Embedding dimension
-    'n_layers': 6,                # Transformer depth
-    'hidden_dim': 512,            # 4×embed_dim (standard ratio)
-    'max_seq_len': 128,           # Context length
-    'n_heads': 4,                 # Number of attention heads
+    'vocab_size': 50257,
+    'embed_dim': 320,             # Increased from 256
+    'n_layers': 6,
+    'hidden_dim': 1280,           # 4×embed_dim (standard ratio)
+    'max_seq_len': 128,
+    'n_heads': 8,                 # 320/8 = 40 per head ✓
+
+
+   
 
     # Training
-    'batch_size': 24,
+    'batch_size': 3,
     'use_amp': False,
-    'num_workers': 4,
-    'max_steps': 20000,
-    'warmup_steps': 25,
+    'num_workers': 6,
+    'max_steps': 200000,
+    'warmup_steps': 50,
 
     # Standard transformer settings
-    'ffn_mode': 'learned',        # Learned MLP (NOT VFE)
+    'ffn_mode': 'standard',        # Learned MLP (NOT VFE)
     'attention_type': 'standard', # Dot-product attention (NOT KL)
     'pos_encoding_mode': 'learned',
     'tie_embeddings': True,
@@ -355,10 +351,10 @@ STANDARD_CONFIG = {
     'use_positional_embedding': True,
 
     # Learning rates (standard Adam rates)
-    'mu_lr': 0.001,
-    'sigma_lr': 0.001,
-    'phi_lr': 0.001,
-    'ffn_lr': 0.001,
+    'mu_lr': 3e-4,              #1e-3 - 1e-4 or it wont work well
+    'sigma_lr': 0.0001,
+    'phi_lr': 0.0001,
+    'ffn_lr': 3e-4,
 
     # Free energy weights (NOT USED in standard mode)
     'alpha': 0,
@@ -373,7 +369,7 @@ STANDARD_CONFIG = {
 
     # Logging
     'log_interval': 1000,
-    'eval_interval': 25000,
+    'eval_interval': 5000,
     'checkpoint_interval': 50000,
     'patience': 5,
 
@@ -388,6 +384,8 @@ STANDARD_CONFIG = {
     'irrep_spec': [('ℓ0', 5, 1)],
     'compute_rg_metrics': False,
 }
+
+
 
 # =============================================================================
 # CONFIG 2: VFE_EM (VFE with EM-step dynamics, uses backprop)
@@ -407,19 +405,19 @@ SEED = 6
 VFE_EM_CONFIG = {
     # Model architecture
     'vocab_size': 50257,          # Will be overridden by tokenizer
-    'embed_dim': 30,              # Embedding dimension K
+    'embed_dim': 100,              # Embedding dimension K
     'n_layers': 1,                # Transformer depth
     'hidden_dim': 508,            # Only used if ffn_mode='learned'
     'max_seq_len': 128,           # Context length N
 
     # Training
-    'batch_size': 6,
+    'batch_size': 2,
     'use_amp': False,             # FP32 for precision
-    'num_workers': 4,
-    'max_steps': 5000,
+    'num_workers': 6,
+    'max_steps': 200000,
     'warmup_steps': 50,
 
-    # VFE transformer settings
+    # VFE transformer settings 
     'ffn_mode': 'VFE_dynamic',    # VFE EM-step dynamics
     'mask_self_attention': True,  # Prevent attention collapse
     'tie_embeddings': False,
@@ -436,8 +434,8 @@ VFE_EM_CONFIG = {
     'alibi_slope': None,
 
     # Temperature scaling (κ ∝ K for stable attention)
-    'kappa_beta_auto_scale': True,
-    'kappa_beta_base': 0.25,
+    'kappa_beta_auto_scale': False,
+    'kappa_beta_base': 1,
     'kappa_beta_k_ref': 11,
 
     # Embedding initialization
@@ -451,29 +449,33 @@ VFE_EM_CONFIG = {
     'ffn_chunk_size': 64,
 
     # Learning rates
-    'mu_lr': 0.01,
-    'sigma_lr': 0.005,
-    'phi_lr': 0.005,
-    'ffn_lr': 0.01,
+    'mu_lr':     0.01,
+    'sigma_lr':  0.0025,
+    'phi_lr':    0.0025,
+    'ffn_lr':    0.01 ,
 
     # Free energy weights
-    'alpha': 1,                   # Self-consistency
-    'beta': 1,                    # Belief alignment
+    'alpha':        1,                   # Self-consistency
+    'beta':         1,                    # Belief alignment
     'lambda_gamma': 0,            # Model alignment
-    'kappa_gamma': 1.0,
+    'kappa_gamma':  1.0,
 
     # Regularization
     'weight_decay': 0.01,
-    'dropout': 0.1,
-    'grad_clip': 1.0,
+    'dropout':      0.1,
+    'grad_clip':    1.0,
+    
+    'use_layernorm': True,      # Critical!
+    'use_residual':  True,       # Gradient flow
+    'use_dropout':   True,        
 
     # Logging
-    'log_interval': 100,
-    'eval_interval': 1000,
+    'log_interval': 50,
+    'eval_interval': 500,
     'checkpoint_interval': 5000,
     'patience': 5,
 
-        # =================================================================
+    # =================================================================
     # GAUGE GROUP SELECTION
     # =================================================================
     # SO3: Standard SO(3) gauge group with 3 generators
@@ -483,8 +485,19 @@ VFE_EM_CONFIG = {
     #      embed_dim = mult * N for direct sums of fundamental
     # =================================================================
     'gauge_group': 'SON',  # 'SO3' or 'SON'
-    'gauge_dim': 10,        # N for SO(N) - only used when gauge_group='SON'
+    'gauge_dim': 5,        # N for SO(N) - only used when gauge_group='SON'
     'use_multi_irrep': True,  # Use block-diagonal generators from irrep_spec
+    
+    # P-FLOW: EMA update of token embeddings toward successful beliefs
+    # This is the key learning mechanism from fep_transformer.py
+    'use_p_flow': False,           # Enable P-flow updates on token embeddings
+    'p_flow_ema_decay': 0.99,     # EMA decay (higher = slower update, 0.99 = 1% per step)
+    
+    # DELTA RULE: Backprop-free learning for W_out
+    # If True, W_out is updated via delta rule instead of backpropagation
+    # Combined with P-flow, this makes learning fully backprop-free!
+    'use_delta_rule_w_out': False,  # Enable delta rule for W_out (instead of backprop)
+    'delta_rule_lr': 0.001,         # Learning rate for delta rule updates
 
 
     # Irrep structure (for K=255)
@@ -499,29 +512,18 @@ VFE_EM_CONFIG = {
      # ('ℓ6', 1, 13),
      # ('ℓ7', 1, 15),
       # ('ℓ50', 1, 101),
-      ('fund', 3, 10)  #For SO(8) 
+      ('fund', 20, 5)  #For SO(8) 
      # ('fund', 10, 5),   # SO(5)
     ],
     # Attention
     'attention_pattern': 'full',
-    'attention_window': 24,
+    'attention_window': 128,
     'pos_encoding_scale': 0.3,
     'use_prior_bank': True,
 
     # Not used in VFE_EM mode
     'ffn_pure_fep_mode': False,
     'ffn_prior_lr': 0.01,
-
-    # P-FLOW: EMA update of token embeddings toward successful beliefs
-    # This is the key learning mechanism from fep_transformer.py
-    'use_p_flow': True,           # Enable P-flow updates on token embeddings
-    'p_flow_ema_decay': 0.99,     # EMA decay (higher = slower update, 0.99 = 1% per step)
-
-    # DELTA RULE: Backprop-free learning for W_out
-    # If True, W_out is updated via delta rule instead of backpropagation
-    # Combined with P-flow, this makes learning fully backprop-free!
-    'use_delta_rule_w_out': False,  # Enable delta rule for W_out (instead of backprop)
-    'delta_rule_lr': 0.001,         # Learning rate for delta rule updates
 
     # RG metrics (optional)
     'compute_rg_metrics': False,
@@ -839,8 +841,7 @@ class PublicationTrainer(FastTrainer):
         CRITICAL FIXES (based on visualization analysis):
         1. Save PER-HEAD attention (not averaged - averaging destroys patterns!)
         2. Show WHAT sequence is being visualized (token IDs + decoded text)
-        3. Save both individual heads AND averaged comparison
-        4. Label each head with its irrep type (ℓ0, ℓ1, ℓ2, etc.)
+        3. Label each head with its irrep type (ℓ0, ℓ1, ℓ2, etc.)
         """
         try:
             import matplotlib
@@ -921,48 +922,7 @@ class PublicationTrainer(FastTrainer):
                                    dpi=100, bbox_inches='tight')
                         plt.close(fig)
 
-                    # ============================================================
-                    # SAVE COMPARISON: Individual Heads vs Averaged
-                    # ============================================================
-                    fig = plt.figure(figsize=(16, 8))
-                    gs = GridSpec(2, n_heads, figure=fig, hspace=0.3, wspace=0.3)
-
-                    # Top row: Individual heads
-                    for head_idx in range(n_heads):
-                        ax = fig.add_subplot(gs[0, head_idx])
-                        attn_head = beta_np[head_idx]
-                        attn_plot = attn_head.copy()
-                        np.fill_diagonal(attn_plot, np.nan)
-                        attn_plot = np.log10(np.maximum(attn_plot, 1e-6))
-
-                        im = ax.imshow(attn_plot, cmap='viridis', aspect='auto', vmin=-3, vmax=0)
-
-                        irrep_label = head_labels[head_idx] if head_idx < len(head_labels) else f"H{head_idx}"
-                        ax.set_title(f'Head {head_idx} ({irrep_label})', fontsize=9)
-                        ax.set_xlabel('Key')
-                        ax.set_ylabel('Query')
-
-                    # Bottom row: Averaged (what old code was doing - shows the problem!)
-                    ax = fig.add_subplot(gs[1, :])
-                    attn_avg = beta_np.mean(axis=0)  # Average over heads
-                    attn_plot = attn_avg.copy()
-                    np.fill_diagonal(attn_plot, np.nan)
-                    attn_plot = np.log10(np.maximum(attn_plot, 1e-6))
-
-                    im = ax.imshow(attn_plot, cmap='viridis', aspect='auto', vmin=-3, vmax=0)
-
-                    ax.set_title(f'AVERAGED (old method)\n⚠️ Averaging destroys per-head patterns!',
-                                fontsize=11, fontweight='bold')
-                    ax.set_xlabel('Key Position')
-                    ax.set_ylabel('Query Position')
-                    plt.colorbar(im, ax=ax, label='log₁₀(β)')
-
-                    fig.suptitle(f'Attention Analysis: {seq_info}', fontsize=12, y=0.98)
-
-                    fig.savefig(save_dir / f'attention_step_{step:06d}_comparison.png',
-                               dpi=150, bbox_inches='tight')
-                    plt.close(fig)
-
+                    
                     # ============================================================
                     # LOG INFO
                     # ============================================================
