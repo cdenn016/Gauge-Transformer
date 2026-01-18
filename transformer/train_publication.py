@@ -1248,6 +1248,18 @@ class PublicationTrainer(FastTrainer):
             pbar = range(self.config.max_steps)
             use_tqdm = False
 
+        # Run initial gauge frame semantic analysis (step 0)
+        if self.pub_metrics:
+            try:
+                print("[Semantic] Running initial analysis (step 0)...")
+                self.pub_metrics.run_semantic_analysis(
+                    model=self.model,
+                    step=0,
+                    verbose=True,
+                )
+            except Exception as e:
+                print(f"[WARN] Initial semantic analysis failed: {e}")
+
         for step in pbar:
             self.global_step = step
             step_start = time.time()
