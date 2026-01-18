@@ -251,6 +251,11 @@ import sys
 - State errors and concerns plainly without excessive hedging
 - "This is wrong because X" not "This might potentially be slightly off"
 
+
+**minimize itemizations when working on manuscripts:**
+- utilize academic prose 
+- minimize the usage of bullet points, itemizations, lists, etc.
+
 **Push back:**
 - Challenge gaps in derivations, ask for justification
 - If a claim needs proof, ask for it
@@ -408,4 +413,7 @@ This is a **symmetry-based prior** implementing compression geometrically.
 - Active Inference: Friston et al.
 - Gauge Theory in ML: Bronstein et al.
 - Renormalization Group: Wilson, Kadanoff
+
 - Information Geometry: Amari
+
+

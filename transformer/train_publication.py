@@ -154,6 +154,96 @@ def get_system_info() -> Dict[str, Any]:
     return info
 
 
+def run_test_evaluation(
+    model: torch.nn.Module,
+    test_loader: torch.utils.data.DataLoader,
+    device: torch.device,
+    vocab_size: int,
+) -> Dict[str, float]:
+    """
+    Run final evaluation on test set.
+
+    This should be called at the end of training to get the final test metrics
+    that will be reported in publications.
+
+    Args:
+        model: Trained model
+        test_loader: Test set dataloader
+        device: Device to run evaluation on
+        vocab_size: Vocabulary size for random baseline comparison
+
+    Returns:
+        Dictionary with test metrics:
+            - test_loss: Cross-entropy loss on test set
+            - test_ppl: Perplexity on test set
+            - test_bpc: Bits per character
+            - random_ppl: Random baseline perplexity
+            - improvement: Factor improvement over random
+    """
+    print("\n" + "="*70)
+    print("FINAL TEST SET EVALUATION")
+    print("="*70)
+
+    model.eval()
+    total_loss = 0.0
+    total_tokens = 0
+
+    with torch.no_grad():
+        for batch_idx, (input_ids, target_ids) in enumerate(test_loader):
+            input_ids = input_ids.to(device)
+            target_ids = target_ids.to(device)
+
+            # Forward pass
+            if hasattr(model, 'forward'):
+                output = model(input_ids)
+                if isinstance(output, dict):
+                    logits = output.get('logits', output.get('output'))
+                elif isinstance(output, tuple):
+                    logits = output[0]
+                else:
+                    logits = output
+            else:
+                logits = model(input_ids)
+
+            # Compute cross-entropy loss
+            loss = F.cross_entropy(
+                logits.view(-1, vocab_size),
+                target_ids.view(-1),
+                reduction='sum'
+            )
+            total_loss += loss.item()
+            total_tokens += target_ids.numel()
+
+            # Progress indicator
+            if (batch_idx + 1) % 100 == 0:
+                print(f"  Evaluated {batch_idx + 1}/{len(test_loader)} batches...")
+
+    # Compute metrics
+    test_ce = total_loss / total_tokens if total_tokens > 0 else float('inf')
+    test_ppl = math.exp(min(test_ce, 20))  # Clamp to prevent overflow
+    test_bpc = test_ce / math.log(2)
+    random_ppl = vocab_size
+    improvement = random_ppl / test_ppl if test_ppl > 0 else 0
+
+    print(f"\nTest Set Results:")
+    print(f"  Cross-entropy loss: {test_ce:.4f}")
+    print(f"  Perplexity:         {test_ppl:.2f}")
+    print(f"  Bits per character: {test_bpc:.3f}")
+    print(f"  Random baseline:    {random_ppl:.0f}")
+    print(f"  Improvement:        {improvement:.1f}x better than random")
+    print("="*70 + "\n")
+
+    model.train()
+
+    return {
+        'test_loss': test_ce,
+        'test_ppl': test_ppl,
+        'test_bpc': test_bpc,
+        'random_ppl': random_ppl,
+        'improvement': improvement,
+    }
+
+
 def save_experiment_config(
     config: Dict[str, Any],
     ffn_mode: str,
@@ -421,6 +511,17 @@ VFE_EM_CONFIG = {
     # Not used in VFE_EM mode
     'ffn_pure_fep_mode': False,
     'ffn_prior_lr': 0.01,
+
+    # P-FLOW: EMA update of token embeddings toward successful beliefs
+    # This is the key learning mechanism from fep_transformer.py
+    'use_p_flow': True,           # Enable P-flow updates on token embeddings
+    'p_flow_ema_decay': 0.99,     # EMA decay (higher = slower update, 0.99 = 1% per step)
+
+    # DELTA RULE: Backprop-free learning for W_out
+    # If True, W_out is updated via delta rule instead of backpropagation
+    # Combined with P-flow, this makes learning fully backprop-free!
+    'use_delta_rule_w_out': False,  # Enable delta rule for W_out (instead of backprop)
+    'delta_rule_lr': 0.001,         # Learning rate for delta rule updates
 
     # RG metrics (optional)
     'compute_rg_metrics': False,
@@ -889,6 +990,13 @@ class PublicationTrainer(FastTrainer):
         # Check if using standard transformer (no VFE loss)
         is_standard = isinstance(self.model, StandardTransformerLM)
 
+        # Check if using delta rule for W_out (backprop-free)
+        use_delta_rule = getattr(self.config, 'use_delta_rule_w_out', False) and not is_standard
+
+        # If delta rule is enabled, exclude W_out from backprop
+        if use_delta_rule and hasattr(self.model, 'out_proj'):
+            self.model.out_proj.weight.requires_grad = False
+
         # Forward pass with full metrics (with optional AMP)
         if self.scaler is not None:
             # Mixed precision forward pass
@@ -963,6 +1071,48 @@ class PublicationTrainer(FastTrainer):
         if self.scheduler is not None:
             self.scheduler.step()
         self.optimizer.zero_grad()
+
+        # Re-enable requires_grad for W_out if it was disabled
+        if use_delta_rule and hasattr(self.model, 'out_proj'):
+            self.model.out_proj.weight.requires_grad = True
+
+        # =================================================================
+        # P-FLOW: EMA update of token embeddings toward successful beliefs
+        # =================================================================
+        # This is the key learning mechanism from fep_transformer.py
+        # After backprop updates W_out, P-flow updates token embeddings
+        # toward beliefs that predicted successfully (low CE)
+        use_p_flow = getattr(self.config, 'use_p_flow', False)
+        if use_p_flow and not is_standard and 'p_flow/mu_q' in full_metrics:
+            mu_beliefs = full_metrics['p_flow/mu_q']
+            ce_per_position = full_metrics['p_flow/ce_per_position']
+            ema_decay = getattr(self.config, 'p_flow_ema_decay', 0.99)
+
+            # Call P-flow update on the model
+            if hasattr(self.model, 'p_flow_update'):
+                self.model.p_flow_update(
+                    token_ids=input_ids,
+                    mu_beliefs=mu_beliefs,
+                    prediction_errors=ce_per_position,
+                    ema_decay=ema_decay,
+                )
+
+        # =================================================================
+        # DELTA RULE: Backprop-free update of W_out
+        # =================================================================
+        # Uses local learning rule: ΔW = η · (target - prediction) ⊗ μ^T
+        # Combined with P-flow, this makes learning fully backprop-free!
+        if use_delta_rule and 'p_flow/mu_q' in full_metrics:
+            mu_beliefs = full_metrics['p_flow/mu_q']
+            delta_lr = getattr(self.config, 'delta_rule_lr', 0.001)
+
+            # Call delta rule update on the model
+            if hasattr(self.model, 'delta_rule_update_w_out'):
+                self.model.delta_rule_update_w_out(
+                    mu_beliefs=mu_beliefs,
+                    targets=target_ids,
+                    lr=delta_lr,
+                )
 
         # Format comprehensive metrics
         metrics = {
@@ -1137,6 +1287,8 @@ class PublicationTrainer(FastTrainer):
                         train_metrics={
                             'loss': metrics['train_loss_total'],
                             'ce_loss': metrics['train_loss_ce'],
+                            'attention_entropy': metrics.get('attention_entropy', 0),
+                            'attention_concentration': metrics.get('attention_concentration', 0),
                         },
                         diagnostics=diagnostics,
                         grad_norms=grad_norms,
@@ -1336,8 +1488,10 @@ def run_single_experiment(
     else:
         use_char = (tokenizer_mode == 'char')
 
+    test_loader = None  # Will be set if available
     if use_char:
         print(f"Using CHARACTER-LEVEL tokenizer (vocab_size={config['vocab_size']})")
+        # Note: create_char_dataloaders doesn't support test set yet
         train_loader, val_loader, actual_vocab_size = create_char_dataloaders(
             max_seq_len=config['max_seq_len'],
             batch_size=config['batch_size'],
@@ -1345,12 +1499,13 @@ def run_single_experiment(
         )
     else:
         print(f"Using BPE tokenizer (vocab_size={config['vocab_size']})")
-        train_loader, val_loader, actual_vocab_size = create_dataloaders(
+        train_loader, val_loader, test_loader, actual_vocab_size = create_dataloaders(
             max_seq_len=config['max_seq_len'],
             batch_size=config['batch_size'],
             vocab_size=config['vocab_size'],  # Top K BPE tokens
             num_workers=config.get('num_workers', 0),
             dataset=dataset_name,
+            include_test=True,  # Include test set for final evaluation
         )
 
     config['vocab_size'] = actual_vocab_size
@@ -1527,7 +1682,13 @@ def run_single_experiment(
         # GPU optimizations
         use_amp=config.get('use_amp', False),
 
-       
+        # P-FLOW: EMA update of token embeddings toward successful beliefs
+        use_p_flow=config.get('use_p_flow', False),
+        p_flow_ema_decay=config.get('p_flow_ema_decay', 0.99),
+
+        # DELTA RULE: Backprop-free learning for W_out
+        use_delta_rule_w_out=config.get('use_delta_rule_w_out', False),
+        delta_rule_lr=config.get('delta_rule_lr', 0.001),
     )
 
     print("\n" + "="*70)
@@ -1544,7 +1705,21 @@ def run_single_experiment(
     print(f"  β (belief align):     {train_config.beta}")
     print(f"  γ (model align):      {train_config.lambda_gamma}")
 
-    
+    # P-FLOW configuration
+    if train_config.use_p_flow:
+        print(f"\nP-FLOW (EMA prior updates): ENABLED")
+        print(f"  EMA decay: {train_config.p_flow_ema_decay} ({(1-train_config.p_flow_ema_decay)*100:.1f}% update per step)")
+    else:
+        print(f"\nP-FLOW: disabled")
+
+    # DELTA RULE configuration
+    if train_config.use_delta_rule_w_out:
+        print(f"\nDELTA RULE (backprop-free W_out): ENABLED")
+        print(f"  Learning rate: {train_config.delta_rule_lr}")
+        if train_config.use_p_flow:
+            print(f"  ** FULLY BACKPROP-FREE MODE **")
+    else:
+        print(f"\nDELTA RULE: disabled (using backprop for W_out)")
 
     # =================================================================
     # Create Trainer (Pure FEP or Standard)
@@ -1662,17 +1837,27 @@ def run_single_experiment(
             print("✓ PURE FEP TRAINING COMPLETE!")
             print("="*70)
 
-            # Final metrics
+            # Final validation metrics
             final_ppl = best_val_ppl
             random_ppl = actual_vocab_size
             improvement = random_ppl / final_ppl if final_ppl > 0 else 0
 
-            print(f"\nFinal Results:")
+            print(f"\nValidation Results:")
             print(f"  Best Val PPL: {final_ppl:.2f}")
             print(f"  Random PPL:   {random_ppl:.0f}")
             print(f"  Improvement:  {improvement:.1f}x better!")
 
-            return {
+            # Run test set evaluation if test loader is available
+            test_metrics = None
+            if test_loader is not None:
+                test_metrics = run_test_evaluation(
+                    model=model,
+                    test_loader=test_loader,
+                    device=device,
+                    vocab_size=actual_vocab_size,
+                )
+
+            result = {
                 'ffn_mode': 'pure_fep',
                 'pure_fep': True,
                 'final_loss': math.log(final_ppl) if final_ppl > 0 else float('inf'),
@@ -1683,6 +1868,15 @@ def run_single_experiment(
                 'vocab_size': actual_vocab_size,
                 'checkpoint': str(exp_checkpoint_dir / 'best_model.pt'),
             }
+
+            # Add test metrics if available
+            if test_metrics is not None:
+                result['test_loss'] = test_metrics['test_loss']
+                result['test_ppl'] = test_metrics['test_ppl']
+                result['test_bpc'] = test_metrics['test_bpc']
+                result['test_improvement'] = test_metrics['improvement']
+
+            return result
 
         except KeyboardInterrupt:
             print("\n\n" + "="*70)
@@ -1759,7 +1953,7 @@ def run_single_experiment(
             # vs random baseline
             random_ppl = actual_vocab_size
             improvement = random_ppl / final_metrics['perplexity']
-            print(f"\nImprovement over random:")
+            print(f"\nValidation improvement over random:")
             print(f"  Random:     {random_ppl:.0f}")
             print(f"  Model:      {final_metrics['perplexity']:.2f}")
             print(f"  Factor:     {improvement:.1f}x better!")
@@ -1768,8 +1962,18 @@ def run_single_experiment(
             final_ckpt = trainer.save_checkpoint(is_best=True)
             print(f"\n✓ Saved: {final_ckpt}")
 
+            # Run test set evaluation if test loader is available
+            test_metrics = None
+            if test_loader is not None:
+                test_metrics = run_test_evaluation(
+                    model=model,
+                    test_loader=test_loader,
+                    device=device,
+                    vocab_size=actual_vocab_size,
+                )
+
             # Return metrics
-            return {
+            result = {
                 'ffn_mode': ffn_mode,
                 'pure_fep': False,
                 'final_loss': final_metrics['loss'],
@@ -1780,6 +1984,15 @@ def run_single_experiment(
                 'vocab_size': actual_vocab_size,
                 'checkpoint': str(final_ckpt),
             }
+
+            # Add test metrics if available
+            if test_metrics is not None:
+                result['test_loss'] = test_metrics['test_loss']
+                result['test_ppl'] = test_metrics['test_ppl']
+                result['test_bpc'] = test_metrics['test_bpc']
+                result['test_improvement'] = test_metrics['improvement']
+
+            return result
 
         except KeyboardInterrupt:
             print("\n\n" + "="*70)

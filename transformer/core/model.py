@@ -739,6 +739,86 @@ class GaugeTransformerLM(nn.Module):
 
         return n_params
 
+    # =========================================================================
+    # P-FLOW: EMA update of token embeddings toward successful beliefs
+    # =========================================================================
+    def p_flow_update(
+        self,
+        token_ids: torch.Tensor,           # (B, N) token IDs
+        mu_beliefs: torch.Tensor,          # (B, N, K) final beliefs after VFE
+        prediction_errors: torch.Tensor,   # (B, N) per-position CE loss
+        ema_decay: float = 0.99,           # EMA decay (higher = slower)
+    ):
+        """
+        P-flow: Update token embeddings toward successful beliefs.
+
+        This is the key learning mechanism from fep_transformer.py:
+        - After VFE dynamics produce final beliefs
+        - Update token priors (embeddings) toward beliefs that predicted well
+        - Uses EMA for stable, gradual updates
+
+        Args:
+            token_ids: (B, N) token indices
+            mu_beliefs: (B, N, K) final belief means after VFE
+            prediction_errors: (B, N) per-position CE loss
+            ema_decay: EMA decay rate (0.99 = slow, 0.9 = faster)
+        """
+        if hasattr(self.token_embed, 'update_embeddings_from_beliefs'):
+            self.token_embed.update_embeddings_from_beliefs(
+                token_ids=token_ids,
+                mu_beliefs=mu_beliefs,
+                prediction_errors=prediction_errors,
+                ema_decay=ema_decay,
+            )
+
+    def delta_rule_update_w_out(
+        self,
+        mu_beliefs: torch.Tensor,          # (B, N, K) final beliefs after VFE
+        targets: torch.Tensor,             # (B, N) target token IDs
+        lr: float = 0.001,                 # Learning rate for delta rule
+    ):
+        """
+        Delta rule update for W_out - backprop-free learning.
+
+        Instead of backpropagating through the full computation graph,
+        update W_out using the local delta rule (Widrow-Hoff):
+
+            ΔW = η · (target - prediction) ⊗ μ^T
+
+        This is biologically plausible and doesn't require storing
+        intermediate activations for backprop.
+
+        Args:
+            mu_beliefs: (B, N, K) final belief means after VFE
+            targets: (B, N) target token indices
+            lr: Learning rate for delta rule update
+        """
+        with torch.no_grad():
+            B, N, K = mu_beliefs.shape
+            V = self.config['vocab_size']
+
+            # Get current predictions: softmax(W_out @ mu)
+            logits = self.out_proj(mu_beliefs)  # (B, N, V)
+            predictions = F.softmax(logits, dim=-1)  # (B, N, V)
+
+            # One-hot encode targets
+            targets_onehot = F.one_hot(targets, num_classes=V).float()  # (B, N, V)
+
+            # Prediction error: (target - prediction)
+            error = targets_onehot - predictions  # (B, N, V)
+
+            # Delta rule: ΔW = error^T @ mu (outer product averaged over batch & positions)
+            # W_out shape is (V, K), so we need: (V, K) += (B*N, V)^T @ (B*N, K)
+            error_flat = error.reshape(-1, V)  # (B*N, V)
+            mu_flat = mu_beliefs.reshape(-1, K)  # (B*N, K)
+
+            # Compute delta: (V, K) = (V, B*N) @ (B*N, K)
+            delta_W = error_flat.t() @ mu_flat  # (V, K)
+            delta_W /= (B * N)  # Average over batch and positions
+
+            # Apply update to W_out
+            self.out_proj.weight.add_(lr * delta_W)
+
 
 # =============================================================================
 # Testing
