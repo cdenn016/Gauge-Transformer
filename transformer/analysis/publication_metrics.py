@@ -84,6 +84,8 @@ class TrainingSnapshot:
     tokens_per_sec: float = 0.0
     step_time: float = 0.0
     beta_loss: float = 0.0  # Belief alignment term
+    attention_entropy: float = 0.0  # How diffuse is attention?
+    attention_concentration: float = 0.0  # How peaked is attention?
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -154,6 +156,8 @@ class TrainingTracker:
             lr_current=lr,
             tokens_per_sec=tokens_per_sec,
             step_time=step_time,
+            attention_entropy=train_metrics.get('attention_entropy', 0),
+            attention_concentration=train_metrics.get('attention_concentration', 0),
         )
 
         self.history.append(snapshot)
@@ -566,6 +570,112 @@ class PublicationFigures:
 
         return fig
 
+    def plot_attention_entropy(
+        self,
+        tracker: TrainingTracker,
+        save_name: str = "attention_entropy",
+    ) -> plt.Figure:
+        """
+        Plot attention entropy over training.
+
+        This diagnostic shows whether attention sharpens (entropy decreases)
+        or stays uniform (entropy stays high) during training. For meaningful
+        attention patterns, entropy should decrease as the model learns to
+        focus on relevant tokens.
+
+        Uniform attention (high entropy) suggests the KL-divergence attention
+        mechanism may not be learning discriminative patterns.
+
+        Args:
+            tracker: TrainingTracker with recorded history
+            save_name: Filename for saved figure
+
+        Returns:
+            matplotlib Figure
+        """
+        history = tracker.history
+        steps = [s.step for s in history]
+        entropies = [s.attention_entropy for s in history]
+        concentrations = [s.attention_concentration for s in history]
+
+        if not steps or all(e == 0 for e in entropies):
+            raise ValueError("No attention entropy data to plot")
+
+        fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+        # (a) Attention Entropy over training
+        ax = axes[0]
+        ax.plot(steps, entropies, 'b-', linewidth=1.5, alpha=0.8)
+
+        # Add smoothed trend line
+        if len(steps) > 10:
+            window = min(len(steps) // 10, 50)
+            smoothed = np.convolve(entropies, np.ones(window)/window, mode='valid')
+            smooth_steps = steps[window-1:]
+            ax.plot(smooth_steps, smoothed, 'r-', linewidth=2, label='Smoothed', alpha=0.9)
+
+        ax.set_xlabel('Training Step')
+        ax.set_ylabel('Attention Entropy (nats)')
+        ax.set_title('(a) Attention Entropy Over Training')
+        ax.grid(True, alpha=0.3)
+
+        # Add reference lines
+        # For context length N, max entropy is log(N)
+        if entropies:
+            max_entropy = max(entropies)
+            ax.axhline(y=max_entropy, color='gray', linestyle='--', linewidth=1,
+                      label=f'Max observed: {max_entropy:.2f}')
+
+        # Annotate final value
+        if entropies:
+            final_entropy = entropies[-1]
+            ax.annotate(f'Final: {final_entropy:.3f}',
+                       xy=(steps[-1], final_entropy),
+                       xytext=(-50, 10), textcoords='offset points',
+                       fontsize=10, ha='right',
+                       arrowprops=dict(arrowstyle='->', color='black', lw=0.5))
+
+        ax.legend(loc='upper right')
+
+        # (b) Attention Concentration over training
+        ax = axes[1]
+        ax.plot(steps, concentrations, 'g-', linewidth=1.5, alpha=0.8)
+
+        # Add smoothed trend line
+        if len(steps) > 10:
+            window = min(len(steps) // 10, 50)
+            smoothed = np.convolve(concentrations, np.ones(window)/window, mode='valid')
+            smooth_steps = steps[window-1:]
+            ax.plot(smooth_steps, smoothed, 'r-', linewidth=2, label='Smoothed', alpha=0.9)
+
+        ax.set_xlabel('Training Step')
+        ax.set_ylabel('Attention Concentration')
+        ax.set_title('(b) Attention Concentration Over Training')
+        ax.grid(True, alpha=0.3)
+
+        # Annotate final value
+        if concentrations:
+            final_conc = concentrations[-1]
+            ax.annotate(f'Final: {final_conc:.3f}',
+                       xy=(steps[-1], final_conc),
+                       xytext=(-50, 10), textcoords='offset points',
+                       fontsize=10, ha='right',
+                       arrowprops=dict(arrowstyle='->', color='black', lw=0.5))
+
+        ax.legend(loc='upper left')
+
+        plt.tight_layout()
+
+        # Add figure caption
+        fig.text(0.5, -0.02,
+                'Lower entropy = sharper attention (focused). Higher entropy = uniform attention (diffuse).',
+                ha='center', fontsize=9, style='italic')
+
+        fig.savefig(self.save_dir / f"{save_name}.pdf", bbox_inches='tight')
+        fig.savefig(self.save_dir / f"{save_name}.png", dpi=300, bbox_inches='tight')
+
+        return fig
+
 
 # =============================================================================
 # Main Publication Metrics Coordinator
@@ -686,6 +796,14 @@ class PublicationMetrics:
             plt.close()
         except Exception as e:
             print(f"[WARN] Could not generate train-val gap: {e}")
+
+        # Attention entropy
+        try:
+            self.figures.plot_attention_entropy(self.tracker)
+            figures_generated.append("attention_entropy")
+            plt.close()
+        except Exception as e:
+            print(f"[WARN] Could not generate attention entropy plot: {e}")
 
         # Model comparison
         if self.comparison_results:

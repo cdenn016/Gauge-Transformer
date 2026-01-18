@@ -1197,6 +1197,8 @@ class PublicationTrainer(FastTrainer):
                         train_metrics={
                             'loss': metrics['train_loss_total'],
                             'ce_loss': metrics['train_loss_ce'],
+                            'attention_entropy': metrics.get('attention_entropy', 0),
+                            'attention_concentration': metrics.get('attention_concentration', 0),
                         },
                         diagnostics=diagnostics,
                         grad_norms=grad_norms,
