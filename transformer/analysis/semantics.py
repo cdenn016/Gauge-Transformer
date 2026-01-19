@@ -319,33 +319,56 @@ def analyze_gauge_semantics(
             print(f"\nWord Pair Analysis:")
             print(f"  phi unrelated/related ratio: {pair_results['phi_semantic_ratio']:.2f}x")
 
-    # Generate plots
-    if save_plots and phi_embed is not None:
+    # Generate plots and save CSVs
+    if save_plots:
         save_dir = Path(save_dir) if save_dir else Path("./outputs/figures")
         save_dir.mkdir(parents=True, exist_ok=True)
 
-        try:
-            fig = plot_gauge_frame_clustering(
-                phi_embed,
-                step=step,
-                save_path=save_dir / f"gauge_frame_clustering{'_step'+str(step) if step else ''}.png"
-            )
-            plt.close(fig)
-            results['plot_saved'] = True
-        except Exception as e:
-            if verbose:
-                print(f"  [WARN] Could not generate plot: {e}")
-            results['plot_saved'] = False
-            results['plot_error'] = str(e)
+        # Plot and save phi embeddings (gauge frames)
+        if phi_embed is not None:
+            try:
+                fig = plot_embedding_clustering(
+                    phi_embed,
+                    embed_type='phi',
+                    step=step,
+                    save_path=save_dir / f"gauge_frame_clustering{'_step'+str(step) if step is not None else ''}.png"
+                )
+                plt.close(fig)
+                results['phi_plot_saved'] = True
+            except Exception as e:
+                if verbose:
+                    print(f"  [WARN] Could not generate phi plot: {e}")
+                results['phi_plot_saved'] = False
 
-    # Save raw data to CSV for later animation/replotting
-    if save_plots and phi_embed is not None:
-        try:
-            csv_path = save_gauge_frame_csv(phi_embed, step=step, save_dir=save_dir)
-            results['csv_saved'] = str(csv_path)
-        except Exception as e:
-            if verbose:
-                print(f"  [WARN] Could not save CSV: {e}")
+            try:
+                csv_path = save_embedding_csv(phi_embed, embed_type='phi', step=step, save_dir=save_dir)
+                results['phi_csv_saved'] = str(csv_path)
+            except Exception as e:
+                if verbose:
+                    print(f"  [WARN] Could not save phi CSV: {e}")
+
+        # Plot and save mu embeddings (beliefs)
+        if mu_embed is not None:
+            try:
+                fig = plot_embedding_clustering(
+                    mu_embed,
+                    embed_type='mu',
+                    step=step,
+                    save_path=save_dir / f"belief_clustering{'_step'+str(step) if step is not None else ''}.png"
+                )
+                plt.close(fig)
+                results['mu_plot_saved'] = True
+            except Exception as e:
+                if verbose:
+                    print(f"  [WARN] Could not generate mu plot: {e}")
+                results['mu_plot_saved'] = False
+
+            try:
+                csv_path = save_embedding_csv(mu_embed, embed_type='mu', step=step, save_dir=save_dir)
+                results['mu_csv_saved'] = str(csv_path)
+            except Exception as e:
+                if verbose:
+                    print(f"  [WARN] Could not save mu CSV: {e}")
 
     return results
 
@@ -364,28 +387,43 @@ CATEGORY_COLORS = {
 }
 
 
-def plot_gauge_frame_clustering(
-    phi_embed: torch.Tensor,
+def plot_embedding_clustering(
+    embed: torch.Tensor,
+    embed_type: str = 'phi',
     step: Optional[int] = None,
     save_path: Optional[Path] = None,
     n_tokens: int = 500,
 ) -> plt.Figure:
     """
-    Visualize gauge frame embeddings colored by token category.
+    Visualize embeddings (mu or phi) colored by token category.
 
-    Handles SO(2), SO(3), and higher-dimensional gauge groups appropriately.
+    Args:
+        embed: Embedding tensor [vocab_size, embed_dim]
+        embed_type: 'phi' for gauge frames, 'mu' for beliefs
+        step: Training step for title
+        save_path: Path to save figure
+        n_tokens: Number of tokens to plot
+
+    Returns:
+        matplotlib Figure
     """
-    phi_np = phi_embed[:n_tokens].numpy() if isinstance(phi_embed, torch.Tensor) else phi_embed[:n_tokens]
-    phi_dim = phi_np.shape[1]
-    gauge_str = identify_gauge_group(phi_dim)
+    embed_np = embed[:n_tokens].numpy() if isinstance(embed, torch.Tensor) else embed[:n_tokens]
+    embed_dim = embed_np.shape[1]
+
+    if embed_type == 'phi':
+        type_str = identify_gauge_group(embed_dim)
+        title_prefix = f"{type_str} Gauge Frames"
+    else:
+        type_str = f"{embed_dim}D"
+        title_prefix = f"Belief Embeddings (μ)"
 
     # Categorize tokens
-    categories = [categorize_token(tid) for tid in range(len(phi_np))]
+    categories = [categorize_token(tid) for tid in range(len(embed_np))]
     colors = [CATEGORY_COLORS.get(c, '#95A5A6') for c in categories]
 
     step_str = f" (Step {step})" if step is not None else ""
 
-    if phi_dim == 1:
+    if embed_dim == 1 and embed_type == 'phi':
         # SO(2): 1D gauge frames - histogram and jittered scatter
         fig = plt.figure(figsize=(14, 6))
 
@@ -395,7 +433,7 @@ def plot_gauge_frame_clustering(
             mask = [c == cat for c in categories]
             if any(mask):
                 idx = [i for i, m in enumerate(mask) if m]
-                vals = phi_np[idx, 0]
+                vals = embed_np[idx, 0]
                 ax1.hist(vals, bins=30, alpha=0.5, label=cat, color=CATEGORY_COLORS[cat])
 
         ax1.set_xlabel('φ (SO(2) angle)')
@@ -410,7 +448,7 @@ def plot_gauge_frame_clustering(
             mask = [c == cat for c in categories]
             if any(mask):
                 idx = [i for i, m in enumerate(mask) if m]
-                x_vals = phi_np[idx, 0]
+                x_vals = embed_np[idx, 0]
                 y_jitter = np.random.uniform(-0.4, 0.4, len(idx))
                 ax2.scatter(x_vals, y_jitter, c=CATEGORY_COLORS[cat], label=cat, alpha=0.6, s=20)
 
@@ -421,14 +459,14 @@ def plot_gauge_frame_clustering(
         ax2.grid(True, alpha=0.3, axis='x')
         ax2.set_ylim(-0.6, 0.6)
 
-    elif phi_dim == 3:
+    elif embed_dim == 3 and embed_type == 'phi':
         # SO(3): Direct 3D visualization on sphere
         fig = plt.figure(figsize=(14, 6))
 
         # Normalize to unit sphere
-        phi_norms = np.linalg.norm(phi_np, axis=1, keepdims=True)
-        phi_norms = np.clip(phi_norms, 1e-8, None)
-        phi_unit = phi_np / phi_norms
+        embed_norms = np.linalg.norm(embed_np, axis=1, keepdims=True)
+        embed_norms = np.clip(embed_norms, 1e-8, None)
+        embed_unit = embed_np / embed_norms
 
         # 3D sphere plot
         ax1 = fig.add_subplot(121, projection='3d')
@@ -446,7 +484,7 @@ def plot_gauge_frame_clustering(
             mask = [c == cat for c in categories]
             if any(mask):
                 idx = [i for i, m in enumerate(mask) if m]
-                ax1.scatter(phi_unit[idx, 0], phi_unit[idx, 1], phi_unit[idx, 2],
+                ax1.scatter(embed_unit[idx, 0], embed_unit[idx, 1], embed_unit[idx, 2],
                            c=CATEGORY_COLORS[cat], label=cat, alpha=0.6, s=20)
 
         ax1.set_xlabel('φ₁')
@@ -461,7 +499,7 @@ def plot_gauge_frame_clustering(
             mask = [c == cat for c in categories]
             if any(mask):
                 idx = [i for i, m in enumerate(mask) if m]
-                ax2.scatter(phi_np[idx, 0], phi_np[idx, 1],
+                ax2.scatter(embed_np[idx, 0], embed_np[idx, 1],
                            c=CATEGORY_COLORS[cat], label=cat, alpha=0.6, s=20)
 
         ax2.set_xlabel('φ₁')
@@ -472,10 +510,10 @@ def plot_gauge_frame_clustering(
         ax2.set_aspect('equal')
 
     else:
-        # SO(N) with N > 3: Use PCA
-        n_components = min(3, phi_dim)
+        # High-dimensional: Use PCA
+        n_components = min(3, embed_dim)
         pca = PCA(n_components=n_components)
-        phi_pca = pca.fit_transform(phi_np)
+        embed_pca = pca.fit_transform(embed_np)
 
         var_explained = pca.explained_variance_ratio_
         var_str = " + ".join([f"{v:.1%}" for v in var_explained])
@@ -489,13 +527,13 @@ def plot_gauge_frame_clustering(
                 mask = [c == cat for c in categories]
                 if any(mask):
                     idx = [i for i, m in enumerate(mask) if m]
-                    ax1.scatter(phi_pca[idx, 0], phi_pca[idx, 1], phi_pca[idx, 2],
+                    ax1.scatter(embed_pca[idx, 0], embed_pca[idx, 1], embed_pca[idx, 2],
                                c=CATEGORY_COLORS[cat], label=cat, alpha=0.6, s=20)
 
             ax1.set_xlabel(f'PC1 ({var_explained[0]:.1%})')
             ax1.set_ylabel(f'PC2 ({var_explained[1]:.1%})')
             ax1.set_zlabel(f'PC3 ({var_explained[2]:.1%})')
-            ax1.set_title(f'{gauge_str} Gauge Frames (PCA){step_str}')
+            ax1.set_title(f'{title_prefix} (PCA){step_str}')
             ax1.legend(loc='upper left', fontsize=8)
 
             # 2D PCA plot
@@ -508,12 +546,12 @@ def plot_gauge_frame_clustering(
                 mask = [c == cat for c in categories]
                 if any(mask):
                     idx = [i for i, m in enumerate(mask) if m]
-                    ax2.scatter(phi_pca[idx, 0], phi_pca[idx, 1],
+                    ax2.scatter(embed_pca[idx, 0], embed_pca[idx, 1],
                                c=CATEGORY_COLORS[cat], label=cat, alpha=0.6, s=20)
 
             ax2.set_xlabel(f'PC1 ({var_explained[0]:.1%})')
             ax2.set_ylabel(f'PC2 ({var_explained[1]:.1%})')
-            ax2.set_title(f'{gauge_str} Gauge Frames (PCA from {phi_dim}D){step_str}')
+            ax2.set_title(f'{title_prefix} (PCA from {embed_dim}D){step_str}')
             ax2.legend(loc='upper left', fontsize=8)
             ax2.grid(True, alpha=0.3)
 
@@ -529,17 +567,19 @@ def plot_gauge_frame_clustering(
 # CSV Export and Animation
 # =============================================================================
 
-def save_gauge_frame_csv(
-    phi_embed: torch.Tensor,
+def save_embedding_csv(
+    embed: torch.Tensor,
+    embed_type: str = 'phi',
     step: Optional[int] = None,
     save_dir: Optional[Path] = None,
     n_tokens: int = 500,
 ) -> Path:
     """
-    Save gauge frame embeddings to CSV for later plotting/animation.
+    Save embeddings (mu or phi) to CSV for later plotting/animation.
 
     Args:
-        phi_embed: Gauge frame embeddings [vocab_size, phi_dim]
+        embed: Embedding tensor [vocab_size, embed_dim]
+        embed_type: 'phi' for gauge frames, 'mu' for beliefs
         step: Training step
         save_dir: Directory to save CSV
         n_tokens: Number of tokens to save
@@ -552,27 +592,43 @@ def save_gauge_frame_csv(
     save_dir = Path(save_dir) if save_dir else Path("./outputs/data")
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    phi_np = phi_embed[:n_tokens].numpy() if isinstance(phi_embed, torch.Tensor) else phi_embed[:n_tokens]
-    phi_dim = phi_np.shape[1]
+    embed_np = embed[:n_tokens].numpy() if isinstance(embed, torch.Tensor) else embed[:n_tokens]
+    embed_dim = embed_np.shape[1]
 
     # Categorize tokens
-    categories = [categorize_token(tid) for tid in range(len(phi_np))]
+    categories = [categorize_token(tid) for tid in range(len(embed_np))]
 
     # Build dataframe
     data = {
-        'token_id': list(range(len(phi_np))),
+        'token_id': list(range(len(embed_np))),
         'category': categories,
     }
-    for i in range(phi_dim):
-        data[f'phi_{i}'] = phi_np[:, i]
+    for i in range(embed_dim):
+        data[f'{embed_type}_{i}'] = embed_np[:, i]
 
     df = pd.DataFrame(data)
 
-    step_str = f"_step{step}" if step is not None else ""
-    csv_path = save_dir / f"gauge_frames{step_str}.csv"
+    # File naming
+    if embed_type == 'phi':
+        filename = f"gauge_frames{'_step'+str(step) if step is not None else ''}.csv"
+    else:
+        filename = f"belief_embeddings{'_step'+str(step) if step is not None else ''}.csv"
+
+    csv_path = save_dir / filename
     df.to_csv(csv_path, index=False)
 
     return csv_path
+
+
+# Backwards compatibility aliases
+def plot_gauge_frame_clustering(phi_embed, step=None, save_path=None, n_tokens=500):
+    """Alias for plot_embedding_clustering with embed_type='phi'."""
+    return plot_embedding_clustering(phi_embed, embed_type='phi', step=step, save_path=save_path, n_tokens=n_tokens)
+
+
+def save_gauge_frame_csv(phi_embed, step=None, save_dir=None, n_tokens=500):
+    """Alias for save_embedding_csv with embed_type='phi'."""
+    return save_embedding_csv(phi_embed, embed_type='phi', step=step, save_dir=save_dir, n_tokens=n_tokens)
 
 
 def create_gauge_frame_animation(
