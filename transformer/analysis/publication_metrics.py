@@ -245,6 +245,7 @@ class PublicationFigures:
         tracker: TrainingTracker,
         save_name: str = "training_curves",
         show_components: bool = True,
+        start_step: int = 5,
     ) -> plt.Figure:
         """
         Plot training curves: Loss, PPL, BPC.
@@ -253,6 +254,7 @@ class PublicationFigures:
             tracker: TrainingTracker with recorded history
             save_name: Filename for saved figure
             show_components: If True, show loss decomposition
+            start_step: Skip initial steps to avoid transient spikes (default: 5)
 
         Returns:
             matplotlib Figure
@@ -260,7 +262,10 @@ class PublicationFigures:
         if not tracker.history:
             raise ValueError("No training history to plot")
 
-        history = tracker.history
+        # Filter history to skip initial transient
+        history = [s for s in tracker.history if s.step >= start_step]
+        if not history:
+            history = tracker.history  # Fallback if all filtered out
         steps = [s.step for s in history]
 
         # Validation data
@@ -589,6 +594,7 @@ class PublicationFigures:
         self,
         tracker: TrainingTracker,
         save_name: str = "attention_entropy",
+        start_step: int = 5,
     ) -> plt.Figure:
         """
         Plot attention entropy over training.
@@ -604,11 +610,15 @@ class PublicationFigures:
         Args:
             tracker: TrainingTracker with recorded history
             save_name: Filename for saved figure
+            start_step: Skip initial steps to avoid transient spikes (default: 5)
 
         Returns:
             matplotlib Figure
         """
-        history = tracker.history
+        # Filter history to skip initial transient
+        history = [s for s in tracker.history if s.step >= start_step]
+        if not history:
+            history = tracker.history  # Fallback if all filtered out
         steps = [s.step for s in history]
         entropies = [s.attention_entropy for s in history]
         concentrations = [s.attention_concentration for s in history]

@@ -127,8 +127,14 @@ def find_most_recent_metrics() -> Optional[Path]:
 # Basic Mode - Quick 3x2 Grid
 # =============================================================================
 
-def create_basic_plots(metrics: Dict, output_path: Path):
-    """Create basic 3x2 grid visualization."""
+def create_basic_plots(metrics: Dict, output_path: Path, start_step: int = 5):
+    """Create basic 3x2 grid visualization.
+
+    Args:
+        metrics: Dictionary of training metrics
+        output_path: Path to save the figure
+        start_step: Skip initial steps to avoid transient spikes (default: 5)
+    """
     if not MATPLOTLIB_AVAILABLE:
         print("❌ Cannot create plots - matplotlib not installed")
         return
@@ -136,15 +142,31 @@ def create_basic_plots(metrics: Dict, output_path: Path):
     fig, axes = plt.subplots(3, 2, figsize=(14, 14))
     fig.suptitle('Training History', fontsize=16)
 
-    steps = metrics.get('steps', [])
+    # Filter metrics to skip initial transient
+    all_steps = metrics.get('steps', [])
+    start_idx = next((i for i, s in enumerate(all_steps) if s >= start_step), 0)
+    steps = all_steps[start_idx:]
+
+    # Create filtered metrics dict for this plot
+    filtered_metrics = {}
+    for key, values in metrics.items():
+        if key == 'steps':
+            filtered_metrics[key] = steps
+        elif isinstance(values, list) and len(values) == len(all_steps):
+            filtered_metrics[key] = values[start_idx:]
+        else:
+            filtered_metrics[key] = values
 
     def filter_vals(vals):
         return [(s, v) for s, v in zip(steps, vals) if v is not None]
 
+    # Use filtered metrics for all subsequent lookups
+    m = filtered_metrics
+
     # 1. Loss curves
     ax = axes[0, 0]
-    train_loss = metrics.get('train_loss_total', metrics.get('train_loss', []))
-    val_loss = metrics.get('val_loss', [])
+    train_loss = m.get('train_loss_total', m.get('train_loss', []))
+    val_loss = m.get('val_loss', [])
 
     ax.plot(steps, train_loss, label='Train Loss', alpha=0.7)
 
@@ -161,9 +183,9 @@ def create_basic_plots(metrics: Dict, output_path: Path):
 
     # 2. Free Energy Components
     ax = axes[0, 1]
-    belief_align = metrics.get('train_loss_belief_align', [])
-    self_consistency = metrics.get('train_loss_self_consistency', [])
-    model_align = metrics.get('train_loss_model_align', [])
+    belief_align = m.get('train_loss_belief_align', [])
+    self_consistency = m.get('train_loss_self_consistency', [])
+    model_align = m.get('train_loss_model_align', [])
 
     belief_data = filter_vals(belief_align)
     self_data = filter_vals(self_consistency)
@@ -187,8 +209,8 @@ def create_basic_plots(metrics: Dict, output_path: Path):
 
     # 3. BPC
     ax = axes[1, 0]
-    train_bpc = metrics.get('train_bpc', [])
-    val_bpc = metrics.get('val_bpc', [])
+    train_bpc = m.get('train_bpc', [])
+    val_bpc = m.get('val_bpc', [])
 
     train_bpc_data = filter_vals(train_bpc)
     val_bpc_data = filter_vals(val_bpc)
@@ -208,9 +230,9 @@ def create_basic_plots(metrics: Dict, output_path: Path):
 
     # 4. Gradient Norms
     ax = axes[1, 1]
-    grad_total = metrics.get('grad_norm_total', [])
-    grad_mu = metrics.get('grad_norm_mu', [])
-    grad_ffn = metrics.get('grad_norm_ffn', [])
+    grad_total = m.get('grad_norm_total', [])
+    grad_mu = m.get('grad_norm_mu', [])
+    grad_ffn = m.get('grad_norm_ffn', [])
 
     total_data = filter_vals(grad_total)
     mu_data = filter_vals(grad_mu)
@@ -235,10 +257,10 @@ def create_basic_plots(metrics: Dict, output_path: Path):
 
     # 5. Learning Rates
     ax = axes[2, 0]
-    mu_lr = metrics.get('mu_lr', [])
-    sigma_lr = metrics.get('sigma_lr', [])
-    phi_lr = metrics.get('phi_lr', [])
-    ffn_lr = metrics.get('ffn_lr', [])
+    mu_lr = m.get('mu_lr', [])
+    sigma_lr = m.get('sigma_lr', [])
+    phi_lr = m.get('phi_lr', [])
+    ffn_lr = m.get('ffn_lr', [])
 
     mu_lr_data = filter_vals(mu_lr)
     sigma_lr_data = filter_vals(sigma_lr)
@@ -266,7 +288,7 @@ def create_basic_plots(metrics: Dict, output_path: Path):
 
     # 6. Performance
     ax = axes[2, 1]
-    tokens_per_sec = metrics.get('tokens_per_sec', [])
+    tokens_per_sec = m.get('tokens_per_sec', [])
 
     tokens_data = filter_vals(tokens_per_sec)
     if tokens_data:
@@ -347,8 +369,14 @@ def print_basic_summary(metrics: Dict):
 # Publication Mode - Comprehensive Figures (Simplified)
 # =============================================================================
 
-def create_publication_figures(metrics: Dict, output_dir: Path):
-    """Create publication-quality figures (simplified from plot_training_history_pub.py)."""
+def create_publication_figures(metrics: Dict, output_dir: Path, start_step: int = 5):
+    """Create publication-quality figures (simplified from plot_training_history_pub.py).
+
+    Args:
+        metrics: Dictionary of training metrics
+        output_dir: Directory to save figures
+        start_step: Skip initial steps to avoid transient spikes (default: 5)
+    """
     if not MATPLOTLIB_AVAILABLE:
         print("❌ Cannot create figures - matplotlib not installed")
         return
@@ -367,20 +395,33 @@ def create_publication_figures(metrics: Dict, output_dir: Path):
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Filter metrics to skip initial transient
+    all_steps = metrics.get('steps', [])
+    start_idx = next((i for i, s in enumerate(all_steps) if s >= start_step), 0)
+    steps = all_steps[start_idx:]
+
+    # Create filtered metrics dict
+    m = {}
+    for key, values in metrics.items():
+        if key == 'steps':
+            m[key] = steps
+        elif isinstance(values, list) and len(values) == len(all_steps):
+            m[key] = values[start_idx:]
+        else:
+            m[key] = values
+
     # Figure 1: Training Dynamics (2x2 panel)
     fig, axes = plt.subplots(2, 2, figsize=(10, 8))
 
-    steps = metrics.get('steps', [])
-
     # Loss
     ax = axes[0, 0]
-    train_loss = metrics.get('train_loss_total', metrics.get('train_loss', []))
-    val_loss = metrics.get('val_loss', [])
+    train_loss = m.get('train_loss_total', m.get('train_loss', []))
+    val_loss = m.get('val_loss', [])
     ax.plot(steps, train_loss, label='Train', alpha=0.7)
     val_mask = [v is not None for v in val_loss]
     if any(val_mask):
-        val_steps = [s for s, m in zip(steps, val_mask) if m]
-        val_vals = [v for v, m in zip(val_loss, val_mask) if m]
+        val_steps = [s for s, mask in zip(steps, val_mask) if mask]
+        val_vals = [v for v, mask in zip(val_loss, val_mask) if mask]
         ax.scatter(val_steps, val_vals, label='Val', s=30, alpha=0.8)
     ax.set_title('(a) Total Loss')
     ax.set_xlabel('Step')
@@ -390,8 +431,8 @@ def create_publication_figures(metrics: Dict, output_dir: Path):
 
     # BPC
     ax = axes[0, 1]
-    train_bpc = metrics.get('train_bpc', [])
-    val_bpc = metrics.get('val_bpc', [])
+    train_bpc = m.get('train_bpc', [])
+    val_bpc = m.get('val_bpc', [])
     train_bpc_clean = [(s, v) for s, v in zip(steps, train_bpc) if v is not None]
     val_bpc_clean = [(s, v) for s, v in zip(steps, val_bpc) if v is not None]
     if train_bpc_clean:
@@ -408,7 +449,7 @@ def create_publication_figures(metrics: Dict, output_dir: Path):
 
     # Perplexity
     ax = axes[1, 0]
-    val_ppl = metrics.get('val_ppl', metrics.get('val_perplexity', []))
+    val_ppl = m.get('val_ppl', m.get('val_perplexity', []))
     val_ppl_clean = [(s, v) for s, v in zip(steps, val_ppl) if v is not None and v > 0]
     if val_ppl_clean:
         v_steps, v_vals = zip(*val_ppl_clean)
@@ -420,9 +461,9 @@ def create_publication_figures(metrics: Dict, output_dir: Path):
 
     # Free Energy Components
     ax = axes[1, 1]
-    belief = metrics.get('train_loss_belief_align', [])
-    alpha_loss = metrics.get('train_loss_self_consistency', [])
-    gamma = metrics.get('train_loss_model_align', [])
+    belief = m.get('train_loss_belief_align', [])
+    alpha_loss = m.get('train_loss_self_consistency', [])
+    gamma = m.get('train_loss_model_align', [])
 
     belief_clean = [(s, v) for s, v in zip(steps, belief) if v is not None and v > 1e-6]
     alpha_clean = [(s, v) for s, v in zip(steps, alpha_loss) if v is not None and v > 1e-6]
@@ -661,6 +702,8 @@ def main():
                        help='Directory with FFN mode subdirectories (for paper mode)')
     parser.add_argument('--output', type=str, default=None,
                        help='Output file/directory path')
+    parser.add_argument('--start-step', type=int, default=5,
+                       help='Skip initial steps to avoid transient spikes (default: 5)')
 
     args = parser.parse_args()
 
@@ -706,14 +749,17 @@ def main():
     print(f"   Loaded {len(metrics.get('steps', []))} steps")
 
     # Create visualizations
+    start_step = args.start_step
+    print(f"   Skipping first {start_step} steps (use --start-step to change)")
+
     if args.mode == 'basic':
         output_path = Path(args.output) if args.output else input_path.parent / 'training_plots.png'
         print_basic_summary(metrics)
-        create_basic_plots(metrics, output_path)
+        create_basic_plots(metrics, output_path, start_step=start_step)
 
     elif args.mode == 'pub':
         output_dir = Path(args.output) if args.output else input_path.parent / 'figures'
-        create_publication_figures(metrics, output_dir)
+        create_publication_figures(metrics, output_dir, start_step=start_step)
 
     print("\n" + "="*70)
     print("VISUALIZATION COMPLETE")
