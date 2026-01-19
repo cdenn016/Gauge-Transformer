@@ -258,10 +258,18 @@ def analyze_gauge_semantics(
     """
     # Extract embeddings from model if provided
     if model is not None:
+        # Try direct attributes first
         if hasattr(model, 'mu_embed'):
             mu_embed = model.mu_embed.weight.detach().cpu()
+        # Then try nested in token_embed (GaugeTransformerLM structure)
+        elif hasattr(model, 'token_embed') and hasattr(model.token_embed, 'mu_embed'):
+            mu_embed = model.token_embed.mu_embed.weight.detach().cpu()
+
+        # Same for phi_embed
         if hasattr(model, 'phi_embed'):
             phi_embed = model.phi_embed.weight.detach().cpu()
+        elif hasattr(model, 'token_embed') and hasattr(model.token_embed, 'phi_embed'):
+            phi_embed = model.token_embed.phi_embed.weight.detach().cpu()
 
     if mu_embed is None:
         return {'error': 'No mu embeddings provided'}
