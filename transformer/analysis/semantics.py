@@ -338,6 +338,15 @@ def analyze_gauge_semantics(
             results['plot_saved'] = False
             results['plot_error'] = str(e)
 
+    # Save raw data to CSV for later animation/replotting
+    if save_plots and phi_embed is not None:
+        try:
+            csv_path = save_gauge_frame_csv(phi_embed, step=step, save_dir=save_dir)
+            results['csv_saved'] = str(csv_path)
+        except Exception as e:
+            if verbose:
+                print(f"  [WARN] Could not save CSV: {e}")
+
     return results
 
 
@@ -514,6 +523,185 @@ def plot_gauge_frame_clustering(
         fig.savefig(save_path, dpi=150, bbox_inches='tight')
 
     return fig
+
+
+# =============================================================================
+# CSV Export and Animation
+# =============================================================================
+
+def save_gauge_frame_csv(
+    phi_embed: torch.Tensor,
+    step: Optional[int] = None,
+    save_dir: Optional[Path] = None,
+    n_tokens: int = 500,
+) -> Path:
+    """
+    Save gauge frame embeddings to CSV for later plotting/animation.
+
+    Args:
+        phi_embed: Gauge frame embeddings [vocab_size, phi_dim]
+        step: Training step
+        save_dir: Directory to save CSV
+        n_tokens: Number of tokens to save
+
+    Returns:
+        Path to saved CSV
+    """
+    import pandas as pd
+
+    save_dir = Path(save_dir) if save_dir else Path("./outputs/data")
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    phi_np = phi_embed[:n_tokens].numpy() if isinstance(phi_embed, torch.Tensor) else phi_embed[:n_tokens]
+    phi_dim = phi_np.shape[1]
+
+    # Categorize tokens
+    categories = [categorize_token(tid) for tid in range(len(phi_np))]
+
+    # Build dataframe
+    data = {
+        'token_id': list(range(len(phi_np))),
+        'category': categories,
+    }
+    for i in range(phi_dim):
+        data[f'phi_{i}'] = phi_np[:, i]
+
+    df = pd.DataFrame(data)
+
+    step_str = f"_step{step}" if step is not None else ""
+    csv_path = save_dir / f"gauge_frames{step_str}.csv"
+    df.to_csv(csv_path, index=False)
+
+    return csv_path
+
+
+def create_gauge_frame_animation(
+    csv_dir: Path,
+    output_path: Optional[Path] = None,
+    fps: int = 2,
+    dpi: int = 150,
+) -> Path:
+    """
+    Create animated GIF from saved gauge frame CSVs.
+
+    Uses PCA fitted on the final step and applies it to all steps
+    for consistent axes across frames.
+
+    Args:
+        csv_dir: Directory containing gauge_frames_step*.csv files
+        output_path: Output path for GIF (default: csv_dir/gauge_frame_evolution.gif)
+        fps: Frames per second
+        dpi: Resolution
+
+    Returns:
+        Path to saved GIF
+    """
+    import pandas as pd
+    import glob
+    import re
+
+    csv_dir = Path(csv_dir)
+    output_path = output_path or csv_dir / "gauge_frame_evolution.gif"
+
+    # Find all CSV files and sort by step
+    csv_files = list(csv_dir.glob("gauge_frames_step*.csv"))
+    if not csv_files:
+        raise ValueError(f"No gauge_frames_step*.csv files found in {csv_dir}")
+
+    def extract_step(path):
+        match = re.search(r'step(\d+)', path.name)
+        return int(match.group(1)) if match else 0
+
+    csv_files = sorted(csv_files, key=extract_step)
+    steps = [extract_step(f) for f in csv_files]
+
+    print(f"Found {len(csv_files)} CSV files: steps {steps}")
+
+    # Load all data
+    all_data = []
+    for csv_path in csv_files:
+        df = pd.read_csv(csv_path)
+        step = extract_step(csv_path)
+        df['step'] = step
+        all_data.append(df)
+
+    # Get phi columns
+    phi_cols = [c for c in all_data[0].columns if c.startswith('phi_')]
+    phi_dim = len(phi_cols)
+
+    # Fit PCA on final step
+    final_phi = all_data[-1][phi_cols].values
+    n_components = min(3, phi_dim)
+    pca = PCA(n_components=n_components)
+    pca.fit(final_phi)
+
+    # Compute global axis limits from all steps (projected)
+    all_projected = []
+    for df in all_data:
+        phi_vals = df[phi_cols].values
+        projected = pca.transform(phi_vals)
+        all_projected.append(projected)
+
+    all_projected_concat = np.vstack(all_projected)
+    x_min, x_max = all_projected_concat[:, 0].min(), all_projected_concat[:, 0].max()
+    y_min, y_max = all_projected_concat[:, 1].min(), all_projected_concat[:, 1].max()
+
+    # Add 10% padding
+    x_pad = (x_max - x_min) * 0.1
+    y_pad = (y_max - y_min) * 0.1
+    xlim = (x_min - x_pad, x_max + x_pad)
+    ylim = (y_min - y_pad, y_max + y_pad)
+
+    var_explained = pca.explained_variance_ratio_
+
+    # Generate frames
+    frames = []
+    for df, projected, step in zip(all_data, all_projected, steps):
+        fig, ax = plt.subplots(figsize=(10, 8))
+
+        categories = df['category'].values
+
+        for cat in CATEGORY_COLORS:
+            mask = categories == cat
+            if mask.any():
+                ax.scatter(
+                    projected[mask, 0],
+                    projected[mask, 1],
+                    c=CATEGORY_COLORS[cat],
+                    label=cat,
+                    alpha=0.6,
+                    s=30
+                )
+
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
+        ax.set_xlabel(f'PC1 ({var_explained[0]:.1%})')
+        ax.set_ylabel(f'PC2 ({var_explained[1]:.1%})')
+        ax.set_title(f'Gauge Frame Evolution - Step {step}')
+        ax.legend(loc='upper right', fontsize=10)
+        ax.grid(True, alpha=0.3)
+
+        # Convert to image
+        fig.canvas.draw()
+        image = np.frombuffer(fig.canvas.tostring_rgb(), dtype='uint8')
+        image = image.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+        frames.append(image)
+        plt.close(fig)
+
+    # Save as GIF
+    try:
+        import imageio
+        imageio.mimsave(output_path, frames, fps=fps)
+        print(f"Saved animation to: {output_path}")
+    except ImportError:
+        # Fallback: save individual frames
+        print("imageio not installed, saving individual frames instead")
+        for i, (frame, step) in enumerate(zip(frames, steps)):
+            frame_path = csv_dir / f"gauge_frame_step{step}_fixed_axes.png"
+            plt.imsave(frame_path, frame)
+        output_path = csv_dir / "frames"
+
+    return output_path
 
 
 # =============================================================================
