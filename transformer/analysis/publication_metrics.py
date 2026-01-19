@@ -865,14 +865,24 @@ class PublicationMetrics:
         if self.semantic_analysis_history:
             history_path = self.experiment_dir / "semantic_analysis_history.json"
             with open(history_path, 'w') as f:
-                # Convert non-serializable items
-                serializable_history = []
-                for entry in self.semantic_analysis_history:
-                    serializable_entry = {}
-                    for k, v in entry.items():
-                        if isinstance(v, (int, float, str, bool, type(None), list, dict)):
-                            serializable_entry[k] = v
-                    serializable_history.append(serializable_entry)
+                # Convert non-serializable items (including numpy types)
+                def make_serializable(obj):
+                    if isinstance(obj, dict):
+                        return {k: make_serializable(v) for k, v in obj.items()}
+                    elif isinstance(obj, list):
+                        return [make_serializable(v) for v in obj]
+                    elif isinstance(obj, (np.integer, np.floating)):
+                        return obj.item()
+                    elif isinstance(obj, np.bool_):
+                        return bool(obj)
+                    elif isinstance(obj, np.ndarray):
+                        return obj.tolist()
+                    elif isinstance(obj, (int, float, str, bool, type(None))):
+                        return obj
+                    else:
+                        return str(obj)  # Fallback to string representation
+
+                serializable_history = [make_serializable(entry) for entry in self.semantic_analysis_history]
                 json.dump(serializable_history, f, indent=2)
             print(f"  Saved semantic analysis history to: {history_path}")
 
