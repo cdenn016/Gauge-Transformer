@@ -1338,9 +1338,10 @@ class PublicationTrainer(FastTrainer):
                 except StopIteration:
                     pass
 
-                # Save best
-                if val_metrics['loss'] < self.best_val_loss:
-                    self.best_val_loss = val_metrics['loss']
+                # Save best model based on CE loss (not total loss)
+                # CE loss is the proper metric since PPL = exp(CE)
+                if val_metrics['ce_loss'] < self.best_val_ce:
+                    self.best_val_ce = val_metrics['ce_loss']
                     self.patience_counter = 0
                     self.save_checkpoint(is_best=True)
                 else:
@@ -1405,9 +1406,7 @@ class PublicationTrainer(FastTrainer):
         print("TRAINING COMPLETE!")
         print(f"{'='*70}")
         print(f"Time: {elapsed/3600:.2f} hours")
-        print(f"Best val loss: {self.best_val_loss:.4f}")
-        # Note: best_val_loss includes free energy terms, not just CE
-        # PPL calculation is done in final eval using CE loss only
+        print(f"Best val CE: {self.best_val_ce:.4f} (PPL: {math.exp(self.best_val_ce):.2f})")
         print(f"{'='*70}\n")
 
 

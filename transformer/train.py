@@ -653,7 +653,7 @@ class Trainer:
         # Training state
         self.step = 0
         self.epoch = 0
-        self.best_val_loss = float('inf')
+        self.best_val_ce = float('inf')  # Track CE loss (not total loss) for best model
 
         # Create checkpoint directory
         if self.config.checkpoint_dir is not None:
@@ -1013,9 +1013,10 @@ class Trainer:
                             if self.config.use_wandb and WANDB_AVAILABLE:
                                 wandb.log(val_metrics, step=self.step)
 
-                            # Save best model
-                            if val_metrics['val/loss'] < self.best_val_loss:
-                                self.best_val_loss = val_metrics['val/loss']
+                            # Save best model based on CE loss (not total loss)
+                            # CE loss is the proper metric since PPL = exp(CE)
+                            if val_metrics['val/ce_loss'] < self.best_val_ce:
+                                self.best_val_ce = val_metrics['val/ce_loss']
                                 self.save_checkpoint('best_model.pt')
 
                     # Checkpointing
@@ -1067,7 +1068,7 @@ class Trainer:
             'step': self.step,
             'epoch': self.epoch,
             'model_state': self.model.state_dict(),
-            'best_val_loss': self.best_val_loss,
+            'best_val_ce': self.best_val_ce,
             'config': self.model.config,
         }
 
@@ -1093,7 +1094,8 @@ class Trainer:
 
         self.step = checkpoint.get('step', 0)
         self.epoch = checkpoint.get('epoch', 0)
-        self.best_val_loss = checkpoint.get('best_val_loss', float('inf'))
+        # Backward compatible: try new key first, fall back to old key
+        self.best_val_ce = checkpoint.get('best_val_ce', checkpoint.get('best_val_loss', float('inf')))
 
         print(f"✓ Loaded checkpoint from step {self.step}")
 

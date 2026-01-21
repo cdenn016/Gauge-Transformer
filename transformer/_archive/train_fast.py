@@ -157,7 +157,7 @@ class FastTrainer:
 
         # Training state
         self.global_step = 0
-        self.best_val_loss = float('inf')
+        self.best_val_ce = float('inf')  # Track CE loss (not total loss) for best model
         self.patience_counter = 0  # Early stopping counter
 
         # Mixed precision (using modern AMP API for PyTorch 2.x / CUDA 12+)
@@ -532,16 +532,17 @@ class FastTrainer:
                         'val/perplexity': val_metrics['perplexity'],
                     }, step=step)
 
-                # Save best model
-                if val_metrics['loss'] < self.best_val_loss:
-                    self.best_val_loss = val_metrics['loss']
+                # Save best model based on CE loss (not total loss)
+                # CE loss is the proper metric since PPL = exp(CE)
+                if val_metrics['ce_loss'] < self.best_val_ce:
+                    self.best_val_ce = val_metrics['ce_loss']
                     self.patience_counter = 0  # Reset patience
                     self.save_checkpoint(is_best=True)
                 else:
                     self.patience_counter += 1  # Increment patience
                     if self.config.patience > 0 and self.patience_counter >= self.config.patience:
                         print(f"\n⚠ Early stopping triggered! No improvement for {self.config.patience} evaluations.")
-                        print(f"  Best validation loss: {self.best_val_loss:.4f}")
+                        print(f"  Best validation CE: {self.best_val_ce:.4f}")
                         break  # Stop training
 
             # Checkpointing
@@ -558,7 +559,7 @@ class FastTrainer:
         print(f"Total time: {elapsed/60:.1f} minutes ({elapsed/3600:.2f} hours)")
         print(f"Average step time: {avg_step_time:.2f} seconds")
         print(f"Steps per second: {1.0/avg_step_time:.2f}")
-        print(f"Best validation loss: {self.best_val_loss:.4f}")
+        print(f"Best validation CE: {self.best_val_ce:.4f} (PPL: {torch.exp(torch.tensor(self.best_val_ce)).item():.2f})")
         print(f"{'='*70}\n")
 
     def save_checkpoint(self, is_best: bool = False):
@@ -567,7 +568,7 @@ class FastTrainer:
             'step': self.global_step,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'best_val_loss': self.best_val_loss,
+            'best_val_ce': self.best_val_ce,
             'config': vars(self.config),
         }
 
