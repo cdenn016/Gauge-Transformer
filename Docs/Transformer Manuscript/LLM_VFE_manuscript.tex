@@ -706,30 +706,31 @@ At convergence, the gauge VFE achieves validation loss 5.44 (PPL 230), reducing 
 \subsection{Scaling to Larger Gauge Groups}
 \label{sec:scaling}
 
-To investigate how the gauge-theoretic framework scales with gauge group dimension, we trained an SO(50) model with the fundamental representation ($K = 50$), providing a single geometric attention head operating on 50-dimensional belief spaces. Table~\ref{tab:so50_results} summarizes results.
+To investigate how the gauge-theoretic framework scales with gauge group dimension, we trained SO(50) models with the fundamental representation ($K = 50$), providing a single geometric attention head operating on 50-dimensional belief spaces. Table~\ref{tab:so50_results} summarizes results.
 
 \begin{table}[h]
 \centering
 \small
-\caption{SO(50) gauge VFE performance on WikiText-103. Both models use 69.1M parameters with the fundamental SO(50) representation ($K=50$).}
+\caption{SO(50) gauge VFE performance on WikiText-103. All models use 69.1M parameters with the fundamental SO(50) representation ($K=50$).}
 \label{tab:so50_results}
-\begin{tabular}{lcccccc}
+\begin{tabular}{lccccc}
 \toprule
 \textbf{Covariance} & \textbf{Steps} & \textbf{Context} & \textbf{Val PPL} $\downarrow$ & \textbf{Test PPL} $\downarrow$ & \textbf{vs Random} \\
 \midrule
 Diagonal & 200k & 256 & 195.5 & 250.1 & 257$\times$ \\
+Diagonal & 20k & 128 & 274.0 & 299.0 & 183$\times$ \\
 Full (non-diagonal) & 25k & 128 & 279.5 & 295.4 & 180$\times$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The SO(50) diagonal model achieves validation perplexity 195.5 (test PPL 250.1), representing a 257$\times$ improvement over random chance. This outperforms our SO(20) baseline (PPL 230), suggesting that larger gauge groups with richer symmetry structure can improve modeling capacity.
+The fully-trained SO(50) diagonal model (200k steps) achieves validation perplexity 195.5 (test PPL 250.1), representing a 257$\times$ improvement over random chance. This outperforms our SO(20) baseline (PPL 230), suggesting that larger gauge groups with richer symmetry structure can improve modeling capacity.
 
 \subsubsection{Full Covariance Without Diagonal Approximation}
 
 A key implementation detail in our primary experiments is the diagonal covariance approximation $\Sigma_i = \text{diag}(\sigma_i^2)$, which reduces computational cost from $O(K^2)$ to $O(K)$ per agent. To validate that the framework functions without this approximation, we trained an SO(50) model with \emph{fully general} (non-diagonal) covariance matrices.
 
-The non-diagonal model achieves validation perplexity 279.5 after only 25,000 steps---just 12.5\% of the training budget used for the diagonal model. Despite the reduced training, performance degrades only modestly: the non-diagonal model achieves 180$\times$ improvement over random compared to 257$\times$ for the fully-trained diagonal model. Extrapolating training curves suggests the non-diagonal model would likely match or approach diagonal performance given equivalent training time.
+At comparable training budgets (20k--25k steps, context length 128), the diagonal and non-diagonal models achieve nearly identical performance: the diagonal model reaches validation PPL 274.0 (test 299.0) at 20k steps, while the non-diagonal model achieves validation PPL 279.5 (test 295.4) at 25k steps. Remarkably, the non-diagonal model achieves \emph{slightly better test perplexity} despite the diagonal model having a modest validation advantage. This demonstrates that the full covariance formulation incurs minimal performance penalty while enabling richer belief representations.
 
 This result has several implications:
 \begin{enumerate}
