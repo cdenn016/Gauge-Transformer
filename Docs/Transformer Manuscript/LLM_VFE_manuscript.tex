@@ -320,11 +320,11 @@ The individual KL gradient components are:
 \label{eq:grad_sigma_kl_forward}
 \end{equation}
 \begin{equation}
-\nabla_{\Sigma_i} D_{\mathrm{KL}}(q_k \| \Omega_{ki}[q_i]) = 
-\tfrac{1}{2} R_{ki}^\top \, \Omega_{ki}[\Sigma_i]^{-1} \, R_{ki},
+\nabla_{\Sigma_i} D_{\mathrm{KL}}(q_k \| \Omega_{ki}[q_i]) =
+\tfrac{1}{2} \Omega_{ki}^\top \, \Omega_{ki}[\Sigma_i]^{-1} \, \Omega_{ki}.
 \label{eq:grad_sigma_kl_backward}
 \end{equation}
-where $R_{ki} = e^{\phi_k} e^{-\phi_i}$ is the transport operator matrix. The coupling weight gradients follow from the chain rule:
+The coupling weight gradients follow from the chain rule:
 \begin{equation}
 \nabla_{\Sigma_i} \beta_{ij} = -\frac{\beta_{ij}}{\kappa_\beta} \left[\nabla_{\Sigma_i} D_{\mathrm{KL}}(q_i \| \Omega_{ij}[q_j]) - \langle \nabla_{\Sigma_i} D_{\mathrm{KL}}(q_i \| \Omega_{ik}[q_k]) \rangle_{\beta_i} \right],
 \label{eq:grad_sigma_beta}
@@ -349,17 +349,16 @@ For a transport operator $\Omega_{ij}[\cdot]$ acting on a Gaussian with paramete
 \end{equation}
 
 \begin{equation}
-\nabla_{\phi_i} \Omega_{ij}[\Sigma] = \frac{\mathrm{d}}{\mathrm{d}\phi_i}\left(e^{\phi_i} e^{-\phi_j} \Sigma e^{-\phi_j^\top} e^{\phi_i^\top}\right) = \left[\frac{\mathrm{d} e^{\phi_i}}{\mathrm{d}\phi_i}\right] R_{ij} \Sigma R_{ij}^\top + \text{transpose term},
+\nabla_{\phi_i} \Omega_{ij}[\Sigma] = \frac{\mathrm{d}}{\mathrm{d}\phi_i}\left(e^{\phi_i} e^{-\phi_j} \Sigma e^{\phi_j} e^{-\phi_i}\right) = \left[\frac{\mathrm{d} e^{\phi_i}}{\mathrm{d}\phi_i}\right] e^{-\phi_j} \Sigma e^{\phi_j} + \text{transpose term}.
 \label{eq:grad_phi_transport_sigma}
 \end{equation}
-
-where $R_{ij} = e^{-\phi_j}$. The derivative of the matrix exponential can be computed using the differential of the exponential map~\citep{gallier2020differential}:
+The derivative of the matrix exponential can be computed using the differential of the exponential map~\citep{gallier2020differential}:
 
 \begin{equation}
 \frac{\mathrm{d} e^{\phi}}{\mathrm{d}\phi} \cdot \xi = \int_0^1 e^{t\phi} \, \xi \, e^{(1-t)\phi} \, \mathrm{d}t,
 \label{eq:matrix_exp_differential}
 \end{equation}
-for $\xi \in \mathfrak{so}(3)$, or alternatively via the adjoint representation:
+for $\xi \in \mathfrak{so}(N)$, or alternatively via the adjoint representation:
 \begin{equation}
 \frac{\mathrm{d}}{\mathrm{d}t}\Big|_{t=0} e^{\phi + t\xi} = e^{\phi} \, \mathrm{dexp}_\phi(\xi),
 \label{eq:matrix_exp_adjoint}
