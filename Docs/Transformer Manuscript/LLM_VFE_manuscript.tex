@@ -41,9 +41,9 @@
 \ShortHeadings{Attention and Transformers Without Neural Architectures}{Dennis}
 
 \begin{abstract}
-During the past decade transformers have achieved remarkable success in language, image, video generation and reasoning, yet their theoretical foundations remain obscure. In companion theoretical work (under review), we derive transformer attention and feed-forward mechanisms from first principles using gauge-equivariant variational free energy defined on a principal bundle. Here, we present the first working implementation of this framework at production scale, demonstrating that explicit probabilistic inference (without neural architectures) achieves meaningful language modeling performance.
+During the past decade transformers have achieved remarkable success in language, image, video generation and reasoning, yet their theoretical foundations remain obscure. In companion theoretical work, we derive transformer attention and feed-forward mechanisms from first principles using gauge-equivariant variational free energy (VFE) defined on a principal bundle. Here, we present the first working implementation of this framework at production scale, demonstrating that explicit probabilistic inference (without neural architectures) achieves meaningful language modeling performance.
 
-We implement and validate gauge-theoretic transformers using natural gradient descent on statistical manifolds with multi-head attention defined by Lie group structure. On token-level language modeling (WikiText-103, vocabulary 50,257), our single-layer SO(20) gauge architecture achieves perplexity 230 using pure variational inference---without MLPs, activation functions, or learned attention projections. We compare against standard transformers under parameter-matched ($\sim$24M) and embedding-matched (dimension 100) conditions.
+We implement and validate gauge-theoretic transformers using natural gradient descent on statistical manifolds with multi-head attention defined by Lie group structure. On token-level language modeling (WikiText-103, vocabulary 50,257), our single-layer SO(20) gauge architecture achieves perplexity 230 using pure variational inference without MLPs, activation functions, or learned attention projections. We compare against standard transformers under parameter-matched ($\sim$24M) and embedding-matched (dimension 100) conditions.
 
 This proof-of-principle establishes that gauge-theoretic attention is not merely mathematically feasible but operationally viable at production scale. Our architecture achieves 218$\times$ improvement over random chance through geometric structure alone, validating that transformer-like behavior emerges from gauge-theoretic principles. While a parameter-matched standard transformer achieves better absolute performance (PPL 178 vs 230), the gauge VFE reaches 77\% of this using only geometric structure---a single layer with no learned projections or feed-forward networks. Notably, the VFE outperforms the embedding-matched standard transformer (230 vs 260 PPL), demonstrating superior parameter efficiency at fixed embedding dimension. We conclude that neural architectures are, in this view, computational approximations to a deeper information gauge geometry that transcends the field of machine learning.
 \end{abstract}
@@ -54,13 +54,13 @@ This proof-of-principle establishes that gauge-theoretic attention is not merely
 
 Transformer architectures~\citep{vaswani2017attention} have revolutionized natural language processing, achieving remarkable performance on tasks from translation to reasoning~\citep{devlin2018bert,radford2019language,brown2020language}. Yet their theoretical foundations remain obscure. Why does dot-product attention work? What makes the specific combination of multi-head attention and feed-forward networks so effective? Standard transformers provide no principled answers---attention weights emerge from learned projections, and feed-forward layers apply arbitrary nonlinearities. This opacity limits our ability to understand, improve, or generalize these architectures.
 
-In companion theoretical work (under review), we propose that transformers implicitly implement geometric operations on statistical manifolds. We derive attention mechanisms from first principles using gauge theory on principal bundles, where tokens are autonomous agents maintaining probabilistic beliefs, attention weights emerge from KL divergences measuring belief alignment, and feed-forward computation reduces to variational free energy minimization. This framework predicts that transformer-like behavior should emerge from pure geometric structure---without neural networks, learned weight matrices, or activation functions.
+In companion theoretical work, we propose that transformers implicitly implement geometric operations on statistical manifolds. We derive attention mechanisms from first principles using gauge theory on principal bundles, where tokens behave as autonomous agents maintaining probabilistic beliefs, attention weights emerge from KL divergences measuring belief alignment, and feed-forward computation reduces to variational free energy minimization. This framework predicts that transformer-like behavior should emerge from pure geometric structure without neural networks, learned weight matrices, or activation functions.
 
-This paper presents the first implementation of gauge-theoretic transformers at production scale, testing whether explicit geometric inference can perform meaningful language modeling. We implement a complete gauge variational free energy (VFE) architecture using SO(20) gauge symmetry, KL-divergence attention, and natural gradient descent on statistical manifolds. The architecture contains \emph{zero neural network components}: no MLPs, no ReLU/GELU activations, no learned attention projections $W_Q, W_K, W_V$. All computation derives from geometric operations on probability distributions.
+This paper presents the first implementation of a information-theoretic transformer at production scale, testing whether explicit geometric inference can perform meaningful language modeling. We implement a complete gauge variational free energy (VFE) architecture using SO(20) gauge symmetry, KL-divergence attention, and natural gradient descent on statistical manifolds. The architecture contains zero neural network components: no MLPs, no ReLU/GELU activations, no learned attention projections $W_Q, W_K, W_V$. All computation derives from geometric operations on probability distributions.
 
-We validate on WikiText-103 token-level language modeling (vocabulary 50,257, context length 128) and compare against standard transformers under controlled conditions. Our single-layer gauge VFE achieves perplexity 230---a 218$\times$ improvement over random chance---demonstrating that geometric inference alone produces meaningful language modeling. While a parameter-matched standard transformer achieves better absolute performance (PPL 178), the gauge VFE outperforms the embedding-matched baseline (PPL 260), suggesting superior parameter efficiency when embedding dimensions are constrained.
+We validate on WikiText-103 token-level language modeling (vocabulary 50,257, context length 128) and compare against standard transformers under controlled conditions. Our single-layer gauge VFE achieves perplexity 230 (a 218$\times$ improvement over random chance) demonstrating that geometric inference alone produces meaningful language modeling. While a parameter-matched standard transformer achieves better absolute performance (PPL 178), the gauge VFE outperforms the embedding-matched baseline (PPL 260), suggesting superior parameter efficiency when embedding dimensions are constrained.
 
-Beyond performance metrics, we observe emergent semantic structure in the learned gauge frames: PCA reveals that tokens spontaneously cluster by linguistic category (punctuation, function words, content words) without explicit supervision. This provides interpretable geometric coordinates for language that standard embeddings lack. 
+Beyond performance metrics, we observe emergent semantic structure in both the learned gauge frames and MVG mean vectors.  PCA reveals that tokens spontaneously cluster by linguistic category (punctuation, function words, content words) without explicit supervision. This provides interpretable geometric coordinates for language that standard embeddings lack. 
 
 \subsection{Gauge-Theoretic Attention}
 
@@ -93,17 +93,6 @@ Geometric hyperparameters & 0\% & 5\% \\
 \end{tabular}
 \end{table}
 
-If transformers implicitly learn to approximate geometric operations through billions of parameters, can we implement them explicitly and validate this interpretation?
-
-Testing whether gauge theory captures fundamental attention principles requires building working prototypes which engage in comparable learning. This presents three challenges:
-%
-\begin{enumerate}
-    \item \textbf{Computational feasibility:} Can we compute parallel transport $\Omega_{ij}$, gauge attention $\beta_{ij}$, and natural gradient descent on statistical manifolds?
-    
-    \item \textbf{Empirical validation:} Do gauge-theoretic agents achieve comparable performance to standard transformers, or does explicit geometric structure impose prohibitive constraints?
-    
-    \item \textbf{Interpretability:} Does explicit computation of beliefs, transport, and Fisher information provide insights that black-box attention cannot?
-\end{enumerate}
 
 \subsection{Related Work}
 
@@ -349,12 +338,8 @@ The gauge frames $\phi_i \in \mathfrak{so}(N)$ influence the energy functional e
 \begin{align}
 \nabla_{\phi_i} \mathcal{F} &=
 \sum_j \left[(\nabla_{\phi_i} \beta_{ij}) K_{ij} + \beta_{ij} \nabla_{\phi_i} K_{ij}\right] \label{eq:grad_phi_complete_a} \\
-&\quad + \sum_j \left[(\nabla_{\phi_i} \gamma_{ij}) K_{ij}^{(p)} + \gamma_{ij} \nabla_{\phi_i} K_{ij}^{(p)}\right] \label{eq:grad_phi_complete_b} \\
 &\quad + \sum_k \beta_{ki} \nabla_{\phi_i} D_{\mathrm{KL}}(q_k \| \Omega_{ki}[q_i]) \label{eq:grad_phi_complete_c} \\
-&\quad + \sum_k \gamma_{ki} \nabla_{\phi_i} D_{\mathrm{KL}}(p_k \| \Omega_{ki}[p_i]), \label{eq:grad_phi_complete_d}
 \end{align}
-
-where $K_{ij}^{(p)} = D_{\mathrm{KL}}(p_i \| \Omega_{ij}[p_j])$ denotes the prior alignment term. Terms~\eqref{eq:grad_phi_complete_a}--\eqref{eq:grad_phi_complete_b} account for $i$ aligning to others through belief and model coupling weights (with product rule), while~\eqref{eq:grad_phi_complete_c}--\eqref{eq:grad_phi_complete_d} account for others aligning to $i$.
 
 For a transport operator $\Omega_{ij}[\cdot]$ acting on a Gaussian with parameters $(\mu, \Sigma)$, the gradients are:
 
