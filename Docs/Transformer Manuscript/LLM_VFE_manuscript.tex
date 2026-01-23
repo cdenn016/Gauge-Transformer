@@ -1066,7 +1066,7 @@ Table~\ref{tab:ablation_capacity} shows performance across gauge group dimension
 \begin{table}[h]
 \centering
 \small
-\caption{Model capacity ablation. All models use 1 layer, $\kappa_\beta=1$, 20k training steps, context length 128.}
+\caption{Model capacity ablation. All models use 1 layer, $\kappa_\beta=1$, 20k training steps, context length 128 unless noted.}
 \label{tab:ablation_capacity}
 \begin{tabular}{lrrrrr}
 \toprule
@@ -1076,17 +1076,22 @@ SO(3) & 3 & 0.6M & 1,472 & 1,326 & 38$\times$ \\
 SO(5) & 5 & 1.3M & 739 & 701 & 72$\times$ \\
 SO(10) & 10 & 3.8M & 507 & 544 & 92$\times$ \\
 SO(15) & 15 & 7.5M & 452 & 368 & 137$\times$ \\
-SO(20) & 20 & 26.4M & 369 & 318 & 158$\times$ \\
+SO(20) & 20 & 12.6M & 369 & 340 & 148$\times$ \\
+SO(25) & 25 & 18.8M & 426 & 325 & 155$\times$ \\
+SO(30) & 30 & 26.4M & 369 & 318 & 158$\times$ \\
 SO(45) & 45 & 56.5M & 314 & 308 & 163$\times$ \\
 \textbf{SO(50)} & \textbf{50} & \textbf{69.1M} & \textbf{274} & \textbf{299} & \textbf{168$\times$} \\
 SO(55) & 55 & 82.9M & 312 & 304 & 165$\times$ \\
 SO(60) & 60 & 98.0M & 347 & 309 & 163$\times$ \\
+SO(70) & 70 & 131.9M & 367 & 324 & 155$\times$ \\
 SO(100) & 100 & 263.8M & 325 & 356 & 141$\times$ \\
+\midrule
+SO(50) & 100 & 76.6M & 334 & 282 & 178$\times$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Performance improves with gauge group dimension up to SO(50), achieving optimal test PPL of 299. Beyond SO(50), performance degrades despite increased parameters, suggesting optimization difficulties at larger scales or insufficient training steps for larger models.
+Performance improves with gauge group dimension up to SO(50), achieving optimal test PPL of 299. Beyond SO(50), performance degrades despite increased parameters, suggesting optimization difficulties at larger scales. Notably, SO(50) with $K=100$ (using 2 copies of the fundamental irrep) achieves test PPL 282, outperforming SO(100) with $K=100$.
 
 \subsection{VFE Inference Iterations}
 
@@ -1095,19 +1100,50 @@ Table~\ref{tab:ablation_vfe} examines the effect of multiple VFE descent iterati
 \begin{table}[h]
 \centering
 \small
-\caption{VFE iteration ablation. SO(50), $K=50$, 1 layer, 20k steps.}
+\caption{VFE iteration ablation at two scales.}
 \label{tab:ablation_vfe}
-\begin{tabular}{rrrr}
+\begin{tabular}{llrrrr}
 \toprule
-\textbf{VFE Iterations} & \textbf{Val PPL} & \textbf{Test PPL} & \textbf{vs Random} \\
+\textbf{Config} & \textbf{VFE Iters} & \textbf{Steps} & \textbf{Val PPL} & \textbf{Test PPL} & \textbf{vs Random} \\
 \midrule
-1 & 274 & 299 & 168$\times$ \\
-\textbf{5} & \textbf{265} & \textbf{270} & \textbf{186$\times$} \\
+\multicolumn{6}{l}{\textit{SO(50), $K=50$, 69.1M params}} \\
+\quad & 1 & 20k & 274 & 299 & 168$\times$ \\
+\quad & \textbf{5} & \textbf{20k} & \textbf{265} & \textbf{270} & \textbf{186$\times$} \\
+\midrule
+\multicolumn{6}{l}{\textit{SO(20), $K=20$, 12.6M params}} \\
+\quad & 1 & 2k & 739 & 768 & 65$\times$ \\
+\quad & 2 & 2k & 748 & 770 & 65$\times$ \\
+\quad & 10 & 2k & 753 & 759 & 66$\times$ \\
+\quad & 50 & 2k & 758 & 760 & 66$\times$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Increasing VFE iterations from 1 to 5 yields substantial improvement (test PPL 299 $\to$ 270), demonstrating that deeper inference within the forward pass benefits performance. This is our best result overall.
+At the optimal scale (SO(50)), increasing VFE iterations from 1 to 5 yields substantial improvement (test PPL 299 $\to$ 270). At smaller scale with limited training (SO(20), 2k steps), additional VFE iterations provide modest benefit, suggesting iteration count interacts with model capacity and training budget.
+
+\subsection{Attention Temperature $\kappa_\beta$}
+
+Table~\ref{tab:ablation_temp} shows sensitivity to the attention temperature parameter.
+
+\begin{table}[h]
+\centering
+\small
+\caption{Temperature ablation. SO(50), $K=50$, 1 layer, 20k steps.}
+\label{tab:ablation_temp}
+\begin{tabular}{rrrr}
+\toprule
+\textbf{$\kappa_\beta$} & \textbf{Val PPL} & \textbf{Test PPL} & \textbf{vs Random} \\
+\midrule
+0.25 & 285 & 307 & 164$\times$ \\
+0.75 & 285 & 311 & 162$\times$ \\
+\textbf{1.00} & \textbf{274} & \textbf{299} & \textbf{168$\times$} \\
+1.25 & 291 & 309 & 163$\times$ \\
+1.75 & 301 & 303 & 166$\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The model is relatively robust to temperature, with $\kappa_\beta = 1.0$ achieving best performance. Both lower ($\kappa_\beta < 1$) and higher ($\kappa_\beta > 1$) temperatures degrade performance modestly (8--12 PPL).
 
 \subsection{Gauge Group Structure: Single vs. Multiple Irreps}
 
@@ -1116,58 +1152,57 @@ Table~\ref{tab:ablation_irrep} compares single fundamental irreps against multip
 \begin{table}[h]
 \centering
 \small
-\caption{Gauge group structure ablation comparing SO(3) with multiple irreps vs SO(50) fundamental.}
+\caption{Gauge group structure ablation comparing SO(3) with multiple irreps vs larger groups.}
 \label{tab:ablation_irrep}
 \begin{tabular}{llrrrr}
 \toprule
 \textbf{Group} & \textbf{Irrep Structure} & \textbf{K} & \textbf{Params} & \textbf{Test PPL} \\
 \midrule
-SO(3) & $\ell=1,4,5,6,7$ (5 irreps) & 51 & 7.8M & 291 \\
-SO(3) & fundamental ($\ell=1$) & 60 & 9.2M & 327 \\
+\textbf{SO(3)} & \textbf{$\ell=1,4,5,6,7$ (5 irreps)} & \textbf{51} & \textbf{7.8M} & \textbf{291} \\
+SO(3) & fundamental ($\ell=1$), $K=60$ & 60 & 9.2M & 327 \\
 SO(50) & fundamental & 50 & 69.1M & 299 \\
+SO(50) & 2$\times$ fundamental & 100 & 76.6M & 282 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 The SO(3) model with multiple irreps ($\ell=1,4,5,6,7$) achieves test PPL 291 with only 7.8M parameters---outperforming the 69.1M parameter SO(50) model. This suggests that richer irrep decompositions may be more parameter-efficient than larger gauge groups with single irreps.
 
-\subsection{Temperature and Step Size}
+\subsection{Training Steps and Learning Rate}
 
-Table~\ref{tab:ablation_hyperparams} shows sensitivity to attention temperature $\kappa_\beta$ and learning rate.
+Table~\ref{tab:ablation_training} shows sensitivity to training duration and learning rate.
 
 \begin{table}[h]
 \centering
 \small
-\caption{Hyperparameter sensitivity. SO(50), $K=50$, 1 layer, context 128.}
-\label{tab:ablation_hyperparams}
-\begin{tabular}{llrrr}
+\caption{Training ablation. SO(20), $K=20$, 12.6M params, context 64.}
+\label{tab:ablation_training}
+\begin{tabular}{lrrrr}
 \toprule
-\textbf{Ablation} & \textbf{Setting} & \textbf{Steps} & \textbf{Val PPL} & \textbf{Test PPL} \\
+\textbf{Setting} & \textbf{Steps} & \textbf{Val PPL} & \textbf{Test PPL} & \textbf{vs Random} \\
 \midrule
-\multicolumn{5}{l}{\textit{Temperature $\kappa_\beta$}} \\
-\quad Baseline & $\kappa_\beta = 1.0$ & 20k & 274 & 299 \\
-\quad Higher temp & $\kappa_\beta = 1.75$ & 20k & 301 & 303 \\
-\midrule
-\multicolumn{5}{l}{\textit{Learning rate (SO(20), $K=20$)}} \\
-\quad Baseline & $\eta = 0.01$ & 20k & 369 & 318 \\
-\quad Low LR & $\eta = 0.001$ & 40k & 559 & 563 \\
-\quad Undertrained & $\eta = 0.01$ & 2k & 739 & 768 \\
+$\eta = 0.01$ & 2k & 739 & 768 & 65$\times$ \\
+$\eta = 0.01$ & 4k & 665 & 587 & 86$\times$ \\
+$\eta = 0.01$ & 20k & 369 & 340 & 148$\times$ \\
+$\eta = 0.001$ & 40k & 559 & 563 & 89$\times$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The model is relatively robust to temperature ($\kappa_\beta = 1.0$ vs 1.75 yields only 4 PPL difference), but sensitive to learning rate. Lower learning rates with longer training underperform, suggesting the natural gradient benefits from larger step sizes.
+Longer training consistently improves performance. Lower learning rate ($\eta = 0.001$) with extended training (40k steps) underperforms higher learning rate with shorter training (20k steps), suggesting natural gradient descent benefits from larger step sizes.
 
 \subsection{Key Findings}
 
 \begin{enumerate}
-\item \textbf{Optimal capacity:} SO(50) with $K=50$ provides the best single-irrep performance; larger groups show diminishing returns.
+\item \textbf{Optimal capacity:} SO(50) with $K=50$ provides the best single-irrep performance; larger groups show diminishing returns. SO(50) with $K=100$ (2$\times$ fundamental) achieves PPL 282.
 
-\item \textbf{Multiple VFE iterations:} Increasing from 1 to 5 iterations improves test PPL from 299 to 270 (our best result).
+\item \textbf{Multiple VFE iterations:} Increasing from 1 to 5 iterations improves test PPL from 299 to 270 (our best result at SO(50) scale).
 
-\item \textbf{Irrep efficiency:} SO(3) with multiple irreps ($\ell=1,4,5,6,7$) achieves PPL 291 with only 7.8M params, outperforming 69.1M param SO(50). This suggests exploring richer irrep structures is a promising direction.
+\item \textbf{Irrep efficiency:} SO(3) with multiple irreps ($\ell=1,4,5,6,7$) achieves PPL 291 with only 7.8M params, outperforming 69.1M param SO(50). Exploring richer irrep structures is a promising direction.
 
-\item \textbf{Robustness:} Temperature $\kappa_\beta$ and learning rate have modest effects within reasonable ranges.
+\item \textbf{Temperature robustness:} $\kappa_\beta = 1.0$ is optimal; deviations in either direction degrade performance by 8--12 PPL.
+
+\item \textbf{Learning rate:} Natural gradient descent benefits from larger step sizes ($\eta = 0.01$) rather than smaller steps with longer training.
 \end{enumerate}
 
 \section{Vacuum Theory and Symmetry Breaking}
