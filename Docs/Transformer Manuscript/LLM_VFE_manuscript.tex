@@ -227,11 +227,11 @@ In our gauge theory, observations by agents act as a source term which breaks th
 In the presence of observations   
 
 \begin{equation}
-\mathcal{F}[\{q_i\}] = 
+\mathcal{F}[\{q_i\}] =
 \sum_i D_{\mathrm{KL}}(q_i \| p_i)
 + \sum_{i,j} \beta_{ij} D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)
 - \mathbb{E}_q[\log p(o \mid c)]
-\label{eq:free_energy_decomposed}
+\label{eq:free_energy_training}
 \end{equation}
 
 gauge symmetry breaks and each agent generically flows towards unique non-invariant statistics.  
@@ -246,7 +246,7 @@ Then
 
 
 
-Computing gradients of the variational free energy~\eqref{eq:free_energy_decomposed} requires careful treatment of coupling weights $\beta_{ij}$, which themselves depend on KL divergences. We derive gradients using the product rule and chain rule.
+Computing gradients of the variational free energy~\eqref{eq:free_energy_training} requires careful treatment of coupling weights $\beta_{ij}$, which themselves depend on KL divergences. We derive gradients using the product rule and chain rule.
 
 The self-alignment term $D_{\mathrm{KL}}(q_i \| p_i)$ for $q_i = \mathcal{N}(\mu_q^i, \Sigma_q^i)$ and $p_i = \mathcal{N}(\mu_p^i, \Sigma_p^i)$ yields standard Gaussian KL gradients:
 
@@ -310,9 +310,9 @@ where~\eqref{eq:grad_sigma_complete_a} is the self-term,~\eqref{eq:grad_sigma_co
 
 The individual KL gradient components are:
 \begin{equation}
-\nabla_{\Sigma_i} D_{\mathrm{KL}}(q_i \| p_i) = 
-\tfrac{1}{2}\left[\Sigma_i^{-1} - \Sigma_{p_i}^{-1}\right],
-\label{eq:grad_sigma_self}
+\nabla_{\Sigma_i} D_{\mathrm{KL}}(q_i \| p_i) =
+\tfrac{1}{2}\left[\Sigma_{p_i}^{-1} - \Sigma_i^{-1}\right],
+\label{eq:grad_sigma_self_component}
 \end{equation}
 \begin{equation}
 \nabla_{\Sigma_i} D_{\mathrm{KL}}(q_i \| \Omega_{ij}[q_j]) = 
@@ -373,6 +373,7 @@ All gradient implementations are validated against finite-difference approximati
 
 
 \subsection{Multi-Head Attention via Gauge Group Generators}
+\label{sec:multihead}
 
 Standard transformers employ multi-head attention by partitioning the embedding space into $H$ independent heads, each with learned projection matrices $W_Q^h, W_K^h, W_V^h$~\citep{vaswani2017attention}. While typically motivated as allowing attention to different representation subspaces, this design lacks geometric structure. Our gauge-theoretic framework provides principled multi-head attention through Lie algebra generators acting on a chosen representation.
 
@@ -549,18 +550,7 @@ where $\text{token}(i)$ denotes the token type at position $i$. Thus $\mu_i(0) =
 
 \paragraph{Multi-head structure.}
 
-The number of attention heads is determined by the irrep decomposition: with 5 copies of the 20-dimensional fundamental representation, we obtain $H = 5$ independent attention heads. Each head operates on a 20-dimensional subspace where SO(20) acts via its 190 generators. Each head $h$ computes transport via:
-\begin{equation}
-\Omega_{ij}^{(h)} = \exp(\phi_i^{(h)} G_h) \cdot \exp(-\phi_j^{(h)} G_h)
-\end{equation}
-
-The embedding dimension $K = 100$ accommodates the SO(20) fundamental representation acting on 20-dimensional subspaces. With 5 copies of the fundamental irrep, we obtain:
-
-\begin{equation}
-\rho = 5 \times \ell_{\text{fund}} \quad (K = 5 \times 20 = 100)
-\end{equation}
-
-The generators act block-diagonally across these 5 independent copies, yielding 5 attention heads (one per irrep copy) where features within each 20-dimensional block transform equivariantly under SO(20). This provides geometric interpretability absent in standard transformers, where the number of attention heads is an arbitrary hyperparameter rather than emerging from symmetry structure.
+As described in Section~\ref{sec:multihead}, the number of attention heads emerges from the irrep decomposition. With 5 copies of the 20-dimensional SO(20) fundamental representation ($K = 5 \times 20 = 100$), we obtain $H = 5$ independent attention heads, each operating on a 20-dimensional subspace with transport computed via $\Omega_{ij}^{(h)} = \exp(\phi_i^{(h)} G_h) \cdot \exp(-\phi_j^{(h)} G_h)$.
 
 \subsection{Hyperparameters.}
 
@@ -731,7 +721,7 @@ Our empirical results establish several key findings:
   \item \textbf{Computational feasibility:} The implementation achieves $\sim$890 tokens/second ($\sim$29$\times$ overhead vs standard), a dramatic improvement over earlier prototypes, demonstrating that gauge-theoretic inference is practically trainable.
 \end{enumerate}
 
-The comparison with standard transformers [TO BE COMPLETED] will reveal whether the geometric approach trades off absolute performance for architectural simplicity and interpretability. Regardless of relative performance, the key contribution is demonstrating that attention mechanisms can be derived from and implemented via gauge theory.
+The comparison with standard transformers reveals that the geometric approach trades some absolute performance for architectural simplicity and interpretability. Regardless of relative performance, the key contribution is demonstrating that attention mechanisms can be derived from and implemented via gauge theory.
 
 Our geometric reformulation of transformers allows previously ill-understood and ad-hoc structures to have a deeper significance.  Learned weights and neural architectures approximate a deeper variational free energy functional.  Indeed, we conjecture that neural architecture are the biological instantiation of this deeper informational geometry.  Positional and token encoding are approximations to gauge frames and belief statistics.  ReLU/GELU/etc are nonlinear systems approximating the product rule of gauge attention.  Backpropagation is model updating under variational inference.  Multi-head attention, perhaps most surprisingly, is gauge group decomposition into invariant subspaces and, remarkably, training is manifestly a spontaneous symmetry breaking phenomenon.  These results intersect, straddle, and link informational geometry, machine learning, physics, neuroscience, and more.  The geometric attention mechanism therefore warrants further study.
 
@@ -752,7 +742,7 @@ Our geometric reformulation of transformers allows previously ill-understood and
         \caption{Observation-driven symmetry breaking}
         \label{fig:symmetry_breaking}
     \end{subfigure}
-    \caption{Evolution of agent mean parameters $\mu_i$ under variational free energy descent. \textbf{(a)} Without observations, agents converge to a gauge-invariant ground state with equal magnitudes $|\mu_i| = \mu^*$, forming a degenerate Goldstone manifold. \textbf{(b)} With observations, agents flow to diverse magnitudes $|\mu_i|$, spontaneously breaking SO(3) gauge symmetry and specializing based on semantic content.}
+    \caption{Evolution of agent mean parameters $\mu_i$ under variational free energy descent. \textbf{(a)} Without observations, agents converge to a gauge-invariant ground state with equal magnitudes $|\mu_i| = \mu^*$, forming a degenerate Goldstone manifold. \textbf{(b)} With observations, agents flow to diverse magnitudes $|\mu_i|$, spontaneously breaking gauge symmetry and specializing based on semantic content.}
     \label{fig:gauge_dynamics}
 \end{figure}
 
@@ -776,7 +766,7 @@ A critical distinction between standard and gauge-theoretic transformers concern
 \toprule
 \textbf{Property} & \textbf{Standard} & \textbf{Gauge-Theoretic} \\
 \midrule
-Number of heads $H$ & Hyperparameter & $\dim(\mathfrak{g})$ \\
+Number of heads $H$ & Hyperparameter & \# irrep copies \\
 Head definition & Learned $W_Q, W_K, W_V$ & Lie generators $G_h$ \\
 Embedding dimension $K$ & Hyperparameter & $\sum_k n_k \dim(\ell_k)$ \\
 Feature structure & Arbitrary partition & Irrep decomposition \\
