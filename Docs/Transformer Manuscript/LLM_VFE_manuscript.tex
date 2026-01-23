@@ -1054,6 +1054,73 @@ Table~\ref{tab:hyperparams} provides full hyperparameter settings for reproducib
 
 Training performed on a single NVIDIA RTX 5090 GPU (32GB). Learning rates differ by architecture: $\eta = 0.01$ for gauge VFE with natural gradient descent, $\eta = 3 \times 10^{-4}$ for standard transformers with Adam~\citep{kingma2014adam}.
 
+\section{Ablation Studies}
+\label{app:ablations}
+
+We conducted comprehensive ablation studies across six dimensions: embedding dimension $K$, attention temperature $\kappa_\beta$, number of layers, gauge group structure (single vs. multiple irrep heads), learning rate, and number of VFE inference steps. Table~\ref{tab:ablations} summarizes representative results from 34 experiments.
+
+\begin{table}[h]
+\centering
+\small
+\caption{Ablation study results on WikiText-103. Experiments sorted by test perplexity within each category. Best result in each category shown in \textbf{bold}.}
+\label{tab:ablations}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Configuration} & \textbf{Params} & \textbf{Val PPL} & \textbf{Test PPL} & \textbf{Improvement} \\
+\midrule
+\multicolumn{5}{l}{\textit{Model capacity scaling (K and layers)}} \\
+\quad Minimal ($K \approx 10$) & 603K & 1,425 & 1,380 & 36$\times$ \\
+\quad Small ($K \approx 20$) & 1.3M & 739 & 701 & 72$\times$ \\
+\quad Medium ($K \approx 30$) & 3.8M & 507 & 544 & 92$\times$ \\
+\quad Medium ($K \approx 40$) & 7.5M & 452 & 368 & 136$\times$ \\
+\quad \textbf{Efficient ($K \approx 50$)} & \textbf{7.8M} & \textbf{325} & \textbf{291} & \textbf{173$\times$} \\
+\quad Standard ($K = 50$) & 12.6M & 329 & 340 & 148$\times$ \\
+\quad Large ($K = 60$) & 18.8M & 426 & 325 & 155$\times$ \\
+\quad Large ($K = 70$) & 26.4M & 369 & 318 & 158$\times$ \\
+\quad XL ($K = 100$) & 56.5M & 314 & 308 & 163$\times$ \\
+\quad \textbf{Optimal ($K = 50$, SO(50))} & \textbf{69.1M} & \textbf{274} & \textbf{299} & \textbf{168$\times$} \\
+\quad XXL ($K = 120$) & 76.6M & 334 & 282 & 178$\times$ \\
+\quad Huge ($K = 150$) & 82.9M & 312 & 304 & 165$\times$ \\
+\quad Huge ($K = 180$) & 98.0M & 347 & 309 & 162$\times$ \\
+\quad Giant ($K = 250$) & 131.9M & 367 & 324 & 155$\times$ \\
+\quad Giant ($K = 500$) & 263.8M & 325 & 356 & 141$\times$ \\
+\midrule
+\multicolumn{5}{l}{\textit{Temperature $\kappa_\beta$ sensitivity (12.6M params)}} \\
+\quad $\kappa_\beta = 0.1$ & 12.6M & 881 & 840 & 60$\times$ \\
+\quad $\kappa_\beta = 0.25$ & 12.6M & 739 & 768 & 65$\times$ \\
+\quad $\kappa_\beta = 0.5$ & 12.6M & 665 & 587 & 86$\times$ \\
+\quad $\kappa_\beta = 0.75$ & 12.6M & 559 & 563 & 89$\times$ \\
+\quad $\kappa_\beta = 1.0$ & 12.6M & 386 & 450 & 112$\times$ \\
+\quad $\kappa_\beta = 1.5$ & 12.6M & 424 & 351 & 143$\times$ \\
+\quad \textbf{$\kappa_\beta = 2.0$} & \textbf{12.6M} & \textbf{329} & \textbf{340} & \textbf{148$\times$} \\
+\quad $\kappa_\beta = 3.0$ & 12.6M & 369 & 341 & 147$\times$ \\
+\quad $\kappa_\beta = 5.0$ & 12.6M & 374 & 356 & 141$\times$ \\
+\midrule
+\multicolumn{5}{l}{\textit{Learning rate / VFE steps sensitivity (69.1M params)}} \\
+\quad Configuration A & 69.1M & 330 & 317 & 158$\times$ \\
+\quad Configuration B & 69.1M & 299 & 312 & 161$\times$ \\
+\quad Configuration C & 69.1M & 291 & 309 & 163$\times$ \\
+\quad Configuration D & 69.1M & 285 & 311 & 162$\times$ \\
+\quad Configuration E & 69.1M & 285 & 307 & 164$\times$ \\
+\quad Configuration F & 69.1M & 301 & 303 & 166$\times$ \\
+\quad \textbf{Configuration G} & \textbf{69.1M} & \textbf{274} & \textbf{299} & \textbf{168$\times$} \\
+\midrule
+\multicolumn{5}{l}{\textit{Best overall result}} \\
+\quad SO(50), optimized config & 69.1M & 265 & 270 & 186$\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Key Findings}
+
+\paragraph{Model capacity.} Performance improves with embedding dimension $K$ up to approximately $K=50$--$100$, beyond which diminishing returns or degradation occurs. Notably, a 7.8M parameter model achieves test PPL 291, competitive with models 10$\times$ larger, suggesting efficient configurations exist at smaller scales.
+
+\paragraph{Temperature sensitivity.} The attention temperature $\kappa_\beta$ critically affects performance. At 12.6M parameters, varying $\kappa_\beta$ from 0.1 to 5.0 changes test PPL from 840 to 340---a 2.5$\times$ variation. The optimal range appears to be $\kappa_\beta \in [1.5, 3.0]$, with $\kappa_\beta = 2.0$ achieving best results at this scale. Very low temperatures ($\kappa_\beta < 0.5$) produce sharp attention that destabilizes training.
+
+\paragraph{Optimization hyperparameters.} At fixed architecture (69.1M params), varying learning rate and VFE inference steps produces modest variation (PPL 299--317), indicating the framework is relatively robust to these choices once temperature and capacity are set appropriately.
+
+\paragraph{Scaling limits.} Models larger than $\sim$100M parameters show degraded performance, likely due to optimization difficulties with natural gradient descent at scale. This suggests different optimization strategies may be needed for very large gauge-theoretic models.
+
 \section{Vacuum Theory and Symmetry Breaking}
 \label{app:vacuum}
 
