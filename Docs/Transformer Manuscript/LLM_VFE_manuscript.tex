@@ -1054,6 +1054,122 @@ Table~\ref{tab:hyperparams} provides full hyperparameter settings for reproducib
 
 Training performed on a single NVIDIA RTX 5090 GPU (32GB). Learning rates differ by architecture: $\eta = 0.01$ for gauge VFE with natural gradient descent, $\eta = 3 \times 10^{-4}$ for standard transformers with Adam~\citep{kingma2014adam}.
 
+\section{Ablation Studies}
+\label{app:ablations}
+
+We conducted ablation studies across multiple dimensions to understand the sensitivity of gauge-theoretic transformers to architectural and optimization choices. All experiments use WikiText-103 with the same evaluation protocol.
+
+\subsection{Model Capacity: Gauge Group Dimension}
+
+Table~\ref{tab:ablation_capacity} shows performance across gauge group dimensions from SO(3) to SO(100), with embedding dimension $K$ matching the fundamental representation dimension.
+
+\begin{table}[h]
+\centering
+\small
+\caption{Model capacity ablation. All models use 1 layer, $\kappa_\beta=1$, 20k training steps, context length 128.}
+\label{tab:ablation_capacity}
+\begin{tabular}{lrrrrr}
+\toprule
+\textbf{Gauge Group} & \textbf{K} & \textbf{Params} & \textbf{Val PPL} & \textbf{Test PPL} & \textbf{vs Random} \\
+\midrule
+SO(3) & 3 & 0.6M & 1,472 & 1,326 & 38$\times$ \\
+SO(5) & 5 & 1.3M & 739 & 701 & 72$\times$ \\
+SO(10) & 10 & 3.8M & 507 & 544 & 92$\times$ \\
+SO(15) & 15 & 7.5M & 452 & 368 & 137$\times$ \\
+SO(20) & 20 & 26.4M & 369 & 318 & 158$\times$ \\
+SO(45) & 45 & 56.5M & 314 & 308 & 163$\times$ \\
+\textbf{SO(50)} & \textbf{50} & \textbf{69.1M} & \textbf{274} & \textbf{299} & \textbf{168$\times$} \\
+SO(55) & 55 & 82.9M & 312 & 304 & 165$\times$ \\
+SO(60) & 60 & 98.0M & 347 & 309 & 163$\times$ \\
+SO(100) & 100 & 263.8M & 325 & 356 & 141$\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Performance improves with gauge group dimension up to SO(50), achieving optimal test PPL of 299. Beyond SO(50), performance degrades despite increased parameters, suggesting optimization difficulties at larger scales or insufficient training steps for larger models.
+
+\subsection{VFE Inference Iterations}
+
+Table~\ref{tab:ablation_vfe} examines the effect of multiple VFE descent iterations within the forward pass.
+
+\begin{table}[h]
+\centering
+\small
+\caption{VFE iteration ablation. SO(50), $K=50$, 1 layer, 20k steps.}
+\label{tab:ablation_vfe}
+\begin{tabular}{rrrr}
+\toprule
+\textbf{VFE Iterations} & \textbf{Val PPL} & \textbf{Test PPL} & \textbf{vs Random} \\
+\midrule
+1 & 274 & 299 & 168$\times$ \\
+\textbf{5} & \textbf{265} & \textbf{270} & \textbf{186$\times$} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Increasing VFE iterations from 1 to 5 yields substantial improvement (test PPL 299 $\to$ 270), demonstrating that deeper inference within the forward pass benefits performance. This is our best result overall.
+
+\subsection{Gauge Group Structure: Single vs. Multiple Irreps}
+
+Table~\ref{tab:ablation_irrep} compares single fundamental irreps against multiple irrep decompositions.
+
+\begin{table}[h]
+\centering
+\small
+\caption{Gauge group structure ablation comparing SO(3) with multiple irreps vs SO(50) fundamental.}
+\label{tab:ablation_irrep}
+\begin{tabular}{llrrrr}
+\toprule
+\textbf{Group} & \textbf{Irrep Structure} & \textbf{K} & \textbf{Params} & \textbf{Test PPL} \\
+\midrule
+SO(3) & $\ell=1,4,5,6,7$ (5 irreps) & 51 & 7.8M & 291 \\
+SO(3) & fundamental ($\ell=1$) & 60 & 9.2M & 327 \\
+SO(50) & fundamental & 50 & 69.1M & 299 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The SO(3) model with multiple irreps ($\ell=1,4,5,6,7$) achieves test PPL 291 with only 7.8M parameters---outperforming the 69.1M parameter SO(50) model. This suggests that richer irrep decompositions may be more parameter-efficient than larger gauge groups with single irreps.
+
+\subsection{Temperature and Step Size}
+
+Table~\ref{tab:ablation_hyperparams} shows sensitivity to attention temperature $\kappa_\beta$ and learning rate.
+
+\begin{table}[h]
+\centering
+\small
+\caption{Hyperparameter sensitivity. SO(50), $K=50$, 1 layer, context 128.}
+\label{tab:ablation_hyperparams}
+\begin{tabular}{llrrr}
+\toprule
+\textbf{Ablation} & \textbf{Setting} & \textbf{Steps} & \textbf{Val PPL} & \textbf{Test PPL} \\
+\midrule
+\multicolumn{5}{l}{\textit{Temperature $\kappa_\beta$}} \\
+\quad Baseline & $\kappa_\beta = 1.0$ & 20k & 274 & 299 \\
+\quad Higher temp & $\kappa_\beta = 1.75$ & 20k & 301 & 303 \\
+\midrule
+\multicolumn{5}{l}{\textit{Learning rate (SO(20), $K=20$)}} \\
+\quad Baseline & $\eta = 0.01$ & 20k & 369 & 318 \\
+\quad Low LR & $\eta = 0.001$ & 40k & 559 & 563 \\
+\quad Undertrained & $\eta = 0.01$ & 2k & 739 & 768 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The model is relatively robust to temperature ($\kappa_\beta = 1.0$ vs 1.75 yields only 4 PPL difference), but sensitive to learning rate. Lower learning rates with longer training underperform, suggesting the natural gradient benefits from larger step sizes.
+
+\subsection{Key Findings}
+
+\begin{enumerate}
+\item \textbf{Optimal capacity:} SO(50) with $K=50$ provides the best single-irrep performance; larger groups show diminishing returns.
+
+\item \textbf{Multiple VFE iterations:} Increasing from 1 to 5 iterations improves test PPL from 299 to 270 (our best result).
+
+\item \textbf{Irrep efficiency:} SO(3) with multiple irreps ($\ell=1,4,5,6,7$) achieves PPL 291 with only 7.8M params, outperforming 69.1M param SO(50). This suggests exploring richer irrep structures is a promising direction.
+
+\item \textbf{Robustness:} Temperature $\kappa_\beta$ and learning rate have modest effects within reasonable ranges.
+\end{enumerate}
+
 \section{Vacuum Theory and Symmetry Breaking}
 \label{app:vacuum}
 
