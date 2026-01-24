@@ -20,7 +20,13 @@ PyTorch (GPU):
 # NumPy utilities
 from .transport import compute_transport as np_transport_operator
 from .push_pull import push_gaussian as np_transport_gaussian
-from .generators import generate_so3_generators
+from .generators import (
+    generate_so3_generators,
+    generate_soN_generators,
+    generate_wedge2_generators,
+    generate_sym2_traceless_generators,
+    generate_multi_irrep_soN_generators,
+)
 from .numerical_utils import safe_inv
 
 # Simple NumPy utilities (not in separate module)
@@ -37,48 +43,60 @@ def np_ensure_spd(Sigma: np.ndarray, eps: float = 1e-6) -> np.ndarray:
     Sigma = Sigma + eps * np.eye(K, dtype=Sigma.dtype)
     return Sigma
 
-# PyTorch utilities
-from .migration import (
-    numpy_to_tensor,
-    tensor_to_numpy,
-    create_tensor_agent_from_agent,
-    create_tensor_system_from_system,
-    get_device,
-    get_device_info,
-)
-from .batched_ops import (
-    batched_kl_divergence,
-    batched_transport_operator,
-    batched_transport_gaussian,
-    compute_all_pairwise_kl,
-    compute_softmax_attention,
-    ensure_spd,
-    project_to_principal_ball,
-    is_compiled,
-)
+# PyTorch utilities (optional - only if torch is available)
+try:
+    from .migration import (
+        numpy_to_tensor,
+        tensor_to_numpy,
+        create_tensor_agent_from_agent,
+        create_tensor_system_from_system,
+        get_device,
+        get_device_info,
+    )
+    from .batched_ops import (
+        batched_kl_divergence,
+        batched_transport_operator,
+        batched_transport_gaussian,
+        compute_all_pairwise_kl,
+        compute_softmax_attention,
+        ensure_spd,
+        project_to_principal_ball,
+        is_compiled,
+    )
+    _TORCH_AVAILABLE = True
+except ImportError:
+    _TORCH_AVAILABLE = False
 
 __all__ = [
     # NumPy
     'np_transport_operator',
     'np_transport_gaussian',
     'generate_so3_generators',
+    'generate_soN_generators',
+    'generate_wedge2_generators',
+    'generate_sym2_traceless_generators',
+    'generate_multi_irrep_soN_generators',
     'safe_inv',
     'symmetrize',
     'np_ensure_spd',
-    # PyTorch migration
-    'numpy_to_tensor',
-    'tensor_to_numpy',
-    'create_tensor_agent_from_agent',
-    'create_tensor_system_from_system',
-    'get_device',
-    'get_device_info',
-    # PyTorch batched ops
-    'batched_kl_divergence',
-    'batched_transport_operator',
-    'batched_transport_gaussian',
-    'compute_all_pairwise_kl',
-    'compute_softmax_attention',
-    'ensure_spd',
-    'project_to_principal_ball',
-    'is_compiled',
 ]
+
+if _TORCH_AVAILABLE:
+    __all__.extend([
+        # PyTorch migration
+        'numpy_to_tensor',
+        'tensor_to_numpy',
+        'create_tensor_agent_from_agent',
+        'create_tensor_system_from_system',
+        'get_device',
+        'get_device_info',
+        # PyTorch batched ops
+        'batched_kl_divergence',
+        'batched_transport_operator',
+        'batched_transport_gaussian',
+        'compute_all_pairwise_kl',
+        'compute_softmax_attention',
+        'ensure_spd',
+        'project_to_principal_ball',
+        'is_compiled',
+    ])
