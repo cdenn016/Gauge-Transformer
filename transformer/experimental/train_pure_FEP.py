@@ -54,8 +54,19 @@ CONFIG = {
     # Total must equal embed_dim. Set None for auto-generation.
     # Example for K=127: 32×1 + 15×3 + 10×5 = 32 + 45 + 50 = 127
     #
-    # For SO(N), dims must be 1 (scalar) or N (fundamental)
-    # Example for K=128 with SO(8): [('fund', 16, 8)] = 128
+    # For SO(N), supported irreps:
+    #   - 'scalar': dim = 1              (gauge-invariant)
+    #   - 'fund':   dim = N              (fundamental/vector)
+    #   - 'wedge2': dim = N*(N-1)/2      (antisymmetric 2-tensor ∧²V)
+    #   - 'sym2':   dim = N*(N+1)/2 - 1  (symmetric traceless Sym²₀V)
+    #
+    # Example for SO(5) with K=132:
+    #   [('scalar', 10, 1), ('fund', 8, 5), ('wedge2', 4, 10), ('sym2', 3, 14)]
+    #   = 10 + 40 + 40 + 42 = 132
+    #
+    # Different irreps have different Casimir eigenvalues (transformation rates):
+    #   fund: 1.0x, wedge2: ~1.5x, sym2: ~2.5x
+    # This provides genuine representational diversity (like SO(3) spin-ℓ irreps)
     'irrep_spec': [
        # ('ℓ0', 32, 1),   # 32 scalars
        # ('ℓ1', 15, 3),   # 45 dims (vectors)
