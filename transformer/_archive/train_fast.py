@@ -115,6 +115,9 @@ class FastTrainingConfig:
     use_delta_rule_w_out: bool = False  # Enable delta rule for W_out
     delta_rule_lr: float = 0.001        # Learning rate for delta rule
 
+    # Resume from checkpoint
+    resume_from: Optional[str] = None  # Path to checkpoint to resume from
+
 
 # =============================================================================
 # Fast Trainer with Parameter Group Learning Rates
@@ -187,6 +190,11 @@ class FastTrainer:
         print(f"    FFN:              {config.ffn_lr}")
         print(f"    Output:           {config.output_lr}")
         print(f"{'='*70}\n")
+
+        # Resume from checkpoint if specified
+        if config.resume_from is not None:
+            print(f"  Resuming from checkpoint: {config.resume_from}")
+            self.load_checkpoint(config.resume_from)
 
     def _create_optimizer(self) -> torch.optim.Optimizer:
         """
@@ -591,6 +599,39 @@ class FastTrainer:
                 oldest.unlink()
 
         return path
+
+    def load_checkpoint(self, checkpoint_path: str):
+        """
+        Load training checkpoint to resume training.
+
+        Args:
+            checkpoint_path: Path to checkpoint file (e.g., checkpoint_step_179999.pt)
+        """
+        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
+
+        # Load model state
+        if 'model_state_dict' in checkpoint:
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+        elif 'model_state' in checkpoint:
+            self.model.load_state_dict(checkpoint['model_state'])
+
+        # Load optimizer state
+        if 'optimizer_state_dict' in checkpoint:
+            try:
+                self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            except Exception as e:
+                print(f"  Warning: Could not restore optimizer state: {e}")
+        elif 'optimizer_state' in checkpoint:
+            try:
+                self.optimizer.load_state_dict(checkpoint['optimizer_state'])
+            except Exception as e:
+                print(f"  Warning: Could not restore optimizer state: {e}")
+
+        # Restore training state
+        self.global_step = checkpoint.get('step', checkpoint.get('global_step', 0))
+        self.best_val_ce = checkpoint.get('best_val_ce', checkpoint.get('best_val_loss', float('inf')))
+
+        print(f"  ✓ Loaded checkpoint from step {self.global_step}")
 
 
 # =============================================================================

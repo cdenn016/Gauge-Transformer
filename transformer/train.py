@@ -676,6 +676,11 @@ class Trainer:
         print(f"  λ_β (attention-weighted KL): {self.config.lambda_beta}")
         print(f"  Max steps: {self.config.max_steps:,}")
 
+        # Resume from checkpoint if specified
+        if self.config.resume_from is not None:
+            print(f"\n  Resuming from checkpoint: {self.config.resume_from}")
+            self.load_checkpoint(self.config.resume_from)
+
     def _create_optimizer(self) -> torch.optim.Optimizer:
         """
         Create AdamW optimizer with configurable parameter grouping.
