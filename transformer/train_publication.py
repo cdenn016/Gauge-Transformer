@@ -285,18 +285,25 @@ VFE_EM_CONFIG = {
     # SO3: Standard SO(3) gauge group with 3 generators
     #      Requires embed_dim = sum(mult * dim) for irrep_spec or odd embed_dim
     # SON: SO(N) gauge group with N(N-1)/2 generators
-    #      More flexible - can use N-dimensional fundamental representation
-    #      embed_dim = mult * N for direct sums of fundamental
+    #      Supports multiple irrep types for representational diversity:
+    #        - 'scalar': dim = 1              (gauge-invariant)
+    #        - 'fund':   dim = N              (fundamental/vector)
+    #        - 'wedge2': dim = N*(N-1)/2      (antisymmetric 2-tensor ∧²V)
+    #        - 'sym2':   dim = N*(N+1)/2 - 1  (symmetric traceless Sym²₀V)
+    #
+    #      Different irreps have different Casimir eigenvalues:
+    #        fund ~1.0x, wedge2 ~1.5x, sym2 ~2.5x
+    #      This provides genuine transformation diversity (like SO(3) spin-ℓ)
     # =================================================================
     'gauge_group': 'SON',  # 'SO3' or 'SON'
     'gauge_dim': 5,        # N for SO(N) - only used when gauge_group='SON'
     'use_multi_irrep': True,  # Use block-diagonal generators from irrep_spec
-    
+
     # P-FLOW: EMA update of token embeddings toward successful beliefs
     # This is the key learning mechanism from fep_transformer.py
     'use_p_flow': False,           # Enable P-flow updates on token embeddings
     'p_flow_ema_decay': 0.99,     # EMA decay (higher = slower update, 0.99 = 1% per step)
-    
+
     # DELTA RULE: Backprop-free learning for W_out
     # If True, W_out is updated via delta rule instead of backpropagation
     # Combined with P-flow, this makes learning fully backprop-free!
@@ -304,8 +311,10 @@ VFE_EM_CONFIG = {
     'delta_rule_lr': 0.001,         # Learning rate for delta rule updates
 
 
-    # Irrep structure (for K=255)
-    # 75×1 + 30×3 + 18×5 = 75 + 90 + 90 = 255 ✓
+    # Irrep structure for SO(N)
+    # Example for SO(5) with K=132:
+    #   [('scalar', 10, 1), ('fund', 8, 5), ('wedge2', 4, 10), ('sym2', 3, 14)]
+    #   = 10 + 40 + 40 + 42 = 132
     'irrep_spec': [
       # ('ℓ0', 50, 1),   # 75 dimensions (scalars)
       # ('ℓ1', 1, 3),   # 90 dimensions (vectors)
@@ -316,8 +325,13 @@ VFE_EM_CONFIG = {
      # ('ℓ6', 1, 13),
      # ('ℓ7', 1, 15),
       # ('ℓ50', 1, 101),
-      ('fund', 20, 5)  #For SO(8) 
+      ('fund', 20, 5)  #For SO(8)
      # ('fund', 10, 5),   # SO(5)
+     # SO(5) multi-irrep example:
+     # ('scalar', 10, 1),   # 10 dims (invariant)
+     # ('fund', 8, 5),      # 40 dims (vector)
+     # ('wedge2', 4, 10),   # 40 dims (∧² - angular momentum)
+     # ('sym2', 3, 14),     # 42 dims (Sym²₀ - quadrupolar)
     ],
     # Attention
     'attention_pattern': 'full',
@@ -418,22 +432,27 @@ PURE_FEP_CONFIG = {
     'checkpoint_interval': 5000,
     'patience': 10,               # More patience for P-flow
 
-        # =================================================================
+    # =================================================================
     # GAUGE GROUP SELECTION
     # =================================================================
     # SO3: Standard SO(3) gauge group with 3 generators
     #      Requires embed_dim = sum(mult * dim) for irrep_spec or odd embed_dim
     # SON: SO(N) gauge group with N(N-1)/2 generators
-    #      More flexible - can use N-dimensional fundamental representation
-    #      embed_dim = mult * N for direct sums of fundamental
+    #      Supports multiple irrep types for representational diversity:
+    #        - 'scalar': dim = 1              (gauge-invariant)
+    #        - 'fund':   dim = N              (fundamental/vector)
+    #        - 'wedge2': dim = N*(N-1)/2      (antisymmetric 2-tensor ∧²V)
+    #        - 'sym2':   dim = N*(N+1)/2 - 1  (symmetric traceless Sym²₀V)
     # =================================================================
     'gauge_group': 'SON',  # 'SO3' or 'SON'
     'gauge_dim': 10,        # N for SO(N) - only used when gauge_group='SON'
     'use_multi_irrep': True,  # Use block-diagonal generators from irrep_spec
 
 
-    # Irrep structure (for K=255)
-    # 75×1 + 30×3 + 18×5 = 75 + 90 + 90 = 255 ✓
+    # Irrep structure for SO(N)
+    # Example for SO(10) with diverse irreps:
+    #   [('scalar', 5, 1), ('fund', 6, 10), ('wedge2', 2, 45)]
+    #   = 5 + 60 + 90 = 155
     'irrep_spec': [
       # ('ℓ0', 50, 1),   # 75 dimensions (scalars)
       # ('ℓ1', 1, 3),   # 90 dimensions (vectors)
@@ -444,8 +463,12 @@ PURE_FEP_CONFIG = {
      # ('ℓ6', 1, 13),
      # ('ℓ7', 1, 15),
       # ('ℓ50', 1, 101),
-      ('fund', 3, 10)  #For SO(8) 
+      ('fund', 3, 10)  # SO(10) fundamental
      # ('fund', 10, 5),   # SO(5)
+     # SO(10) multi-irrep example:
+     # ('scalar', 5, 1),    # 5 dims (invariant)
+     # ('fund', 6, 10),     # 60 dims (vector)
+     # ('wedge2', 2, 45),   # 90 dims (∧² - angular momentum)
     ],
 
     # Attention
