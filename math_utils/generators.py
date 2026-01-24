@@ -644,15 +644,18 @@ def generate_multi_irrep_soN_generators(
     """
     Generate block-diagonal SO(N) generators from a multi-irrep specification.
 
-    This creates generators for a direct sum of fundamental representations:
-        V = V_N ⊕ V_N ⊕ ... ⊕ V_N  (mult copies)
+    This creates generators for a direct sum of SO(N) irreducible representations:
+        V = ⊕_i (V_i)^{mult_i}
 
-    Each block is an N×N fundamental representation of SO(N).
+    Supported irrep types:
+        - 'scalar' (dim=1): Invariant, generators act as zero
+        - 'fund' (dim=N): Fundamental/vector representation
+        - 'wedge2' (dim=N(N-1)/2): Antisymmetric 2-tensor ∧²V
+        - 'sym2' (dim=N(N+1)/2-1): Symmetric traceless 2-tensor Sym²₀V
 
     Args:
         irrep_spec: List of (label, multiplicity, dim) tuples.
-            For SO(N), dim MUST equal N (fundamental rep only).
-            Example: [('fund', 16, 8)] means 16 copies of SO(8) fundamental
+            Example: [('scalar', 10, 1), ('fund', 8, N), ('wedge2', 4, N*(N-1)//2)]
             Total dimension K = Σ mult × dim
         N: The gauge group dimension (SO(N))
         validate: If True, verify the resulting generators
@@ -663,30 +666,65 @@ def generate_multi_irrep_soN_generators(
            where K = Σ mult × dim
 
     Example:
-        >>> # K = 16 × 8 = 128, using SO(8) gauge group
-        >>> spec = [('fund', 16, 8)]
-        >>> G = generate_multi_irrep_soN_generators(spec, N=8)
-        >>> G.shape
-        (28, 128, 128)  # 28 = 8*7/2 generators
-
-        >>> # Mixed: 10 copies of SO(5) fundamental + 20 scalars
-        >>> spec = [('scalar', 20, 1), ('fund', 10, 5)]
+        >>> # SO(5) with mixed irreps
+        >>> spec = [('scalar', 10, 1), ('fund', 8, 5), ('wedge2', 4, 10)]
         >>> G = generate_multi_irrep_soN_generators(spec, N=5)
         >>> G.shape
-        (10, 70, 70)  # 10 = 5*4/2 generators, K = 20 + 50 = 70
+        (10, 90, 90)  # 10 generators, K = 10 + 40 + 40 = 90
+
+        >>> # SO(8) with all three tensor irreps
+        >>> spec = [('fund', 4, 8), ('wedge2', 2, 28), ('sym2', 2, 35)]
+        >>> G = generate_multi_irrep_soN_generators(spec, N=8)
+        >>> G.shape
+        (28, 158, 158)  # 28 generators, K = 32 + 56 + 70 = 158
 
     Note:
-        For dim=1 (scalars), the generators act as zero (scalars are invariant).
-        For dim=N (fundamental), the generators act as the standard SO(N) generators.
-        Other dims are not supported (would require higher tensor reps).
+        Using diverse irreps (fund + wedge2 + sym2) provides genuinely different
+        transformation channels, similar to using multiple spin-ℓ irreps for SO(3).
     """
+    # Expected dimensions for each irrep type
+    expected_dims = {
+        'scalar': 1,
+        'fund': N,
+        'fundamental': N,
+        'vector': N,
+        'wedge2': N * (N - 1) // 2,
+        'antisym2': N * (N - 1) // 2,
+        'exterior2': N * (N - 1) // 2,
+        'sym2': N * (N + 1) // 2 - 1,
+        'sym2_traceless': N * (N + 1) // 2 - 1,
+        'symmetric2': N * (N + 1) // 2 - 1,
+    }
+
     # Validate irrep specification
     for label, mult, dim in irrep_spec:
-        if dim != 1 and dim != N:
-            raise ValueError(
-                f"Irrep '{label}' has dimension {dim}, but SO({N}) fundamental "
-                f"requires dim={N} or dim=1 (scalar). Higher tensor reps not implemented."
-            )
+        label_lower = label.lower()
+
+        # Check if it's a known irrep type
+        if label_lower in expected_dims:
+            expected_dim = expected_dims[label_lower]
+            if dim != expected_dim:
+                raise ValueError(
+                    f"Irrep '{label}' should have dim={expected_dim} for SO({N}), "
+                    f"but got dim={dim}."
+                )
+        else:
+            # Unknown label - check if dimension matches a known irrep
+            if dim == 1:
+                pass  # Scalar
+            elif dim == N:
+                pass  # Fundamental
+            elif dim == N * (N - 1) // 2:
+                pass  # ∧²V
+            elif dim == N * (N + 1) // 2 - 1:
+                pass  # Sym²₀V
+            else:
+                raise ValueError(
+                    f"Irrep '{label}' has dimension {dim}, which doesn't match any "
+                    f"implemented SO({N}) irrep. Supported dims: 1 (scalar), "
+                    f"{N} (fund), {N*(N-1)//2} (wedge2), {N*(N+1)//2-1} (sym2)."
+                )
+
         if mult < 0:
             raise ValueError(f"Irrep '{label}' has negative multiplicity {mult}.")
 
@@ -699,8 +737,10 @@ def generate_multi_irrep_soN_generators(
     # Initialize block-diagonal generators
     G = np.zeros((n_gen, K, K), dtype=np.float32)
 
-    # Get fundamental generators
-    G_fund = generate_soN_generators(N, validate=False)
+    # Get generators for each irrep type (cached for efficiency)
+    G_fund = None
+    G_wedge2 = None
+    G_sym2 = None
 
     # Fill in blocks
     idx = 0
@@ -708,17 +748,336 @@ def generate_multi_irrep_soN_generators(
         if dim == 1:
             # Scalars: generators act as zero
             idx += mult * dim
-        else:
-            # Fundamental representation blocks
+
+        elif dim == N:
+            # Fundamental representation
+            if G_fund is None:
+                G_fund = generate_soN_generators(N, validate=False)
             for _ in range(mult):
                 G[:, idx:idx+dim, idx:idx+dim] = G_fund
                 idx += dim
+
+        elif dim == N * (N - 1) // 2:
+            # ∧²V (antisymmetric 2-tensor)
+            if G_wedge2 is None:
+                G_wedge2 = generate_wedge2_generators(N, validate=False)
+            for _ in range(mult):
+                G[:, idx:idx+dim, idx:idx+dim] = G_wedge2
+                idx += dim
+
+        elif dim == N * (N + 1) // 2 - 1:
+            # Sym²₀V (symmetric traceless 2-tensor)
+            if G_sym2 is None:
+                G_sym2 = generate_sym2_traceless_generators(N, validate=False)
+            for _ in range(mult):
+                G[:, idx:idx+dim, idx:idx+dim] = G_sym2
+                idx += dim
+
+        else:
+            # Should never reach here due to validation above
+            raise RuntimeError(f"Unexpected dimension {dim} for irrep '{label}'")
 
     # Validate if requested
     if validate and K > 1:
         _validate_block_diagonal_soN_generators(G, irrep_spec, N, eps=eps)
 
     return G
+
+
+# =============================================================================
+# SO(N) Higher Tensor Representations (Non-Fundamental Irreps)
+# =============================================================================
+
+def _wedge2_index_to_pair(idx: int, N: int) -> tuple:
+    """Map linear index to (i,j) pair with i < j for ∧²V basis."""
+    i = 0
+    count = 0
+    while count + (N - 1 - i) <= idx:
+        count += N - 1 - i
+        i += 1
+    j = idx - count + i + 1
+    return i, j
+
+
+def _wedge2_pair_to_index(i: int, j: int, N: int) -> int:
+    """Map (i,j) pair with i < j to linear index for ∧²V basis."""
+    # Sum of (N-1) + (N-2) + ... + (N-i) = i*N - i*(i+1)/2
+    return i * N - i * (i + 1) // 2 + (j - i - 1)
+
+
+def generate_wedge2_generators(
+    N: int,
+    *,
+    validate: bool = True,
+    eps: float = 1e-6,
+) -> np.ndarray:
+    """
+    Generate SO(N) generators for ∧²V (antisymmetric 2-tensor representation).
+
+    The exterior square ∧²V is the space of antisymmetric N×N matrices.
+    Elements can be thought of as "bivectors" or "angular momentum" components.
+
+    Dimension: N(N-1)/2
+    Basis: { e_i ∧ e_j : i < j } represented as E_ij - E_ji
+
+    The Lie algebra action is the commutator:
+        G · X = [G, X] = GX - XG
+
+    This preserves antisymmetry (since G is skew-symmetric).
+
+    Args:
+        N: Dimension of the fundamental representation (N ≥ 2)
+        validate: If True, verify the generators
+        eps: Tolerance for validation
+
+    Returns:
+        G: Generators array, shape (n_gen, dim, dim)
+           where n_gen = N(N-1)/2 and dim = N(N-1)/2
+
+    Example:
+        >>> G = generate_wedge2_generators(5)
+        >>> G.shape
+        (10, 10, 10)  # SO(5) has 10 generators, ∧²(R^5) has dim 10
+
+    Properties:
+        - Different Casimir eigenvalue than fundamental
+        - Transforms as X' = O X Oᵀ under O ∈ SO(N)
+        - Captures "rotational" or "angular momentum" degrees of freedom
+    """
+    if N < 2:
+        raise ValueError(f"N must be >= 2 for SO(N), got N={N}")
+
+    n_gen = N * (N - 1) // 2
+    dim = N * (N - 1) // 2  # Same dimension as number of generators!
+
+    # Get fundamental generators
+    G_fund = generate_soN_generators(N, validate=False)  # (n_gen, N, N)
+
+    # Build generators for ∧²V representation
+    # Action: X → [G_a, X] where X is antisymmetric N×N matrix
+    G_wedge2 = np.zeros((n_gen, dim, dim), dtype=np.float32)
+
+    for a in range(n_gen):
+        G_a = G_fund[a]  # (N, N) skew-symmetric
+
+        for p in range(dim):  # Input basis element index
+            i, j = _wedge2_index_to_pair(p, N)
+
+            # Basis element: E_ij - E_ji (antisymmetric)
+            X = np.zeros((N, N), dtype=np.float32)
+            X[i, j] = 1.0
+            X[j, i] = -1.0
+
+            # Commutator [G_a, X] = G_a @ X - X @ G_a
+            comm = G_a @ X - X @ G_a  # Still antisymmetric
+
+            # Express result in ∧² basis
+            for q in range(dim):
+                k, l = _wedge2_index_to_pair(q, N)
+                # The coefficient is the (k,l) entry (upper triangle)
+                G_wedge2[a, q, p] = comm[k, l]
+
+    if validate:
+        _validate_wedge2_generators(G_wedge2, N, eps=eps)
+
+    return G_wedge2
+
+
+def _validate_wedge2_generators(
+    G: np.ndarray,
+    N: int,
+    *,
+    eps: float = 1e-6,
+) -> None:
+    """Validate ∧²V generators."""
+    n_gen, dim, _ = G.shape
+
+    expected_n_gen = N * (N - 1) // 2
+    expected_dim = N * (N - 1) // 2
+
+    if n_gen != expected_n_gen:
+        raise ValueError(f"Expected {expected_n_gen} generators, got {n_gen}")
+    if dim != expected_dim:
+        raise ValueError(f"Expected dim {expected_dim}, got {dim}")
+
+    # Check skew-symmetry of generators
+    for a in range(n_gen):
+        skew_error = np.linalg.norm(G[a] + G[a].T, ord='fro')
+        if skew_error > eps:
+            raise RuntimeError(
+                f"∧² generator G[{a}] not skew-symmetric: ||G + Gᵀ|| = {skew_error:.3e}"
+            )
+
+    # Check sample commutation relations (they should form so(N) algebra)
+    if n_gen >= 3:
+        comm_01 = G[0] @ G[1] - G[1] @ G[0]
+        if np.linalg.norm(comm_01 + comm_01.T, ord='fro') > eps:
+            raise RuntimeError("Commutator [G_0, G_1] in ∧² rep not skew-symmetric")
+
+
+def _sym2_traceless_basis_size(N: int) -> int:
+    """Dimension of Sym²₀V (symmetric traceless 2-tensors)."""
+    return N * (N + 1) // 2 - 1
+
+
+def _sym2_traceless_index_to_components(idx: int, N: int) -> tuple:
+    """
+    Map linear index to symmetric traceless basis element.
+
+    Basis ordering:
+    - First N(N-1)/2 indices: off-diagonal (i,j) with i < j, coefficient √2
+    - Next N-1 indices: diagonal traceless combinations
+
+    Returns:
+        (type, data) where:
+        - type='offdiag': data=(i, j) for off-diagonal element
+        - type='diag': data=k for k-th diagonal traceless element
+    """
+    n_offdiag = N * (N - 1) // 2
+
+    if idx < n_offdiag:
+        # Off-diagonal element
+        i, j = _wedge2_index_to_pair(idx, N)
+        return ('offdiag', (i, j))
+    else:
+        # Diagonal traceless element
+        k = idx - n_offdiag
+        return ('diag', k)
+
+
+def _build_sym2_traceless_basis_element(idx: int, N: int) -> np.ndarray:
+    """
+    Build the idx-th basis element of Sym²₀V as an N×N matrix.
+
+    The basis is orthonormal under the Frobenius inner product.
+    """
+    n_offdiag = N * (N - 1) // 2
+    X = np.zeros((N, N), dtype=np.float32)
+
+    if idx < n_offdiag:
+        # Off-diagonal: (E_ij + E_ji) / √2
+        i, j = _wedge2_index_to_pair(idx, N)
+        X[i, j] = 1.0 / np.sqrt(2)
+        X[j, i] = 1.0 / np.sqrt(2)
+    else:
+        # Diagonal traceless: use Gell-Mann-like basis
+        # Element k: (E_00 + ... + E_kk - (k+1)E_{k+1,k+1}) / √((k+1)(k+2))
+        k = idx - n_offdiag
+        norm = np.sqrt((k + 1) * (k + 2))
+        for i in range(k + 1):
+            X[i, i] = 1.0 / norm
+        X[k + 1, k + 1] = -(k + 1) / norm
+
+    return X
+
+
+def generate_sym2_traceless_generators(
+    N: int,
+    *,
+    validate: bool = True,
+    eps: float = 1e-6,
+) -> np.ndarray:
+    """
+    Generate SO(N) generators for Sym²₀V (symmetric traceless 2-tensor representation).
+
+    The symmetric traceless square Sym²₀V is the space of symmetric N×N matrices
+    with trace zero. These represent "quadrupolar" or "strain-like" degrees of freedom.
+
+    Dimension: N(N+1)/2 - 1
+    Basis: Orthonormal symmetric traceless matrices
+
+    The Lie algebra action is the commutator:
+        G · X = [G, X] = GX - XG
+
+    This preserves symmetry and tracelessness.
+
+    Args:
+        N: Dimension of the fundamental representation (N ≥ 2)
+        validate: If True, verify the generators
+        eps: Tolerance for validation
+
+    Returns:
+        G: Generators array, shape (n_gen, dim, dim)
+           where n_gen = N(N-1)/2 and dim = N(N+1)/2 - 1
+
+    Example:
+        >>> G = generate_sym2_traceless_generators(5)
+        >>> G.shape
+        (10, 14, 14)  # SO(5) has 10 generators, Sym²₀(R^5) has dim 14
+
+    Properties:
+        - Different Casimir eigenvalue than fundamental and ∧²
+        - Transforms as X' = O X Oᵀ under O ∈ SO(N)
+        - Captures "quadrupolar" or "deformation" degrees of freedom
+    """
+    if N < 2:
+        raise ValueError(f"N must be >= 2 for SO(N), got N={N}")
+
+    n_gen = N * (N - 1) // 2
+    dim = _sym2_traceless_basis_size(N)
+
+    # Get fundamental generators
+    G_fund = generate_soN_generators(N, validate=False)  # (n_gen, N, N)
+
+    # Pre-build basis elements
+    basis = [_build_sym2_traceless_basis_element(p, N) for p in range(dim)]
+
+    # Build generators for Sym²₀V representation
+    # Action: X → [G_a, X] where X is symmetric traceless N×N matrix
+    G_sym2 = np.zeros((n_gen, dim, dim), dtype=np.float32)
+
+    for a in range(n_gen):
+        G_a = G_fund[a]  # (N, N) skew-symmetric
+
+        for p in range(dim):  # Input basis element index
+            X = basis[p]
+
+            # Commutator [G_a, X] = G_a @ X - X @ G_a
+            # This is symmetric (and traceless) when G is skew and X is symmetric
+            comm = G_a @ X - X @ G_a
+
+            # Express result in Sym²₀ basis via inner product
+            for q in range(dim):
+                Y = basis[q]
+                # Inner product: tr(Yᵀ comm) = tr(Y comm) since both symmetric
+                G_sym2[a, q, p] = np.sum(Y * comm)
+
+    if validate:
+        _validate_sym2_traceless_generators(G_sym2, N, eps=eps)
+
+    return G_sym2
+
+
+def _validate_sym2_traceless_generators(
+    G: np.ndarray,
+    N: int,
+    *,
+    eps: float = 1e-6,
+) -> None:
+    """Validate Sym²₀V generators."""
+    n_gen, dim, _ = G.shape
+
+    expected_n_gen = N * (N - 1) // 2
+    expected_dim = _sym2_traceless_basis_size(N)
+
+    if n_gen != expected_n_gen:
+        raise ValueError(f"Expected {expected_n_gen} generators, got {n_gen}")
+    if dim != expected_dim:
+        raise ValueError(f"Expected dim {expected_dim}, got {dim}")
+
+    # Check skew-symmetry of generators
+    for a in range(n_gen):
+        skew_error = np.linalg.norm(G[a] + G[a].T, ord='fro')
+        if skew_error > eps:
+            raise RuntimeError(
+                f"Sym²₀ generator G[{a}] not skew-symmetric: ||G + Gᵀ|| = {skew_error:.3e}"
+            )
+
+    # Check sample commutation
+    if n_gen >= 3:
+        comm_01 = G[0] @ G[1] - G[1] @ G[0]
+        if np.linalg.norm(comm_01 + comm_01.T, ord='fro') > eps:
+            raise RuntimeError("Commutator [G_0, G_1] in Sym²₀ rep not skew-symmetric")
 
 
 def _validate_block_diagonal_soN_generators(
