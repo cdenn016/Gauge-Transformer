@@ -92,6 +92,75 @@ def extract_config_from_checkpoint(checkpoint: dict) -> dict:
     return config
 
 
+def infer_config_from_state_dict(state_dict: dict) -> dict:
+    """Infer model architecture from state_dict tensor shapes.
+
+    This is the most reliable way to get the correct architecture
+    when checkpoint config is missing or incorrect.
+    """
+    config = {}
+
+    # Infer embed_dim from generator shape or embedding weight
+    if 'generators' in state_dict:
+        # generators shape: (n_gen, embed_dim, embed_dim)
+        config['embed_dim'] = state_dict['generators'].shape[1]
+    elif 'token_embed.mu_embed.weight' in state_dict:
+        # mu_embed.weight shape: (vocab_size, embed_dim)
+        config['embed_dim'] = state_dict['token_embed.mu_embed.weight'].shape[1]
+
+    # Infer vocab_size from embedding
+    if 'token_embed.mu_embed.weight' in state_dict:
+        config['vocab_size'] = state_dict['token_embed.mu_embed.weight'].shape[0]
+    elif 'out_proj.weight' in state_dict:
+        config['vocab_size'] = state_dict['out_proj.weight'].shape[0]
+
+    # Infer max_seq_len from positional encoding
+    if 'pos_encoding.pos_phi' in state_dict:
+        config['max_seq_len'] = state_dict['pos_encoding.pos_phi'].shape[0]
+
+    # Infer n_layers by counting transformer blocks
+    n_layers = 0
+    for key in state_dict.keys():
+        if 'transformer.blocks.' in key:
+            # Extract block number from key like "transformer.blocks.0.attention..."
+            parts = key.split('.')
+            try:
+                block_idx = int(parts[2])
+                n_layers = max(n_layers, block_idx + 1)
+            except (IndexError, ValueError):
+                pass
+    if n_layers > 0:
+        config['n_layers'] = n_layers
+
+    # Infer irrep_spec from attention head generators
+    # Keys like: transformer.blocks.0.attention.head_generators.0.gen
+    head_dims = []
+    for key in state_dict.keys():
+        if 'attention.head_generators.' in key and key.endswith('.gen'):
+            # Shape: (n_gen, head_dim, head_dim)
+            head_dim = state_dict[key].shape[1]
+            # Extract head index
+            parts = key.split('.')
+            try:
+                head_idx = int(parts[parts.index('head_generators') + 1])
+                while len(head_dims) <= head_idx:
+                    head_dims.append(None)
+                head_dims[head_idx] = head_dim
+            except (IndexError, ValueError):
+                pass
+
+    if head_dims and all(d is not None for d in head_dims):
+        # Convert to irrep_spec format
+        # head_dim = 2*ell + 1 for SO(3)
+        irrep_spec = []
+        for i, dim in enumerate(head_dims):
+            ell = (dim - 1) // 2
+            irrep_spec.append([f'ℓ{ell}', 1, dim])
+        config['irrep_spec'] = irrep_spec
+
+    return config
+
+
 def resume_training():
     """Resume training from checkpoint."""
 
@@ -125,28 +194,45 @@ def resume_training():
     print(f"  Checkpoint step: {start_step}")
     print(f"  Best val CE: {best_val_ce:.4f}")
 
-    # Load config - checkpoint takes precedence over experiment_config.json
+    # Load config - infer from state_dict first (most reliable), then merge others
     print("\nLoading config...")
 
-    # First, try to get config from checkpoint (most reliable for model architecture)
-    config = extract_config_from_checkpoint(checkpoint)
-    if config:
-        print(f"  Loaded config from checkpoint: {len(config)} keys")
+    # Get model state dict
+    if 'model_state_dict' in checkpoint:
+        state_dict = checkpoint['model_state_dict']
+    elif 'model_state' in checkpoint:
+        state_dict = checkpoint['model_state']
+    else:
+        state_dict = {}
 
-    # Then load experiment_config.json and fill in missing keys
+    # FIRST: Infer architecture from actual tensor shapes (most reliable!)
+    inferred_config = infer_config_from_state_dict(state_dict)
+    if inferred_config:
+        print(f"  Inferred from state_dict: {inferred_config}")
+
+    # SECOND: Get config stored in checkpoint
+    ckpt_config = extract_config_from_checkpoint(checkpoint)
+    if ckpt_config:
+        print(f"  Checkpoint config: {len(ckpt_config)} keys")
+
+    # THIRD: Load experiment_config.json
     json_config = load_experiment_config(experiment_dir)
     if json_config:
-        print(f"  Loaded experiment_config.json: {len(json_config)} keys")
-        for key, value in json_config.items():
-            if key not in config:
-                config[key] = value
+        print(f"  experiment_config.json: {len(json_config)} keys")
+
+    # Merge configs: inferred > checkpoint > json > defaults
+    # Start with json, then checkpoint, then inferred (last wins for conflicts)
+    config = {}
+    config.update(json_config)
+    config.update(ckpt_config)
+    config.update(inferred_config)  # Inferred values override everything
 
     if not config:
-        print("  WARNING: No config found in checkpoint or experiment_config.json!")
+        print("  WARNING: No config found!")
         print("  Will use defaults - this may not match your original model.")
 
     # Print key architecture params for verification
-    print(f"\n  Model architecture:")
+    print(f"\n  Model architecture (from state_dict):")
     print(f"    embed_dim: {config.get('embed_dim', 'NOT SET')}")
     print(f"    n_layers: {config.get('n_layers', 'NOT SET')}")
     print(f"    max_seq_len: {config.get('max_seq_len', 'NOT SET')}")

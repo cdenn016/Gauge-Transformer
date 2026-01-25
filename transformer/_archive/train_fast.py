@@ -479,13 +479,22 @@ class FastTrainer:
         start_time = time.time()
         step_times = []
 
-        # Training loop
+        # Training loop - start from current global_step (for resume support)
+        start_step = self.global_step
+        if start_step > 0:
+            print(f"Resuming from step {start_step}")
+
         train_iterator = iter(self.train_loader)
 
         if TQDM_AVAILABLE:
-            pbar = tqdm(range(self.config.max_steps), desc="Training")
+            pbar = tqdm(
+                range(start_step, self.config.max_steps),
+                desc="Training",
+                initial=start_step,
+                total=self.config.max_steps
+            )
         else:
-            pbar = range(self.config.max_steps)
+            pbar = range(start_step, self.config.max_steps)
 
         for step in pbar:
             self.global_step = step
