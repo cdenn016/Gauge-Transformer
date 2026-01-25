@@ -75,6 +75,7 @@ class GaugeTransformerBlock(nn.Module):
         dropout: float = 0.1,
         evolve_sigma: bool = False,
         evolve_phi: bool = False,
+        evolve_phi_e_step: bool = False,  # Update φ during E-step iterations (dynamical gauge frames)
         # Phi evolution parameters (VFE gradient-based, not neural network)
         phi_lr: float = 0.05,  # Learning rate for phi gradient descent
         phi_max_norm: float = 3.14159,  # Max phi norm (π radians = 180° rotation)
@@ -217,7 +218,8 @@ class GaugeTransformerBlock(nn.Module):
             max_seq_len=ffn_max_seq_len,
             prior_lr=ffn_prior_lr,
             # Phi evolution via VFE gradients (principled approach)
-            update_phi=evolve_phi,  # When evolve_phi=True, update φ via ∂F/∂φ
+            update_phi=evolve_phi,  # When evolve_phi=True, update φ via ∂F/∂φ (after E-step)
+            update_phi_per_iteration=evolve_phi_e_step,  # When True, update φ during each E-step iteration
             phi_lr=phi_lr,
             phi_max_norm=phi_max_norm,
             # Memory-efficient options
@@ -389,6 +391,7 @@ class GaugeTransformerStack(nn.Module):
         dropout: float = 0.1,
         evolve_sigma: bool = False,
         evolve_phi: bool = False,
+        evolve_phi_e_step: bool = False,  # Update φ during E-step iterations (dynamical gauge frames)
         # Phi evolution parameters (VFE gradient-based, not neural network)
         phi_lr: float = 0.05,  # Learning rate for phi gradient descent
         phi_max_norm: float = 3.14159,  # Max phi norm (π radians = 180° rotation)
@@ -472,6 +475,7 @@ class GaugeTransformerStack(nn.Module):
                 dropout=dropout,
                 evolve_sigma=evolve_sigma,
                 evolve_phi=evolve_phi,
+                evolve_phi_e_step=evolve_phi_e_step,  # Update φ during E-step iterations
                 # Phi evolution (VFE gradient-based)
                 phi_lr=phi_lr,
                 phi_max_norm=phi_max_norm,

@@ -228,7 +228,10 @@ VFE_EM_CONFIG = {
 
     # Gauge geometry
     'evolve_sigma': True,         # Learn covariances Σ
-    'evolve_phi': True,           # Learn gauge frames φ
+    'evolve_phi': True,           # Learn gauge frames φ (M-step, via backprop)
+    'evolve_phi_e_step': False,   # Update φ during E-step iterations (dynamical gauge frames)
+                                  # When True: φ evolves via ∂F/∂φ at each VFE iteration
+                                  # When False: φ only updated via backprop (M-step)
     'diagonal_covariance': True,  # O(N²×K) memory instead of O(N²×K²)
 
     # NO position encoding (principled - let it emerge!)
