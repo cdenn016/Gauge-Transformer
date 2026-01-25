@@ -1261,6 +1261,8 @@ However, for non-zero prior variance, there exists a family of degenerate minima
 
 When priors are \emph{not} gauge-equivalent ($p_i \neq \Omega_{ij}[p_j]$), the vacuum state cannot simultaneously satisfy both terms in~\eqref{eq:vacuum_fe}. The stationarity condition yields a coupled linear system whose solution is a weighted compromise between matching local priors and maintaining inter-agent consistency. This \emph{gauge frustration}---analogous to magnetic frustration in spin systems---results in a vacuum with $\mathcal{F}_{\text{vacuum}} > 0$. The prior alignment term $\sum_{i,j} \gamma_{ij} D_{\mathrm{KL}}(p_i \| \Omega_{ij} p_j)$ in the full free energy functional penalizes such incompatibility, driving the gauge frames to configurations that minimize frustration.
 
+Counterintuitively, gauge frustration appears essential for learning. While gauge-equivalent priors yield a mathematically clean vacuum at $\mathcal{F} = 0$, this configuration is a stable fixed point with vanishing gradients---beliefs initialized near identical priors remain trapped in a symmetric basin. Non-equivalent priors break this symmetry from initialization, providing gradient signal that drives differentiation. In language modeling, the learned token embeddings (priors) are inherently non-equivalent, encoding token-specific semantic content. The resulting frustration forces gauge frames to learn transformations that reconcile incompatible local preferences, ultimately discovering the geometric structure of language. This parallels spin glass physics, where frustration generates complex energy landscapes essential for computational function.
+
 \subsection{Symmetry Breaking via Observations}
 
 Introducing the observation likelihood term:
