@@ -1743,6 +1743,13 @@ def run_single_experiment(
         # DELTA RULE: Backprop-free learning for W_out
         use_delta_rule_w_out=config.get('use_delta_rule_w_out', False),
         delta_rule_lr=config.get('delta_rule_lr', 0.001),
+
+        # RG METRICS: Track renormalization group flow
+        compute_rg_metrics=config.get('compute_rg_metrics', False),
+        rg_metrics_interval=config.get('rg_metrics_interval', 100),
+        rg_auto_cluster=config.get('rg_auto_cluster', True),
+        rg_n_clusters=config.get('rg_n_clusters', None),
+        track_dynamic_rg=config.get('track_dynamic_rg', False),
     )
 
     print("\n" + "="*70)
@@ -1774,6 +1781,14 @@ def run_single_experiment(
             print(f"  ** FULLY BACKPROP-FREE MODE **")
     else:
         print(f"\nDELTA RULE: disabled (using backprop for W_out)")
+
+    # RG METRICS configuration
+    if train_config.compute_rg_metrics:
+        print(f"\nRG METRICS (meta-agent emergence): ENABLED")
+        print(f"  Compute interval: every {train_config.rg_metrics_interval} steps")
+        print(f"  Dynamic RG tracking: {train_config.track_dynamic_rg}")
+    else:
+        print(f"\nRG METRICS: disabled")
 
     # =================================================================
     # Create Trainer (Pure FEP or Standard)
