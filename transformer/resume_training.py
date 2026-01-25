@@ -59,7 +59,7 @@ def load_experiment_config(experiment_dir: Path) -> dict:
     """Load experiment configuration from JSON file."""
     config_path = experiment_dir / "experiment_config.json"
     if not config_path.exists():
-        raise FileNotFoundError(f"experiment_config.json not found in {experiment_dir}")
+        return {}  # Return empty dict if not found
 
     with open(config_path, 'r') as f:
         data = json.load(f)
@@ -68,6 +68,28 @@ def load_experiment_config(experiment_dir: Path) -> dict:
     if 'config' in data and isinstance(data['config'], dict):
         return data['config']
     return data
+
+
+def extract_config_from_checkpoint(checkpoint: dict) -> dict:
+    """Extract model config from checkpoint."""
+    config = {}
+
+    # Try 'config' key (most common)
+    if 'config' in checkpoint:
+        ckpt_config = checkpoint['config']
+        if isinstance(ckpt_config, dict):
+            config.update(ckpt_config)
+        elif hasattr(ckpt_config, '__dict__'):
+            # It's a dataclass or similar
+            config.update(vars(ckpt_config))
+
+    # Also check for individual keys that might be stored at top level
+    for key in ['embed_dim', 'n_layers', 'vocab_size', 'max_seq_len', 'irrep_spec',
+                'hidden_dim', 'n_heads', 'dropout', 'ffn_mode', 'gauge_group', 'gauge_dim']:
+        if key in checkpoint and key not in config:
+            config[key] = checkpoint[key]
+
+    return config
 
 
 def resume_training():
@@ -103,9 +125,32 @@ def resume_training():
     print(f"  Checkpoint step: {start_step}")
     print(f"  Best val CE: {best_val_ce:.4f}")
 
-    # Load experiment config
-    print("\nLoading experiment config...")
-    config = load_experiment_config(experiment_dir)
+    # Load config - checkpoint takes precedence over experiment_config.json
+    print("\nLoading config...")
+
+    # First, try to get config from checkpoint (most reliable for model architecture)
+    config = extract_config_from_checkpoint(checkpoint)
+    if config:
+        print(f"  Loaded config from checkpoint: {len(config)} keys")
+
+    # Then load experiment_config.json and fill in missing keys
+    json_config = load_experiment_config(experiment_dir)
+    if json_config:
+        print(f"  Loaded experiment_config.json: {len(json_config)} keys")
+        for key, value in json_config.items():
+            if key not in config:
+                config[key] = value
+
+    if not config:
+        print("  WARNING: No config found in checkpoint or experiment_config.json!")
+        print("  Will use defaults - this may not match your original model.")
+
+    # Print key architecture params for verification
+    print(f"\n  Model architecture:")
+    print(f"    embed_dim: {config.get('embed_dim', 'NOT SET')}")
+    print(f"    n_layers: {config.get('n_layers', 'NOT SET')}")
+    print(f"    max_seq_len: {config.get('max_seq_len', 'NOT SET')}")
+    print(f"    irrep_spec: {config.get('irrep_spec', 'NOT SET')}")
 
     # Override max_steps if specified
     original_max_steps = config.get('max_steps', 200000)
