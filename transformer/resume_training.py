@@ -125,7 +125,11 @@ def resume_training():
 
     # Create data loaders
     print("\nCreating data loaders...")
-    dataset_name = config.get('dataset', 'wikitext-2')
+    # Try multiple keys for dataset name
+    dataset_name = (config.get('dataset') or
+                    config.get('dataset_name') or
+                    'wikitext-103')  # Default to 103, not 2
+    print(f"  Dataset: {dataset_name}")
 
     tokenizer_mode = config.get('tokenizer', 'auto')
     if tokenizer_mode == 'auto':
@@ -154,6 +158,33 @@ def resume_training():
 
     config['vocab_size'] = actual_vocab_size
     print(f"  Vocab size: {actual_vocab_size}")
+
+    # Ensure required model config keys have defaults
+    model_defaults = {
+        'kappa_beta': 1.0,
+        'kappa_beta_base': 1.0,
+        'lambda_beta': 1.0,
+        'alpha': 0.1,
+        'beta': 1.0,
+        'lambda_gamma': 0.0,
+        'dropout': 0.1,
+        'n_layers': 4,
+        'n_heads': 1,
+        'hidden_dim': config.get('embed_dim', 128) * 4,
+        'ffn_mode': 'VFE_dynamic',
+        'pos_encoding_mode': 'learned',
+        'diagonal_covariance': True,
+        'use_diagonal_covariance': True,
+        'evolve_sigma': True,
+        'evolve_phi': True,
+        'tie_embeddings': True,
+        'gauge_group': 'SO3',
+        'gauge_dim': 3,
+        'use_multi_irrep': False,
+    }
+    for key, default in model_defaults.items():
+        if key not in config:
+            config[key] = default
 
     # Create model
     print("\nCreating model...")
