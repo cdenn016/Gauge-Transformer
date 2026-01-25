@@ -595,6 +595,19 @@ def compute_free_energy_loss(
     metrics['p_flow/mu_q'] = mu_q.detach()           # (B, N, K) final beliefs
     metrics['p_flow/ce_per_position'] = ce_per_position  # (B, N) per-position CE
 
+    # =================================================================
+    # ATTENTION INFO: For RG metrics analysis
+    # =================================================================
+    # Store attention matrices and beliefs for RG flow analysis.
+    # This enables computation of meta-agent emergence (modularity,
+    # effective rank, KL within/between clusters).
+    metrics['attention_info'] = {
+        'beta': beta.detach(),      # (B, n_heads, N, N) attention weights
+        'mu': mu_q.detach(),        # (B, N, K) evolved beliefs
+        'sigma': sigma_q.detach() if sigma_q is not None else None,  # (B, N, K) or (B, N, K, K)
+        'kl': kl.detach(),          # (B, n_heads, N, N) pairwise KL divergences
+    }
+
     return total_loss, metrics
 
 
