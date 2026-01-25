@@ -1353,6 +1353,8 @@ class VariationalFFNDynamic(nn.Module):
         # Phi evolution via VFE gradients (principled approach)
         self.update_phi = update_phi
         self.update_phi_per_iteration = update_phi_per_iteration  # Dynamical gauge frames
+        if update_phi_per_iteration:
+            print(f"[VariationalFFNDynamic] φ will evolve DURING E-step iterations (dynamical gauge frames)")
         self.phi_lr = phi_lr
         self.phi_max_norm = phi_max_norm
 
