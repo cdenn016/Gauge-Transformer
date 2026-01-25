@@ -47,6 +47,14 @@ EXPERIMENT_DIR = None
 # If None, will use original max_steps from config
 TARGET_STEPS = None
 
+# Override batch size (set to reduce memory usage if needed)
+# If None, will use original batch_size from config
+BATCH_SIZE = None
+
+# Gradient accumulation steps (effective_batch = batch_size * grad_accum)
+# Set higher to compensate for smaller batch size
+GRAD_ACCUMULATION = 1
+
 # Device
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -158,6 +166,15 @@ def infer_config_from_state_dict(state_dict: dict) -> dict:
             irrep_spec.append([f'ℓ{ell}', 1, dim])
         config['irrep_spec'] = irrep_spec
 
+    # Infer diagonal_covariance from sigma storage format
+    # log_sigma_diag = diagonal mode, log_sigma or sigma_embed = full mode
+    if 'token_embed.log_sigma_diag' in state_dict:
+        config['diagonal_covariance'] = True
+        config['use_diagonal_covariance'] = True
+    elif 'token_embed.log_sigma' in state_dict or 'token_embed.sigma_embed' in state_dict:
+        config['diagonal_covariance'] = False
+        config['use_diagonal_covariance'] = False
+
     return config
 
 
@@ -237,6 +254,19 @@ def resume_training():
     print(f"    n_layers: {config.get('n_layers', 'NOT SET')}")
     print(f"    max_seq_len: {config.get('max_seq_len', 'NOT SET')}")
     print(f"    irrep_spec: {config.get('irrep_spec', 'NOT SET')}")
+
+    # Override batch_size if specified
+    if BATCH_SIZE is not None:
+        original_batch = config.get('batch_size', 32)
+        config['batch_size'] = BATCH_SIZE
+        print(f"  Overriding batch_size: {original_batch} -> {BATCH_SIZE}")
+
+    # Print memory-critical settings
+    print(f"\n  Memory-critical settings:")
+    print(f"    batch_size: {config.get('batch_size', 32)}")
+    print(f"    hidden_dim: {config.get('hidden_dim', 'NOT SET')}")
+    print(f"    diagonal_covariance: {config.get('diagonal_covariance', 'NOT SET')}")
+    print(f"    use_diagonal_covariance: {config.get('use_diagonal_covariance', 'NOT SET')}")
 
     # Override max_steps if specified
     original_max_steps = config.get('max_steps', 200000)
@@ -362,6 +392,7 @@ def resume_training():
     print(f"  Performance settings:")
     print(f"    use_amp: {use_amp}")
     print(f"    batch_size: {config.get('batch_size', 32)}")
+    print(f"    grad_accumulation: {GRAD_ACCUMULATION}")
     print(f"    diagonal_covariance: {config.get('diagonal_covariance', True)}")
 
     train_config = FastTrainingConfig(
@@ -378,6 +409,7 @@ def resume_training():
 
         weight_decay=config.get('weight_decay', 0.01),
         grad_clip=config.get('grad_clip', 1.0),
+        grad_accumulation_steps=GRAD_ACCUMULATION,
 
         # Free energy weights
         alpha=config.get('alpha', 0.1),
