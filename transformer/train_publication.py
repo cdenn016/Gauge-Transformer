@@ -483,8 +483,8 @@ PURE_FEP_CONFIG = {
     'ffn_prior_lr': 0.1,          # Prior update rate
 
     # RG metrics
-    'compute_rg_metrics': False,
-    'rg_metrics_interval': 25,
+    'compute_rg_metrics': True,   # Enable RG flow analysis
+    'rg_metrics_interval': 100,   # Compute every 100 steps (not too frequent)
     'rg_auto_cluster': True,
     'rg_n_clusters': None,
     'track_dynamic_rg': True,  # Track RG flow across VFE iterations (requires n_iterations > 1)
