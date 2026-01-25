@@ -1298,7 +1298,8 @@ class VariationalFFNDynamic(nn.Module):
         diagonal_covariance: bool = False,  # Use diagonal Σ for efficiency
         compute_sigma_align_grad: bool = True,  # Compute sigma gradient from alignment term
         # Phi (gauge frame) evolution via VFE gradients
-        update_phi: bool = False,  # If True, update phi via ∂F/∂φ
+        update_phi: bool = False,  # If True, update phi via ∂F/∂φ (after E-step loop)
+        update_phi_per_iteration: bool = False,  # If True, update phi during EACH E-step iteration
         phi_lr: float = 0.05,      # Learning rate for phi updates
         phi_max_norm: float = 3.14159,  # Max norm for phi (π = 180° rotation)
         # Pure FEP mode: learning via prior evolution (no backprop)
@@ -1351,6 +1352,7 @@ class VariationalFFNDynamic(nn.Module):
 
         # Phi evolution via VFE gradients (principled approach)
         self.update_phi = update_phi
+        self.update_phi_per_iteration = update_phi_per_iteration  # Dynamical gauge frames
         self.phi_lr = phi_lr
         self.phi_max_norm = phi_max_norm
 
@@ -1515,6 +1517,7 @@ class VariationalFFNDynamic(nn.Module):
         # Current state (will evolve)
         mu_current = mu.clone()
         sigma_current = sigma.clone()
+        phi_current = phi.clone()  # Track phi for dynamical gauge frames
 
         # Track β evolution if requested
         beta_history = [] if return_beta_history else None
@@ -1545,7 +1548,7 @@ class VariationalFFNDynamic(nn.Module):
             beta_current = compute_attention_weights(
                 mu_q=mu_current,
                 sigma_q=sigma_current,
-                phi=phi,
+                phi=phi_current,  # Use evolving phi for dynamical gauge frames
                 generators=self.generators,
                 kappa=self.kappa,
                 epsilon=eps,
@@ -1572,7 +1575,7 @@ class VariationalFFNDynamic(nn.Module):
                 mu_p=mu_p_current,
                 sigma_p=sigma_p,
                 beta=beta_current,  # USE RECOMPUTED β!
-                phi=phi,
+                phi=phi_current,  # Use evolving phi for dynamical gauge frames
                 generators=self.generators,
                 alpha=self.alpha,
                 lambda_belief=self.lambda_belief,
@@ -1655,17 +1658,84 @@ class VariationalFFNDynamic(nn.Module):
                         eps=eps,
                     )
 
+            # =============================================================
+            # STEP 4b: Optional Phi Evolution DURING E-step (dynamical gauge frames)
+            # =============================================================
+            # When update_phi_per_iteration=True, φ evolves at each iteration
+            # This makes gauge frames dynamical, co-evolving with beliefs
+            if self.update_phi_per_iteration and torch.is_grad_enabled():
+                phi_for_grad = phi_current.clone().requires_grad_(True)
+
+                # Recompute attention with gradient-enabled phi
+                beta_for_phi_result = compute_attention_weights(
+                    mu_q=mu_current.detach(),
+                    sigma_q=sigma_current.detach() if sigma_current is not None else None,
+                    phi=phi_for_grad,
+                    generators=self.generators,
+                    kappa=self.kappa,
+                    epsilon=eps,
+                    mask=mask,
+                    use_numba=False,
+                    return_kl=True,
+                    diagonal_covariance=is_diagonal,
+                    irrep_dims=self.irrep_dims,
+                    chunk_size=self.chunk_size,
+                    mask_self_attention=self.mask_self_attention,
+                )
+
+                if isinstance(beta_for_phi_result, tuple):
+                    beta_phi, kl_matrix = beta_for_phi_result
+                else:
+                    beta_phi = beta_for_phi_result
+                    kl_matrix = beta_phi  # Fallback
+
+                # Belief alignment loss
+                alignment_loss = self.lambda_belief * (beta_phi * kl_matrix).sum()
+
+                # Compute ∂F/∂φ
+                grad_phi = torch.autograd.grad(
+                    alignment_loss,
+                    phi_for_grad,
+                    create_graph=False,
+                    retain_graph=False,
+                )[0]
+
+                # Update phi with proper retraction
+                phi_lr_iter = self.phi_lr / self.n_iterations  # Scale by iterations
+                if SON_RETRACTION_AVAILABLE:
+                    phi_current = retract_soN_torch(
+                        phi=phi_current,
+                        delta_phi=-grad_phi,
+                        generators=self.generators,
+                        step_size=phi_lr_iter,
+                        trust_region=0.3,
+                        max_norm=self.phi_max_norm,
+                        bch_order=1,
+                    )
+                else:
+                    delta_phi = -phi_lr_iter * grad_phi
+                    phi_norm = torch.norm(phi_current, dim=-1, keepdim=True).clamp(min=0.1)
+                    delta_norm = torch.norm(delta_phi, dim=-1, keepdim=True)
+                    trust_scale = torch.clamp(0.3 * phi_norm / (delta_norm + 1e-6), max=1.0)
+                    phi_current = phi_current + trust_scale * delta_phi
+                    phi_new_norm = torch.norm(phi_current, dim=-1, keepdim=True)
+                    phi_current = torch.where(
+                        phi_new_norm > self.phi_max_norm,
+                        phi_current * self.phi_max_norm / phi_new_norm,
+                        phi_current
+                    )
+
         # =================================================================
-        # STEP 5: Optional Phi Evolution via VFE Gradient
+        # STEP 5: Optional Phi Evolution via VFE Gradient (after loop)
         # =================================================================
-        # This is the PRINCIPLED approach: φ evolves via ∂F/∂φ, not a neural net.
+        # This runs when update_phi=True but update_phi_per_iteration=False
         # The belief alignment term F_align = λ·Σ β_ij KL(q_i || Ω_ij[q_j])
         # depends on φ through the transport operator Ω_ij = exp(φ_i)·exp(-φ_j).
-        phi_current = phi
         # Only update phi during training (when gradients are enabled)
-        if self.update_phi and torch.is_grad_enabled():
+        # Skip if already updated per-iteration
+        if self.update_phi and not self.update_phi_per_iteration and torch.is_grad_enabled():
             # Enable gradients for phi
-            phi_for_grad = phi.clone().requires_grad_(True)
+            phi_for_grad = phi_current.clone().requires_grad_(True)
 
             # Recompute attention with gradient-enabled phi
             beta_for_phi = compute_attention_weights(
@@ -1721,7 +1791,7 @@ class VariationalFFNDynamic(nn.Module):
             if SON_RETRACTION_AVAILABLE:
                 # Use BCH composition with trust region for stable updates
                 phi_current = retract_soN_torch(
-                    phi=phi,
+                    phi=phi_current,
                     delta_phi=-grad_phi,  # Negative gradient for descent
                     generators=self.generators,
                     step_size=self.phi_lr,
@@ -1734,12 +1804,12 @@ class VariationalFFNDynamic(nn.Module):
                 delta_phi = -self.phi_lr * grad_phi
 
                 # Trust region: limit step size relative to current phi
-                phi_norm = torch.norm(phi, dim=-1, keepdim=True).clamp(min=0.1)
+                phi_norm = torch.norm(phi_current, dim=-1, keepdim=True).clamp(min=0.1)
                 delta_norm = torch.norm(delta_phi, dim=-1, keepdim=True)
                 trust_scale = torch.clamp(0.3 * phi_norm / (delta_norm + 1e-6), max=1.0)
                 delta_phi = trust_scale * delta_phi
 
-                phi_current = phi + delta_phi
+                phi_current = phi_current + delta_phi
 
                 # Clamp to max norm
                 phi_new_norm = torch.norm(phi_current, dim=-1, keepdim=True)

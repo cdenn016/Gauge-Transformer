@@ -109,6 +109,7 @@ class GaugeTransformerLM(nn.Module):
         pos_mode = config.get('pos_encoding_mode', 'none')  # Default: no position in gauge space
         evolve_sigma = config.get('evolve_sigma', True)
         evolve_phi = config.get('evolve_phi', True)
+        evolve_phi_e_step = config.get('evolve_phi_e_step', False)  # Update φ during E-step iterations
         tie_embeddings = config.get('tie_embeddings', True)
 
         # VFE FFN config
@@ -309,6 +310,7 @@ class GaugeTransformerLM(nn.Module):
             dropout=dropout,
             evolve_sigma=evolve_sigma,
             evolve_phi=evolve_phi,
+            evolve_phi_e_step=evolve_phi_e_step,  # Update φ during E-step iterations
             # Phi evolution parameters (VFE gradient-based)
             phi_lr=config.get('phi_lr', 0.05),  # Learning rate for ∂F/∂φ descent
             phi_max_norm=config.get('phi_max_norm', 3.14159),  # Default: π radians

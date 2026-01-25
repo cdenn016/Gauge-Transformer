@@ -56,7 +56,8 @@ class GaugeFFN(nn.Module):
         prior_bank: Optional[nn.Module] = None,  # Token-dependent PriorBank
         use_prior_bank: bool = False,  # Use PriorBank vs position-dependent priors
         # Phi evolution via VFE gradients (principled approach)
-        update_phi: bool = False,  # If True, update phi via ∂F/∂φ
+        update_phi: bool = False,  # If True, update phi via ∂F/∂φ (after E-step loop)
+        update_phi_per_iteration: bool = False,  # If True, update phi during each E-step iteration
         phi_lr: float = 0.05,      # Learning rate for phi updates
         phi_max_norm: float = 3.14159,  # Max norm for phi (π = 180° rotation)
         # Memory-efficient options (NEW!)
@@ -123,6 +124,7 @@ class GaugeFFN(nn.Module):
             use_prior_bank=use_prior_bank,  # Enable token-dependent priors
             # Phi evolution via VFE gradients
             update_phi=update_phi,
+            update_phi_per_iteration=update_phi_per_iteration,
             phi_lr=phi_lr,
             phi_max_norm=phi_max_norm,
             # Memory-efficient options
