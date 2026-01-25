@@ -115,6 +115,13 @@ class FastTrainingConfig:
     use_delta_rule_w_out: bool = False  # Enable delta rule for W_out
     delta_rule_lr: float = 0.001        # Learning rate for delta rule
 
+    # RG METRICS: Track renormalization group flow
+    compute_rg_metrics: bool = False     # Enable RG flow analysis
+    rg_metrics_interval: int = 100       # Compute every N steps
+    rg_auto_cluster: bool = True         # Auto-detect clusters
+    rg_n_clusters: Optional[int] = None  # Fixed number of clusters (None = auto)
+    track_dynamic_rg: bool = False       # Track beta evolution across VFE iterations
+
     # Resume from checkpoint
     resume_from: Optional[str] = None  # Path to checkpoint to resume from
 
