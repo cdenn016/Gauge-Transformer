@@ -645,6 +645,131 @@ class GaugeTransformerLM(nn.Module):
 
         return logits, attention_info
 
+    def forward_with_rg_tracking(
+        self,
+        token_ids: torch.Tensor,
+        targets: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, Dict]:
+        """
+        Forward pass that tracks RG flow across VFE iterations.
+
+        This is for detailed RG analysis - captures beta_history showing
+        how attention evolves during VFE descent within a single forward pass.
+
+        Only meaningful when ffn has n_iterations > 1.
+
+        Args:
+            token_ids: (batch, seq_len) token indices
+            targets: (batch, seq_len) target tokens
+
+        Returns:
+            logits: (batch, num_agents, vocab_size) predictions
+            rg_info: Dict with:
+                - 'beta_history': List of (B, N, N) attention at each VFE step
+                - 'mu': Final belief means
+                - 'sigma': Final covariances
+                - 'phi': Final gauge frames
+                - 'n_iterations': Number of VFE steps
+        """
+        batch_size, num_agents = token_ids.shape
+        device = token_ids.device
+
+        # Embeddings
+        mu_q, sigma_q, phi = self.token_embed(token_ids)
+        mu_prior = mu_q.clone()
+
+        # Position encoding
+        phi = self.pos_encoding.compose(phi, num_agents, device=device)
+
+        # Attention mask
+        mask = create_attention_mask(
+            num_agents=num_agents,
+            pattern=self.attention_pattern,
+            window=self.attention_window,
+            device=device,
+            causal=True,
+        )
+        mask = mask.unsqueeze(0).expand(batch_size, -1, -1)
+
+        # Precompute transport operators
+        if not self.evolve_phi:
+            first_attention = self.transformer.blocks[0].attention
+            cached_head_transports = first_attention.precompute_head_transports(
+                phi, device, mu_q.dtype
+            )
+        else:
+            cached_head_transports = None
+
+        # Forward through all but last block (no RG tracking needed)
+        for block in self.transformer.blocks[:-1]:
+            mu_q, sigma_q, phi = block(
+                mu_q, sigma_q, phi, self.generators, mask, mu_prior,
+                targets=targets,
+                W_out=self.out_proj.weight if hasattr(self.out_proj, 'weight') else None,
+                cached_head_transports=cached_head_transports,
+            )
+
+        # Final block WITH beta_history tracking
+        final_block = self.transformer.blocks[-1]
+
+        # Pre-norm + attention
+        mu_normalized = final_block.norm1(mu_q)
+        mu_attn, sigma_attn, beta, kl = final_block.attention(
+            mu_normalized, sigma_q, phi, self.generators,
+            mask=mask, return_attention=True,
+            cached_head_transports=cached_head_transports,
+        )
+
+        # Complete attention sublayer
+        mu_q = mu_q + final_block.dropout1(mu_attn)
+        if final_block.evolve_sigma and sigma_attn is not None:
+            sigma_q = sigma_attn
+
+        # FFN sublayer WITH beta_history
+        mu_normalized = final_block.norm2(mu_q)
+
+        # Call FFN with return_beta_history=True
+        ffn_result = final_block.ffn(
+            mu=mu_normalized,
+            beta=beta,
+            mu_prior=mu_prior,
+            phi=phi,
+            sigma=sigma_q,
+            mask=mask,
+            targets=targets,
+            W_out=self.out_proj.weight if hasattr(self.out_proj, 'weight') else None,
+            return_beta_history=True,  # <-- Key difference!
+        )
+
+        # Unpack result (4 values when return_beta_history=True)
+        mu_ffn, sigma_ffn, phi_ffn, beta_history = ffn_result
+
+        # Update covariances if evolving
+        if final_block.evolve_sigma and sigma_ffn is not None:
+            sigma_q = sigma_ffn
+
+        mu_q = mu_q + mu_ffn
+
+        # Final norm
+        mu_q = self.transformer.final_norm(mu_q)
+
+        # Project to vocabulary
+        logits = self.out_proj(mu_q)
+
+        # Get n_iterations from FFN
+        n_iterations = getattr(final_block.ffn, 'n_iterations', 1)
+
+        rg_info = {
+            'beta_history': beta_history,  # List of (B, N, N) at each VFE step
+            'mu': mu_q,
+            'sigma': sigma_q,
+            'phi': phi,
+            'n_iterations': n_iterations,
+            'beta_final': beta_history[-1] if beta_history else beta,
+        }
+
+        return logits, rg_info
+
     @torch.no_grad()
     def generate(
         self,

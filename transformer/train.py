@@ -129,6 +129,74 @@ def compute_rg_metrics_from_attention(
         return {}
 
 
+def compute_dynamic_rg_metrics(
+    rg_info: Dict,
+    step: int,
+) -> Dict[str, Any]:
+    """
+    Compute RG flow metrics from beta_history (dynamic RG within forward pass).
+
+    This tracks how attention structure evolves across VFE iterations,
+    revealing dynamic cluster formation.
+
+    Args:
+        rg_info: Dict from forward_with_rg_tracking() containing 'beta_history'
+        step: Current training step
+
+    Returns:
+        Dict with dynamic RG metrics:
+            - rg/dynamic/n_iterations: Number of VFE steps
+            - rg/dynamic/modularity_init: Modularity at first VFE step
+            - rg/dynamic/modularity_final: Modularity at last VFE step
+            - rg/dynamic/modularity_change: Final - Init (positive = emergence)
+            - rg/dynamic/rank_init: Effective rank at first step
+            - rg/dynamic/rank_final: Effective rank at last step
+            - rg/dynamic/rank_change: Final - Init (negative = compression)
+    """
+    beta_history = rg_info.get('beta_history')
+
+    if beta_history is None or len(beta_history) == 0:
+        return {'rg/dynamic/n_iterations': 0}
+
+    n_iterations = len(beta_history)
+
+    # Import RG metrics
+    from transformer.analysis.rg_metrics import compute_modularity, compute_effective_rank
+
+    # Compute metrics at first and last step
+    beta_init = beta_history[0]
+    beta_final = beta_history[-1]
+
+    if beta_init.dim() == 4:
+        beta_init = beta_init.mean(dim=1)
+        beta_final = beta_final.mean(dim=1)
+
+    mod_init = compute_modularity(beta_init)
+    mod_final = compute_modularity(beta_final)
+    rank_init = compute_effective_rank(beta_init)
+    rank_final = compute_effective_rank(beta_final)
+
+    metrics = {
+        'rg/dynamic/n_iterations': n_iterations,
+        'rg/dynamic/modularity_init': mod_init,
+        'rg/dynamic/modularity_final': mod_final,
+        'rg/dynamic/modularity_change': mod_final - mod_init,
+        'rg/dynamic/rank_init': rank_init,
+        'rg/dynamic/rank_final': rank_final,
+        'rg/dynamic/rank_change': rank_final - rank_init,
+    }
+
+    # If enough iterations, compute mid-point too
+    if n_iterations >= 3:
+        mid_idx = n_iterations // 2
+        beta_mid = beta_history[mid_idx]
+        if beta_mid.dim() == 4:
+            beta_mid = beta_mid.mean(dim=1)
+        metrics['rg/dynamic/modularity_mid'] = compute_modularity(beta_mid)
+        metrics['rg/dynamic/rank_mid'] = compute_effective_rank(beta_mid)
+
+    return metrics
+
 
 # =============================================================================
 # Gaussian KL Divergence (Proper Implementation)
