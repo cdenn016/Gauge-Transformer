@@ -30,6 +30,8 @@ from transformer.core.model import GaugeTransformerLM
 from transformer.baselines.standard_transformer import StandardTransformerLM
 from transformer.data import create_dataloaders, create_char_dataloaders
 from transformer._archive.train_fast import FastTrainer, FastTrainingConfig
+from transformer.train_publication import run_test_evaluation
+from transformer.analysis.publication_metrics import PublicationMetrics
 
 
 # =============================================================================
@@ -46,6 +48,14 @@ EXPERIMENT_DIR = None
 # Target total steps (set higher than checkpoint step to continue training)
 # If None, will use original max_steps from config
 TARGET_STEPS = None
+
+# Override batch size (set to reduce memory usage if needed)
+# If None, will use original batch_size from config
+BATCH_SIZE = None
+
+# Gradient accumulation steps (effective_batch = batch_size * grad_accum)
+# Set higher to compensate for smaller batch size
+GRAD_ACCUMULATION = 1
 
 # Device
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -158,6 +168,15 @@ def infer_config_from_state_dict(state_dict: dict) -> dict:
             irrep_spec.append([f'ℓ{ell}', 1, dim])
         config['irrep_spec'] = irrep_spec
 
+    # Infer diagonal_covariance from sigma storage format
+    # log_sigma_diag = diagonal mode, log_sigma or sigma_embed = full mode
+    if 'token_embed.log_sigma_diag' in state_dict:
+        config['diagonal_covariance'] = True
+        config['use_diagonal_covariance'] = True
+    elif 'token_embed.log_sigma' in state_dict or 'token_embed.sigma_embed' in state_dict:
+        config['diagonal_covariance'] = False
+        config['use_diagonal_covariance'] = False
+
     return config
 
 
@@ -237,6 +256,19 @@ def resume_training():
     print(f"    n_layers: {config.get('n_layers', 'NOT SET')}")
     print(f"    max_seq_len: {config.get('max_seq_len', 'NOT SET')}")
     print(f"    irrep_spec: {config.get('irrep_spec', 'NOT SET')}")
+
+    # Override batch_size if specified
+    if BATCH_SIZE is not None:
+        original_batch = config.get('batch_size', 32)
+        config['batch_size'] = BATCH_SIZE
+        print(f"  Overriding batch_size: {original_batch} -> {BATCH_SIZE}")
+
+    # Print memory-critical settings
+    print(f"\n  Memory-critical settings:")
+    print(f"    batch_size: {config.get('batch_size', 32)}")
+    print(f"    hidden_dim: {config.get('hidden_dim', 'NOT SET')}")
+    print(f"    diagonal_covariance: {config.get('diagonal_covariance', 'NOT SET')}")
+    print(f"    use_diagonal_covariance: {config.get('use_diagonal_covariance', 'NOT SET')}")
 
     # Override max_steps if specified
     original_max_steps = config.get('max_steps', 200000)
@@ -354,6 +386,17 @@ def resume_training():
 
     # Create training config
     print("\nCreating training config...")
+
+    # Default use_amp to True for CUDA (major speedup)
+    use_amp = config.get('use_amp', DEVICE == 'cuda')
+
+    # Print key performance settings
+    print(f"  Performance settings:")
+    print(f"    use_amp: {use_amp}")
+    print(f"    batch_size: {config.get('batch_size', 32)}")
+    print(f"    grad_accumulation: {GRAD_ACCUMULATION}")
+    print(f"    diagonal_covariance: {config.get('diagonal_covariance', True)}")
+
     train_config = FastTrainingConfig(
         max_steps=config['max_steps'],
         warmup_steps=config.get('warmup_steps', 1000),
@@ -368,6 +411,7 @@ def resume_training():
 
         weight_decay=config.get('weight_decay', 0.01),
         grad_clip=config.get('grad_clip', 1.0),
+        grad_accumulation_steps=GRAD_ACCUMULATION,
 
         # Free energy weights
         alpha=config.get('alpha', 0.1),
@@ -382,8 +426,8 @@ def resume_training():
         # Checkpointing
         checkpoint_dir=experiment_dir,
 
-        # GPU optimizations
-        use_amp=config.get('use_amp', False),
+        # GPU optimizations - default to True for CUDA!
+        use_amp=use_amp,
 
         # P-FLOW and delta rule
         use_p_flow=config.get('use_p_flow', False),
@@ -429,7 +473,70 @@ def resume_training():
     trainer.train()
 
     print("\n" + "=" * 70)
-    print("TRAINING COMPLETE")
+    print("TRAINING COMPLETE - Running final analysis...")
+    print("=" * 70)
+
+    # =========================================================================
+    # POST-TRAINING ANALYSIS (same as train_publication.py)
+    # =========================================================================
+
+    # 1. Run test set evaluation
+    if test_loader is not None:
+        test_metrics = run_test_evaluation(
+            model=model,
+            test_loader=test_loader,
+            device=device,
+            vocab_size=config['vocab_size'],
+        )
+        # Save test metrics
+        test_metrics_path = experiment_dir / 'test_metrics.json'
+        import json as json_module
+        with open(test_metrics_path, 'w') as f:
+            json_module.dump(test_metrics, f, indent=2)
+        print(f"Saved test metrics to: {test_metrics_path}")
+
+    # 2. Initialize publication metrics and generate figures
+    try:
+        import time
+        experiment_name = f"resumed_{time.strftime('%Y%m%d_%H%M%S')}"
+        pub_metrics = PublicationMetrics(
+            experiment_name=experiment_name,
+            base_dir=experiment_dir / "publication_outputs"
+        )
+
+        # Run final semantic analysis
+        print("\nRunning final gauge frame semantic analysis...")
+        try:
+            pub_metrics.run_final_semantic_analysis(
+                model=model,
+                verbose=True,
+            )
+        except Exception as e:
+            print(f"[WARN] Final semantic analysis failed: {e}")
+
+        # Generate interpretability outputs using a sample batch from validation
+        print("\nGenerating interpretability outputs...")
+        try:
+            sample_batch = next(iter(val_loader))
+            pub_metrics.generate_interpretability_outputs(
+                model=model,
+                sample_batch=sample_batch,
+                tokenizer=None,  # Byte-level, no tokenizer needed
+                device=device,
+            )
+        except Exception as e:
+            print(f"[WARN] Could not generate interpretability outputs: {e}")
+
+        # Print summary
+        pub_metrics.print_summary()
+
+    except Exception as e:
+        print(f"[WARN] Could not run publication metrics: {e}")
+        import traceback
+        traceback.print_exc()
+
+    print("\n" + "=" * 70)
+    print("ALL DONE!")
     print("=" * 70)
 
 
