@@ -78,6 +78,7 @@ from transformer.data import create_dataloaders, create_char_dataloaders
 from transformer.train import (
     compute_free_energy_loss,
     compute_rg_metrics_from_attention,
+    compute_dynamic_rg_metrics,
 )
 from transformer._archive.train_fast import FastTrainer, FastTrainingConfig
 from transformer.analysis.publication_metrics import PublicationMetrics, ExperimentResult
@@ -486,6 +487,7 @@ PURE_FEP_CONFIG = {
     'rg_metrics_interval': 25,
     'rg_auto_cluster': True,
     'rg_n_clusters': None,
+    'track_dynamic_rg': True,  # Track RG flow across VFE iterations (requires n_iterations > 1)
 }
 
 
@@ -718,6 +720,11 @@ class PublicationMetricsTracker:
             'rg_kl_between_mean', 'rg_kl_between_std',
             'rg_beta_entropy',
 
+            # Dynamic RG (across VFE iterations)
+            'rg_dynamic_n_iterations',
+            'rg_dynamic_modularity_init', 'rg_dynamic_modularity_final', 'rg_dynamic_modularity_change',
+            'rg_dynamic_rank_init', 'rg_dynamic_rank_final', 'rg_dynamic_rank_change',
+
             # Learning rates
             'mu_lr', 'sigma_lr', 'phi_lr', 'ffn_lr',
 
@@ -778,6 +785,15 @@ class PublicationMetricsTracker:
             'rg_kl_between_mean': metrics.get('rg/kl_between_mean'),
             'rg_kl_between_std': metrics.get('rg/kl_between_std'),
             'rg_beta_entropy': metrics.get('rg/beta_entropy'),
+
+            # Dynamic RG (across VFE iterations)
+            'rg_dynamic_n_iterations': metrics.get('rg/dynamic/n_iterations'),
+            'rg_dynamic_modularity_init': metrics.get('rg/dynamic/modularity_init'),
+            'rg_dynamic_modularity_final': metrics.get('rg/dynamic/modularity_final'),
+            'rg_dynamic_modularity_change': metrics.get('rg/dynamic/modularity_change'),
+            'rg_dynamic_rank_init': metrics.get('rg/dynamic/rank_init'),
+            'rg_dynamic_rank_final': metrics.get('rg/dynamic/rank_final'),
+            'rg_dynamic_rank_change': metrics.get('rg/dynamic/rank_change'),
 
             # Learning rates
             'mu_lr': lrs.get('mu_embed', 0),
@@ -1130,6 +1146,26 @@ class PublicationTrainer(FastTrainer):
             metrics['rg/kl_between_std'] = rg_metrics.get('rg/kl_between_std')
             metrics['rg/beta_entropy'] = rg_metrics.get('rg/beta_entropy')
 
+            # Dynamic RG tracking (across VFE iterations within forward pass)
+            track_dynamic = getattr(self.config, 'track_dynamic_rg', False)
+            if track_dynamic and hasattr(self.model, 'forward_with_rg_tracking'):
+                try:
+                    # Run a separate forward pass with RG tracking
+                    # This captures beta_history across VFE iterations
+                    with torch.no_grad():
+                        _, rg_info = self.model.forward_with_rg_tracking(
+                            token_ids=input_ids,
+                            targets=target_ids,
+                        )
+                    dynamic_metrics = compute_dynamic_rg_metrics(rg_info, self.global_step)
+
+                    # Add dynamic RG metrics
+                    for key, value in dynamic_metrics.items():
+                        metrics[key] = value
+                except Exception as e:
+                    # Don't crash training on RG tracking errors
+                    pass
+
         return metrics, grad_norms
 
     def _compute_gradient_norms(self) -> Dict[str, float]:
@@ -1338,6 +1374,16 @@ class PublicationTrainer(FastTrainer):
                     print(f"      Clusters (meta-agents): {metrics['rg/n_clusters']}")
                     print(f"      KL within: {metrics['rg/kl_within_mean']:.4f} (lower = tighter)")
                     print(f"      KL between: {metrics['rg/kl_between_mean']:.4f}")
+
+                    # Dynamic RG flow (within forward pass)
+                    if metrics.get('rg/dynamic/n_iterations') is not None:
+                        n_iters = metrics['rg/dynamic/n_iterations']
+                        if n_iters > 1:
+                            mod_change = metrics.get('rg/dynamic/modularity_change', 0)
+                            rank_change = metrics.get('rg/dynamic/rank_change', 0)
+                            print(f"    Dynamic RG ({n_iters} VFE iterations):")
+                            print(f"      Modularity: {metrics.get('rg/dynamic/modularity_init', 0):.4f} → {metrics.get('rg/dynamic/modularity_final', 0):.4f} (Δ={mod_change:+.4f})")
+                            print(f"      Eff. Rank:  {metrics.get('rg/dynamic/rank_init', 0):.1f} → {metrics.get('rg/dynamic/rank_final', 0):.1f} (Δ={rank_change:+.1f})")
 
                 # Generate sample text to verify learning (varied prompts for diversity)
                 try:
