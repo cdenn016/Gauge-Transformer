@@ -387,6 +387,7 @@ PURE_FEP_CONFIG = {
     # Gauge geometry
     'evolve_sigma': True,
     'evolve_phi': True,
+    'evolve_phi_e_step': False,   # Update φ during E-step iterations (dynamical gauge frames)
     'diagonal_covariance': True,
 
     # NO position encoding (let it emerge from data!)
