@@ -157,8 +157,6 @@ def create_attention_mask(
 def compute_transport_operators(
     phi: torch.Tensor,         # (B, N, n_gen) gauge frames where n_gen is # of generators
     generators: torch.Tensor,  # (n_gen, K, K) Lie algebra generators
-    use_fast_exp: bool = True,   # Use Taylor approximation for small angles (default True)
-    exp_order: int = 4,          # Order of Taylor expansion (if use_fast_exp=True)
 ) -> dict:
     """
     Precompute transport operators for caching when phi is fixed.
@@ -177,10 +175,6 @@ def compute_transport_operators(
         generators: Lie algebra generators (n_gen, K, K)
              - For SO(3): shape (3, K, K)
              - For SO(N): shape (N*(N-1)/2, K, K)
-        use_fast_exp: If True, use Taylor series approximation instead of torch.matrix_exp.
-                      Faster but only accurate for small angles (|φ| < 0.5).
-        exp_order: Order of Taylor expansion when use_fast_exp=True.
-                   Higher = more accurate but slower. Default 4 is good for |φ| < 0.3.
 
     Returns:
         dict with:
@@ -191,15 +185,10 @@ def compute_transport_operators(
     # φ·G: combine gauge frames with generators
     phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
 
-    # Matrix exponentials (the expensive operations!)
-    if use_fast_exp:
-        # Taylor series: exp(A) ≈ I + A + A²/2! + A³/3! + ...
-        # Faster than torch.matrix_exp for small angles
-        exp_phi = _taylor_matrix_exp(phi_matrix, order=exp_order)
-        exp_neg_phi = _taylor_matrix_exp(-phi_matrix, order=exp_order)
-    else:
-        exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
-        exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
+    # Matrix exponentials using torch's robust implementation
+    # (Padé approximation with scaling-squaring internally)
+    exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
+    exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
 
     # Full pairwise transport: Ω_ij = exp(φ_i) @ exp(-φ_j)
     Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)  # (B, N, N, K, K)
@@ -209,65 +198,6 @@ def compute_transport_operators(
         'exp_neg_phi': exp_neg_phi,
         'Omega': Omega,
     }
-
-
-def _taylor_matrix_exp(A: torch.Tensor, order: int = 4, max_norm: float = 0.5) -> torch.Tensor:
-    """
-    Compute matrix exponential using Taylor series with scaling-squaring.
-
-    Uses scaling-squaring for numerical stability:
-    1. Find k such that ||A / 2^k|| < max_norm
-    2. Compute exp(A / 2^k) via Taylor series (accurate for small norm)
-    3. Square k times: exp(A) = (exp(A / 2^k))^{2^k}
-
-    This is faster than torch.matrix_exp for small matrices while remaining
-    accurate for arbitrary matrix norms.
-
-    Args:
-        A: Input matrix (..., K, K)
-        order: Number of terms in Taylor series (default 4)
-        max_norm: Maximum norm for Taylor series accuracy (default 0.5)
-
-    Returns:
-        exp(A): Matrix exponential (..., K, K)
-    """
-    K = A.shape[-1]
-    device = A.device
-    dtype = A.dtype
-
-    # Compute Frobenius norm for scaling decision
-    # Use per-matrix norm for batched computation
-    A_norm = torch.linalg.norm(A, ord='fro', dim=(-2, -1), keepdim=True)  # (..., 1, 1)
-
-    # Determine scaling factor k: we want ||A / 2^k|| < max_norm
-    # log2(||A|| / max_norm) gives minimum k needed
-    # Add small epsilon to avoid log(0)
-    k_float = torch.log2(A_norm / max_norm + 1e-10).clamp(min=0)
-    k_max = int(k_float.max().item()) + 1  # Global max for uniform computation
-
-    # For very large norms (k > 10), fall back to torch.matrix_exp
-    # This threshold balances accuracy vs speed
-    if k_max > 10:
-        return torch.matrix_exp(A)
-
-    # Scale down: A_scaled = A / 2^k_max
-    scale = 2.0 ** k_max
-    A_scaled = A / scale
-
-    # Taylor series on scaled matrix (now ||A_scaled|| < max_norm)
-    eye = torch.eye(K, device=device, dtype=dtype)
-    result = eye.expand_as(A).clone()
-    term = result.clone()
-
-    for n in range(1, order + 1):
-        term = torch.matmul(term, A_scaled) / n
-        result = result + term
-
-    # Square k_max times: exp(A) = exp(A_scaled)^{2^k_max}
-    for _ in range(k_max):
-        result = torch.matmul(result, result)
-
-    return result
 
 
 # =============================================================================
@@ -2123,8 +2053,6 @@ class IrrepMultiHeadAttention(nn.Module):
         diagonal_covariance: bool = False,
         attention_pattern: str = 'full',
         attention_window: int = 64,
-        use_fast_exp: bool = True,   # Default True for speed
-        exp_order: int = 4,
         gauge_group: str = 'SO3',  # 'SO3' or 'SON'
         gauge_dim: int = 3,        # N for SO(N) - only used when gauge_group='SON'
         global_generators: Optional[torch.Tensor] = None,  # (n_gen, K, K) for SO(N) mode
@@ -2148,10 +2076,6 @@ class IrrepMultiHeadAttention(nn.Module):
                 - 'local': O(N×W) efficient local window attention
                 - 'sparse': Use sparse computation with provided mask
             attention_window: Window size for 'local' pattern
-            use_fast_exp: If True, use Taylor series approximation for matrix exp.
-                         Faster but only accurate for small angles (|φ| < 0.5).
-            exp_order: Order of Taylor expansion when use_fast_exp=True.
-                      Higher = more accurate but slower. Default 4 is good for |φ| < 0.3.
             gauge_group: 'SO3' for SO(3) Wigner D-matrices, 'SON' for SO(N) fundamentals
             gauge_dim: N for SO(N) mode - determines generator structure
             global_generators: Pre-computed generators for SO(N) mode (n_gen, K, K)
@@ -2169,8 +2093,6 @@ class IrrepMultiHeadAttention(nn.Module):
         self.aggregate_mode = aggregate_mode
         self.attention_pattern = attention_pattern
         self.attention_window = attention_window
-        self.use_fast_exp = use_fast_exp
-        self.exp_order = exp_order
         self.alibi_slope = alibi_slope
         self.use_identity_transport = use_identity_transport
         self.mask_self_attention = mask_self_attention
@@ -2346,11 +2268,7 @@ class IrrepMultiHeadAttention(nn.Module):
                 head_cached_transport = cached_head_transports[head_idx]
             else:
                 # Within-layer cache: compute once, reuse for KL and aggregation
-                head_cached_transport = compute_transport_operators(
-                    phi, gen_head,
-                    use_fast_exp=self.use_fast_exp,
-                    exp_order=self.exp_order,
-                )
+                head_cached_transport = compute_transport_operators(phi, gen_head)
 
             # Compute attention for this head (with optional KL matrices)
             # Use efficient sparse attention if pattern is 'local'
@@ -2574,11 +2492,7 @@ class IrrepMultiHeadAttention(nn.Module):
         cached_transports = []
         for head_idx in range(self.n_heads):
             gen_head = self.head_generators[head_idx].gen.to(device=device, dtype=dtype)
-            cached_transports.append(compute_transport_operators(
-                phi, gen_head,
-                use_fast_exp=self.use_fast_exp,
-                exp_order=self.exp_order,
-            ))
+            cached_transports.append(compute_transport_operators(phi, gen_head))
         return cached_transports
 
     def extra_repr(self) -> str:
