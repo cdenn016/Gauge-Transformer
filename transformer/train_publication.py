@@ -139,8 +139,8 @@ STANDARD_CONFIG = {
     'batch_size': 3,
     'use_amp': False,
     'num_workers': 6,
-    'epochs': 3,               # Number of epochs (overrides max_steps if set)
-    'max_steps': 200000,       # Fallback if epochs not set
+    'epochs': None,            # Set to 1-3 for WikiText-2, None for WikiText-103 (use max_steps)
+    'max_steps': 200000,       # ~0.5 epochs on WikiText-103, ~50 epochs on WikiText-2
     'warmup_steps': 50,
 
     # Standard transformer settings
@@ -219,8 +219,8 @@ VFE_EM_CONFIG = {
     'batch_size': 2,
     'use_amp': False,             # FP32 for precision
     'num_workers': 6,
-    'epochs': 3,                  # Number of epochs (overrides max_steps if set)
-    'max_steps': 200000,          # Fallback if epochs not set
+    'epochs': None,               # Set to 1-3 for WikiText-2, None for WikiText-103 (use max_steps)
+    'max_steps': 200000,          # ~0.5 epochs on WikiText-103
     'warmup_steps': 50,
 
     # VFE transformer settings 
@@ -378,8 +378,8 @@ PURE_FEP_CONFIG = {
     'batch_size': 6,
     'use_amp': False,             # FP32 for precision
     'num_workers': 4,
-    'epochs': 1,                  # Number of epochs (overrides max_steps if set)
-    'max_steps': 5000,            # Fallback if epochs not set
+    'epochs': None,               # Set for WikiText-2, None for WikiText-103 (use max_steps)
+    'max_steps': 5000,            # For quick pure FEP experiments
     'warmup_steps': 0,            # No warmup for P-flow
 
     # Pure FEP transformer settings
@@ -1780,19 +1780,29 @@ def run_single_experiment(
     print("\n" + "="*70)
     print("TRAINING CONFIGURATION")
     print("="*70)
-    # Calculate effective steps from epochs if set
+    # Calculate training duration metrics
     steps_per_epoch = len(train_loader)
+    batch_size = config['batch_size']
+    seq_len = config['max_seq_len']
+    tokens_per_step = batch_size * seq_len
+
     if train_config.epochs is not None and train_config.epochs > 0:
         effective_steps = train_config.epochs * steps_per_epoch
+        total_tokens = effective_steps * tokens_per_step
         print(f"  Epochs:         {train_config.epochs}")
         print(f"  Steps/epoch:    {steps_per_epoch:,}")
         print(f"  Total steps:    {effective_steps:,}")
+        print(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
     else:
+        equiv_epochs = train_config.max_steps / steps_per_epoch
+        total_tokens = train_config.max_steps * tokens_per_step
         print(f"  Max steps:      {train_config.max_steps:,}")
-        print(f"  (~{train_config.max_steps / steps_per_epoch:.1f} epochs)")
+        print(f"  Steps/epoch:    {steps_per_epoch:,}")
+        print(f"  *** EPOCHS:     {equiv_epochs:.2f} ***")
+        print(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
     print(f"  Warmup:         {train_config.warmup_steps}")
-    print(f"  Batch size:     {config['batch_size']}")
-    print(f"  Seq length:     {config['max_seq_len']}")
+    print(f"  Batch size:     {batch_size}")
+    print(f"  Seq length:     {seq_len}")
     print(f"  Use AMP:        {train_config.use_amp}")
     print(f"  Num workers:    {config.get('num_workers', 0)}")
     print(f"\nFree Energy Weights:")
