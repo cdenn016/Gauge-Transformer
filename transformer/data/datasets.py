@@ -1184,9 +1184,10 @@ def create_char_dataloaders(
     vocab_size: int = 256,
     num_workers: int = 0,
     cache_dir: Optional[str] = None,
-) -> Tuple[DataLoader, DataLoader, int]:
+    include_test: bool = False,
+) -> Tuple[DataLoader, DataLoader, int] | Tuple[DataLoader, DataLoader, DataLoader, int]:
     """
-    Create train and validation dataloaders for character-level WikiText-2.
+    Create train, validation, and optionally test dataloaders for character-level WikiText-2.
 
     Args:
         max_seq_len: Maximum sequence length (default 32 for publication)
@@ -1194,17 +1195,30 @@ def create_char_dataloaders(
         vocab_size: Maximum vocabulary size (default 256 for extended ASCII)
         num_workers: Number of data loading workers
         cache_dir: Optional cache directory
+        include_test: If True, also return test dataloader
 
     Returns:
-        train_loader: Training dataloader
-        val_loader: Validation dataloader
-        vocab_size: Actual vocabulary size
+        If include_test=False (default):
+            train_loader: Training dataloader
+            val_loader: Validation dataloader
+            vocab_size: Actual vocabulary size
+        If include_test=True:
+            train_loader: Training dataloader
+            val_loader: Validation dataloader
+            test_loader: Test dataloader
+            vocab_size: Actual vocabulary size
 
     Example:
         >>> train_loader, val_loader, vocab_size = create_char_dataloaders(
         ...     max_seq_len=32,
         ...     batch_size=16,
         ...     vocab_size=256,
+        ... )
+        >>> # Or with test set:
+        >>> train_loader, val_loader, test_loader, vocab_size = create_char_dataloaders(
+        ...     max_seq_len=32,
+        ...     batch_size=16,
+        ...     include_test=True,
         ... )
     """
     # Note: No longer requires datasets package - has fallback download!
@@ -1260,16 +1274,40 @@ def create_char_dataloaders(
         worker_init_fn=_worker_init_fn,  # Reproducibility: seed workers
     )
 
+    # Create test loader if requested
+    test_loader = None
+    if include_test:
+        test_dataset = WikiText2CharDataset(
+            split='test',
+            max_seq_len=max_seq_len,
+            vocab_size=vocab_size,
+            cache_dir=cache_dir,
+            vocab_mapping=train_vocab_mapping,  # Use train's mapping!
+        )
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=True if torch.cuda.is_available() else False,
+            drop_last=False,
+            worker_init_fn=_worker_init_fn,  # Reproducibility: seed workers
+        )
+
     print(f"\n{'='*70}")
     print(f"DATALOADERS CREATED")
     print(f"{'='*70}")
     print(f"Train batches: {len(train_loader):,}")
     print(f"Val batches:   {len(val_loader):,}")
+    if include_test:
+        print(f"Test batches:  {len(test_loader):,}")
     print(f"Vocabulary:    {actual_vocab_size} characters")
     print(f"Batch size:    {batch_size}")
     print(f"Sequence len:  {max_seq_len}")
     print(f"{'='*70}\n")
 
+    if include_test:
+        return train_loader, val_loader, test_loader, actual_vocab_size
     return train_loader, val_loader, actual_vocab_size
 
 
