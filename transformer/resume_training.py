@@ -29,8 +29,8 @@ from pathlib import Path
 from transformer.core.model import GaugeTransformerLM
 from transformer.baselines.standard_transformer import StandardTransformerLM
 from transformer.data import create_dataloaders, create_char_dataloaders
-from transformer._archive.train_fast import FastTrainer, FastTrainingConfig
-from transformer.train_publication import run_test_evaluation
+from transformer._archive.train_fast import FastTrainingConfig
+from transformer.train_publication import run_test_evaluation, PublicationTrainer
 from transformer.analysis.publication_metrics import PublicationMetrics
 
 
@@ -436,14 +436,23 @@ def resume_training():
         delta_rule_lr=config.get('delta_rule_lr', 0.001),
     )
 
-    # Create trainer
+    # Create publication metrics tracker for figures
+    import time
+    experiment_name = f"resumed_{time.strftime('%Y%m%d_%H%M%S')}"
+    pub_metrics = PublicationMetrics(
+        experiment_name=experiment_name,
+        base_dir=experiment_dir / "publication_outputs"
+    )
+
+    # Create trainer (PublicationTrainer for metrics logging)
     print("\nInitializing trainer...")
-    trainer = FastTrainer(
+    trainer = PublicationTrainer(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
         config=train_config,
         device=device,
+        publication_metrics=pub_metrics,
     )
 
     # Restore training state
@@ -469,18 +478,10 @@ def resume_training():
     print(f"\nResuming from step {start_step} -> {config['max_steps']}")
     print("=" * 70)
 
-    # Train!
+    # Train! (PublicationTrainer handles metrics logging and figure generation)
     trainer.train()
 
-    print("\n" + "=" * 70)
-    print("TRAINING COMPLETE - Running final analysis...")
-    print("=" * 70)
-
-    # =========================================================================
-    # POST-TRAINING ANALYSIS (same as train_publication.py)
-    # =========================================================================
-
-    # 1. Run test set evaluation
+    # Run test set evaluation (not done by PublicationTrainer)
     if test_loader is not None:
         test_metrics = run_test_evaluation(
             model=model,
@@ -490,50 +491,9 @@ def resume_training():
         )
         # Save test metrics
         test_metrics_path = experiment_dir / 'test_metrics.json'
-        import json as json_module
         with open(test_metrics_path, 'w') as f:
-            json_module.dump(test_metrics, f, indent=2)
+            json.dump(test_metrics, f, indent=2)
         print(f"Saved test metrics to: {test_metrics_path}")
-
-    # 2. Initialize publication metrics and generate figures
-    try:
-        import time
-        experiment_name = f"resumed_{time.strftime('%Y%m%d_%H%M%S')}"
-        pub_metrics = PublicationMetrics(
-            experiment_name=experiment_name,
-            base_dir=experiment_dir / "publication_outputs"
-        )
-
-        # Run final semantic analysis
-        print("\nRunning final gauge frame semantic analysis...")
-        try:
-            pub_metrics.run_final_semantic_analysis(
-                model=model,
-                verbose=True,
-            )
-        except Exception as e:
-            print(f"[WARN] Final semantic analysis failed: {e}")
-
-        # Generate interpretability outputs using a sample batch from validation
-        print("\nGenerating interpretability outputs...")
-        try:
-            sample_batch = next(iter(val_loader))
-            pub_metrics.generate_interpretability_outputs(
-                model=model,
-                sample_batch=sample_batch,
-                tokenizer=None,  # Byte-level, no tokenizer needed
-                device=device,
-            )
-        except Exception as e:
-            print(f"[WARN] Could not generate interpretability outputs: {e}")
-
-        # Print summary
-        pub_metrics.print_summary()
-
-    except Exception as e:
-        print(f"[WARN] Could not run publication metrics: {e}")
-        import traceback
-        traceback.print_exc()
 
     print("\n" + "=" * 70)
     print("ALL DONE!")
