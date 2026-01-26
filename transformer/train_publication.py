@@ -1786,6 +1786,12 @@ def run_single_experiment(
     seq_len = config['max_seq_len']
     tokens_per_step = batch_size * seq_len
 
+    # Get dataset size for coverage calculation
+    try:
+        dataset_tokens = len(train_loader.dataset.tokens)
+    except AttributeError:
+        dataset_tokens = None
+
     if train_config.epochs is not None and train_config.epochs > 0:
         effective_steps = train_config.epochs * steps_per_epoch
         total_tokens = effective_steps * tokens_per_step
@@ -1793,13 +1799,19 @@ def run_single_experiment(
         print(f"  Steps/epoch:    {steps_per_epoch:,}")
         print(f"  Total steps:    {effective_steps:,}")
         print(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
+        if dataset_tokens:
+            coverage = total_tokens / dataset_tokens * 100
+            print(f"  Dataset:        {dataset_tokens:,} ({dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
     else:
         equiv_epochs = train_config.max_steps / steps_per_epoch
         total_tokens = train_config.max_steps * tokens_per_step
         print(f"  Max steps:      {train_config.max_steps:,}")
         print(f"  Steps/epoch:    {steps_per_epoch:,}")
-        print(f"  *** EPOCHS:     {equiv_epochs:.2f} ***")
+        print(f"  *** EPOCHS:     {equiv_epochs:.4f} ***")
         print(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
+        if dataset_tokens:
+            coverage = total_tokens / dataset_tokens * 100
+            print(f"  Dataset:        {dataset_tokens:,} ({dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
     print(f"  Warmup:         {train_config.warmup_steps}")
     print(f"  Batch size:     {batch_size}")
     print(f"  Seq length:     {seq_len}")
@@ -1989,6 +2001,13 @@ def run_single_experiment(
                 'total_params': total_params,
                 'vocab_size': actual_vocab_size,
                 'checkpoint': str(exp_checkpoint_dir / 'best_model.pt'),
+                # Training duration stats
+                'total_steps': total_steps,
+                'tokens_seen': total_tokens,
+                'dataset_tokens': dataset_tokens,
+                'dataset_coverage': total_tokens / dataset_tokens if dataset_tokens else None,
+                'batch_size': batch_size,
+                'seq_len': seq_len,
             }
 
             # Add test metrics if available
@@ -2118,6 +2137,13 @@ def run_single_experiment(
                 'total_params': total_params,
                 'vocab_size': actual_vocab_size,
                 'checkpoint': str(final_ckpt),
+                # Training duration stats
+                'total_steps': train_config.max_steps if train_config.epochs is None else train_config.epochs * steps_per_epoch,
+                'tokens_seen': total_tokens,
+                'dataset_tokens': dataset_tokens,
+                'dataset_coverage': total_tokens / dataset_tokens if dataset_tokens else None,
+                'batch_size': batch_size,
+                'seq_len': seq_len,
             }
 
             # Add test metrics if available
