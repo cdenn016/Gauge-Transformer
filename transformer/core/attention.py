@@ -211,33 +211,61 @@ def compute_transport_operators(
     }
 
 
-def _taylor_matrix_exp(A: torch.Tensor, order: int = 4) -> torch.Tensor:
+def _taylor_matrix_exp(A: torch.Tensor, order: int = 4, max_norm: float = 0.5) -> torch.Tensor:
     """
-    Compute matrix exponential using Taylor series approximation.
+    Compute matrix exponential using Taylor series with scaling-squaring.
 
-    exp(A) ≈ I + A + A²/2! + A³/3! + ... + A^n/n!
+    Uses scaling-squaring for numerical stability:
+    1. Find k such that ||A / 2^k|| < max_norm
+    2. Compute exp(A / 2^k) via Taylor series (accurate for small norm)
+    3. Square k times: exp(A) = (exp(A / 2^k))^{2^k}
 
-    This is faster than torch.matrix_exp for small matrices and small |A|,
-    but less accurate for large |A|. Use only when |A| < 0.5.
+    This is faster than torch.matrix_exp for small matrices while remaining
+    accurate for arbitrary matrix norms.
 
     Args:
         A: Input matrix (..., K, K)
         order: Number of terms in Taylor series (default 4)
+        max_norm: Maximum norm for Taylor series accuracy (default 0.5)
 
     Returns:
-        exp(A): Matrix exponential approximation (..., K, K)
+        exp(A): Matrix exponential (..., K, K)
     """
     K = A.shape[-1]
     device = A.device
     dtype = A.dtype
 
-    # Start with identity
-    result = torch.eye(K, device=device, dtype=dtype).expand_as(A).clone()
-    term = result.clone()  # Current term A^n / n!
+    # Compute Frobenius norm for scaling decision
+    # Use per-matrix norm for batched computation
+    A_norm = torch.linalg.norm(A, ord='fro', dim=(-2, -1), keepdim=True)  # (..., 1, 1)
+
+    # Determine scaling factor k: we want ||A / 2^k|| < max_norm
+    # log2(||A|| / max_norm) gives minimum k needed
+    # Add small epsilon to avoid log(0)
+    k_float = torch.log2(A_norm / max_norm + 1e-10).clamp(min=0)
+    k_max = int(k_float.max().item()) + 1  # Global max for uniform computation
+
+    # For very large norms (k > 10), fall back to torch.matrix_exp
+    # This threshold balances accuracy vs speed
+    if k_max > 10:
+        return torch.matrix_exp(A)
+
+    # Scale down: A_scaled = A / 2^k_max
+    scale = 2.0 ** k_max
+    A_scaled = A / scale
+
+    # Taylor series on scaled matrix (now ||A_scaled|| < max_norm)
+    eye = torch.eye(K, device=device, dtype=dtype)
+    result = eye.expand_as(A).clone()
+    term = result.clone()
 
     for n in range(1, order + 1):
-        term = torch.matmul(term, A) / n  # A^n / n! = (A^{n-1} / (n-1)!) @ A / n
+        term = torch.matmul(term, A_scaled) / n
         result = result + term
+
+    # Square k_max times: exp(A) = exp(A_scaled)^{2^k_max}
+    for _ in range(k_max):
+        result = torch.matmul(result, result)
 
     return result
 

@@ -187,13 +187,20 @@ class GaugeTokenEmbedding(nn.Module):
             # Per-token gauge frame
             self.phi_embed = nn.Embedding(vocab_size, phi_dim)  # so(n) has phi_dim components
             # RANDOM init for non-trivial gauge structure from the start!
-            # Scale ~0.1 gives small rotations (~6 degrees) - stable and diverse.
             # NOTE: Random init is required BOTH for gauge_fixed_priors=True (where phi
             # defines token identity) AND for gauge_fixed_priors=False (where phi
             # provides gauge structure via transport Ω_ij). Zero init makes Ω=I,
             # completely disabling the gauge-theoretic attention mechanism!
             # Phi will grow during training via learnable_phi=True.
-            nn.init.normal_(self.phi_embed.weight, mean=0.0, std=0.1)
+            #
+            # IMPORTANT: Scale std inversely with sqrt(phi_dim) to maintain consistent
+            # norm across different SO(N) dimensions. Target ||φ|| ≈ 0.3 regardless of N.
+            # - SO(3): phi_dim=3, std=0.173, ||φ||≈0.3
+            # - SO(50): phi_dim=1225, std=0.0086, ||φ||≈0.3
+            # - SO(100): phi_dim=4950, std=0.0043, ||φ||≈0.3
+            target_phi_norm = 0.3  # Small enough for accurate matrix exp
+            phi_init_std = target_phi_norm / (phi_dim ** 0.5)
+            nn.init.normal_(self.phi_embed.weight, mean=0.0, std=phi_init_std)
         else:
             # All tokens start at identity frame
             self.register_buffer('phi_base', torch.zeros(phi_dim))
