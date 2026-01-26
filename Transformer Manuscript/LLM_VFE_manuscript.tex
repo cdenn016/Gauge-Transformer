@@ -573,7 +573,9 @@ We report standard metrics for language modeling:
   \item \textbf{Improvement factor:} Ratio of random baseline PPL to model PPL
 \end{itemize}
 
-computed on the validation set. Random baseline (uniform distribution over 50,257 tokens) achieves PPL = 50,257.
+Random baseline (uniform distribution over 50,257 tokens) achieves PPL = 50,257.
+
+\paragraph{Checkpoint selection.} We save checkpoints based on best validation cross-entropy loss. Final test set evaluation uses the checkpoint with lowest validation loss. This standard practice means validation PPL reflects the selected checkpoint's performance, while test PPL provides an unbiased estimate of generalization.
 
 \subsection{Implementation details.}
 
@@ -604,7 +606,7 @@ Standard & param-matched, 6L, d=320 & 23.5M & 178 & --- & 282$\times$ \\
 Standard & embed-matched, 6L, d=100 & 5.76M & 260 & --- & 193$\times$ \\
 \midrule
 \multicolumn{6}{l}{\textit{Gauge VFE (no neural networks)}} \\
-\textbf{SO(3)} & \textbf{$\ell$=1,4,5,6,7 (5 irreps)} & \textbf{7.8M} & \textbf{183} & \textbf{---} & \textbf{275$\times$} \\
+\textbf{SO(3)} & \textbf{$\ell$=1,4,5,6,7 (5 irreps)} & \textbf{7.8M} & \textbf{183} & \textbf{293} & \textbf{275$\times$} \\
 SO(3) & $\ell$=1,2,4,6,7 (2 layers) & 6.8M & 247 & --- & 203$\times$ \\
 SO(50) & fundamental & 69.1M & 196 & 250 & 256$\times$ \\
 SO(50) & 2$\times$ fundamental & 76.6M & --- & 282 & 178$\times$ \\
