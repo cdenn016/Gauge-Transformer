@@ -185,7 +185,7 @@ For a multivariate Gaussian $\mathcal{N}(\mu, \Sigma)$, the Fisher-Rao metric de
 \tilde{\nabla}_\Sigma \mathcal{F} &= -\tfrac{1}{2} \Sigma^{-1} (\nabla_\Sigma \mathcal{F}) \Sigma^{-1}, \label{eq:nat_grad_sigma}
 \end{align}
 
-where $\nabla_\mu \mathcal{F}$ and $\nabla_\Sigma \mathcal{F}$ are standard Euclidean gradients of the free energy functional~\eqref{eq:free_energy}. The Fisher metric $\mathscr{G} = \Sigma^{-1}$ for the mean parameters and the symmetric product for covariance parameters ensure that updates remain on the manifold of positive-definite matrices.
+where $\nabla_\mu \mathcal{F}$ and $\nabla_\Sigma \mathcal{F}$ are standard Euclidean gradients of the free energy functional~\eqref{eq:free_energy_decomposed}. The Fisher metric $\mathscr{G} = \Sigma^{-1}$ for the mean parameters and the symmetric product for covariance parameters ensure that updates remain on the manifold of positive-definite matrices.
 
 \subsubsection{Gauge-Invariant Covariance Updates via Retraction.}  
 
@@ -353,7 +353,7 @@ where $R_{ij} = e^{-\phi_j}$. The derivative of the matrix exponential can be co
 \frac{\mathrm{d} e^{\phi}}{\mathrm{d}\phi} \cdot \xi = \int_0^1 e^{t\phi} \, \xi \, e^{(1-t)\phi} \, \mathrm{d}t,
 \label{eq:matrix_exp_differential}
 \end{equation}
-for $\xi \in \mathfrak{so}(3)$, or alternatively via the adjoint representation:
+for $\xi \in \mathfrak{g}$, or alternatively via the adjoint representation:
 \begin{equation}
 \frac{\mathrm{d}}{\mathrm{d}t}\Big|_{t=0} e^{\phi + t\xi} = e^{\phi} \, \mathrm{dexp}_\phi(\xi),
 \label{eq:matrix_exp_adjoint}
@@ -642,7 +642,7 @@ Figure~\ref{fig:training_curves} shows training and validation loss curves over 
     \centering
     \begin{subfigure}[b]{0.48\textwidth}
         \centering
-        \includegraphics[width=\textwidth]{training_curves_so20.png}
+        \includegraphics[width=\textwidth]{VFE_LLM Manuscript/training_curves_so20.png}
         \caption{Gauge VFE (SO(20))}
         \label{fig:train_vfe}
     \end{subfigure}
@@ -713,14 +713,14 @@ To assess generalization quality, we analyze the train-validation gap throughout
     \centering
     \begin{subfigure}[b]{0.48\textwidth}
         \centering
-        \includegraphics[width=\textwidth]{train_val_gap_so20.png}
+        \includegraphics[width=\textwidth]{VFE_LLM Manuscript/train_val_gap_so20.png}
         \caption{Gauge VFE (SO(20))}
         \label{fig:gap_vfe}
     \end{subfigure}
     \hfill
     \begin{subfigure}[b]{0.48\textwidth}
         \centering
-        \includegraphics[width=\textwidth]{train_val_gap_std_24M.png}
+        \includegraphics[width=\textwidth]{VFE_LLM Manuscript/train_val_gap_std_24M.png}
         \caption{Standard Transformer [PENDING]}
         \label{fig:gap_baseline}
     \end{subfigure}
@@ -771,7 +771,7 @@ Our geometric reformulation of transformers allows previously ill-understood and
         \caption{Observation-driven symmetry breaking}
         \label{fig:symmetry_breaking}
     \end{subfigure}
-    \caption{Evolution of agent mean parameters $\mu_i$ under variational free energy descent. \textbf{(a)} Without observations, agents converge to a gauge-invariant ground state with equal magnitudes $|\mu_i| = \mu^*$, forming a degenerate Goldstone manifold. \textbf{(b)} With observations, agents flow to diverse magnitudes $|\mu_i|$, spontaneously breaking SO(3) gauge symmetry and specializing based on semantic content.}
+    \caption{Evolution of agent mean parameters $\mu_i$ under variational free energy descent. \textbf{(a)} Without observations, agents converge to a gauge-invariant ground state with equal magnitudes $|\mu_i| = \mu^*$, forming a degenerate Goldstone manifold. \textbf{(b)} With observations, agents flow to diverse magnitudes $|\mu_i|$, spontaneously breaking gauge symmetry and specializing based on semantic content.}
     \label{fig:gauge_dynamics}
 \end{figure}
 
