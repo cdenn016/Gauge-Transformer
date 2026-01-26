@@ -1780,19 +1780,29 @@ def run_single_experiment(
     print("\n" + "="*70)
     print("TRAINING CONFIGURATION")
     print("="*70)
-    # Calculate effective steps from epochs if set
+    # Calculate training duration metrics
     steps_per_epoch = len(train_loader)
+    batch_size = config['batch_size']
+    seq_len = config['max_seq_len']
+    tokens_per_step = batch_size * seq_len
+
     if train_config.epochs is not None and train_config.epochs > 0:
         effective_steps = train_config.epochs * steps_per_epoch
+        total_tokens = effective_steps * tokens_per_step
         print(f"  Epochs:         {train_config.epochs}")
         print(f"  Steps/epoch:    {steps_per_epoch:,}")
         print(f"  Total steps:    {effective_steps:,}")
+        print(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
     else:
+        equiv_epochs = train_config.max_steps / steps_per_epoch
+        total_tokens = train_config.max_steps * tokens_per_step
         print(f"  Max steps:      {train_config.max_steps:,}")
-        print(f"  (~{train_config.max_steps / steps_per_epoch:.1f} epochs)")
+        print(f"  Steps/epoch:    {steps_per_epoch:,}")
+        print(f"  *** EPOCHS:     {equiv_epochs:.2f} ***")
+        print(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
     print(f"  Warmup:         {train_config.warmup_steps}")
-    print(f"  Batch size:     {config['batch_size']}")
-    print(f"  Seq length:     {config['max_seq_len']}")
+    print(f"  Batch size:     {batch_size}")
+    print(f"  Seq length:     {seq_len}")
     print(f"  Use AMP:        {train_config.use_amp}")
     print(f"  Num workers:    {config.get('num_workers', 0)}")
     print(f"\nFree Energy Weights:")
