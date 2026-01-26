@@ -2001,6 +2001,13 @@ def run_single_experiment(
                 'total_params': total_params,
                 'vocab_size': actual_vocab_size,
                 'checkpoint': str(exp_checkpoint_dir / 'best_model.pt'),
+                # Training duration stats
+                'total_steps': total_steps,
+                'tokens_seen': total_tokens,
+                'dataset_tokens': dataset_tokens,
+                'dataset_coverage': total_tokens / dataset_tokens if dataset_tokens else None,
+                'batch_size': batch_size,
+                'seq_len': seq_len,
             }
 
             # Add test metrics if available
@@ -2130,6 +2137,13 @@ def run_single_experiment(
                 'total_params': total_params,
                 'vocab_size': actual_vocab_size,
                 'checkpoint': str(final_ckpt),
+                # Training duration stats
+                'total_steps': train_config.max_steps if train_config.epochs is None else train_config.epochs * steps_per_epoch,
+                'tokens_seen': total_tokens,
+                'dataset_tokens': dataset_tokens,
+                'dataset_coverage': total_tokens / dataset_tokens if dataset_tokens else None,
+                'batch_size': batch_size,
+                'seq_len': seq_len,
             }
 
             # Add test metrics if available
