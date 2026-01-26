@@ -841,7 +841,7 @@ class PublicationMetricsTracker:
 class PublicationTrainer(FastTrainer):
     """Enhanced trainer with publication-quality metrics."""
 
-    def __init__(self, *args, publication_metrics: PublicationMetrics = None, **kwargs):
+    def __init__(self, *args, publication_metrics: PublicationMetrics = None, tokenizer=None, **kwargs):
         super().__init__(*args, **kwargs)
 
         # Basic CSV metrics tracker
@@ -853,6 +853,9 @@ class PublicationTrainer(FastTrainer):
         self.pub_metrics = publication_metrics
         if self.pub_metrics:
             print(f"[INFO] Comprehensive metrics enabled: {self.pub_metrics.experiment_dir}")
+
+        # Tokenizer for decoding sequences in interpretability outputs
+        self.tokenizer = tokenizer
 
         # Track attention visualization count
         self._attention_viz_count = 0
@@ -1463,7 +1466,7 @@ class PublicationTrainer(FastTrainer):
                 self.pub_metrics.generate_interpretability_outputs(
                     model=self.model,
                     sample_batch=sample_batch,
-                    tokenizer=None,  # Byte-level, no tokenizer needed
+                    tokenizer=self.tokenizer,  # Dataset with .decode() method
                     device=self.device,
                 )
             except Exception as e:
@@ -1555,15 +1558,17 @@ def run_single_experiment(
             batch_size=config['batch_size'],
             num_workers=config.get('num_workers', 0),
         )
+        tokenizer = None  # Character-level doesn't need tokenizer for decode
     else:
         print(f"Using BPE tokenizer (vocab_size={config['vocab_size']})")
-        train_loader, val_loader, test_loader, actual_vocab_size = create_dataloaders(
+        train_loader, val_loader, test_loader, actual_vocab_size, tokenizer = create_dataloaders(
             max_seq_len=config['max_seq_len'],
             batch_size=config['batch_size'],
             vocab_size=config['vocab_size'],  # Top K BPE tokens
             num_workers=config.get('num_workers', 0),
             dataset=dataset_name,
             include_test=True,  # Include test set for final evaluation
+            return_tokenizer=True,  # Get tokenizer for interpretability outputs
         )
 
     config['vocab_size'] = actual_vocab_size
@@ -2001,6 +2006,7 @@ def run_single_experiment(
             config=train_config,
             device=device,
             publication_metrics=pub_metrics,
+            tokenizer=tokenizer,  # For decoding in interpretability outputs
         )
 
         # =================================================================
