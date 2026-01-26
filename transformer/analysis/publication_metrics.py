@@ -1009,7 +1009,7 @@ class PublicationMetrics:
             tokens = None
             if tokenizer is not None:
                 try:
-                    decoded_text = tokenizer.decode(input_ids[0].tolist(), skip_special_tokens=True)
+                    decoded_text = tokenizer.decode(input_ids[0].tolist())
                     tokens = [tokenizer.decode([t]) for t in input_ids[0].tolist()]
                     print(f"  Decoded text: {decoded_text[:200]}{'...' if len(decoded_text) > 200 else ''}")
                 except Exception as e:
