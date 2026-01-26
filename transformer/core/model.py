@@ -348,6 +348,8 @@ class GaugeTransformerLM(nn.Module):
             use_identity_transport=use_identity_transport,
             # Self-attention masking (prevents attention collapse)
             mask_self_attention=config.get('mask_self_attention', False),
+            # Matrix exponential method (False recommended for SO(N) with N > 50)
+            use_fast_exp=config.get('use_fast_exp', True),
         )
 
         # =================================================================
