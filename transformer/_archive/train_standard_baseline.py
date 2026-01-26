@@ -49,6 +49,7 @@ from collections import defaultdict
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from tqdm import tqdm
 import numpy as np
 
@@ -174,10 +175,107 @@ class StandardMetricsTracker:
             writer.writerows(self.history)
 
 
+def run_test_evaluation(
+    model: torch.nn.Module,
+    test_loader: torch.utils.data.DataLoader,
+    device: str,
+    vocab_size: int,
+    max_batches: int = 2000,
+) -> Dict[str, float]:
+    """
+    Run final evaluation on test set.
+
+    This should be called at the end of training to get the final test metrics
+    that will be reported in publications.
+
+    Args:
+        model: Trained model
+        test_loader: Test set dataloader
+        device: Device to run evaluation on
+        vocab_size: Vocabulary size for random baseline comparison
+        max_batches: Maximum number of batches to evaluate (default: 2000)
+
+    Returns:
+        Dictionary with test metrics:
+            - test_loss: Cross-entropy loss on test set
+            - test_ppl: Perplexity on test set
+            - test_bpc: Bits per character
+            - random_ppl: Random baseline perplexity
+            - improvement: Factor improvement over random
+    """
+    print("\n" + "="*70)
+    print("FINAL TEST SET EVALUATION")
+    print("="*70)
+
+    total_batches = len(test_loader)
+    eval_batches = min(max_batches, total_batches)
+    print(f"  Evaluating {eval_batches} / {total_batches} batches...")
+
+    model.eval()
+    total_loss = 0.0
+    total_tokens = 0
+
+    with torch.no_grad():
+        for batch_idx, (input_ids, target_ids) in enumerate(test_loader):
+            if batch_idx >= max_batches:
+                break
+
+            input_ids = input_ids.to(device)
+            target_ids = target_ids.to(device)
+
+            # Forward pass - StandardTransformerLM returns dict with 'logits'
+            output = model(input_ids)
+            if isinstance(output, dict):
+                logits = output.get('logits', output.get('output'))
+            elif isinstance(output, tuple):
+                logits = output[0]
+            else:
+                logits = output
+
+            # Compute cross-entropy loss
+            loss = F.cross_entropy(
+                logits.view(-1, vocab_size),
+                target_ids.view(-1),
+                reduction='sum'
+            )
+            total_loss += loss.item()
+            total_tokens += target_ids.numel()
+
+            # Progress indicator
+            if (batch_idx + 1) % 100 == 0:
+                print(f"  Evaluated {batch_idx + 1}/{eval_batches} batches...")
+
+    # Compute metrics
+    test_ce = total_loss / total_tokens if total_tokens > 0 else float('inf')
+    test_ppl = math.exp(min(test_ce, 20))  # Clamp to prevent overflow
+    test_bpc = test_ce / math.log(2)
+    random_ppl = vocab_size
+    improvement = random_ppl / test_ppl if test_ppl > 0 else 0
+
+    print(f"\nTest Set Results:")
+    print(f"  Cross-entropy loss: {test_ce:.4f}")
+    print(f"  Perplexity:         {test_ppl:.2f}")
+    print(f"  Bits per character: {test_bpc:.3f}")
+    print(f"  Random baseline:    {random_ppl:.0f}")
+    print(f"  Improvement:        {improvement:.1f}x better than random")
+    print("="*70 + "\n")
+
+    model.train()
+
+    return {
+        'test_loss': test_ce,
+        'test_ppl': test_ppl,
+        'test_bpc': test_bpc,
+        'random_ppl': random_ppl,
+        'improvement': improvement,
+    }
+
+
 def train_standard_baseline(
     config: dict,
     train_loader,
     val_loader,
+    test_loader=None,
     device: str = 'cpu',
     checkpoint_dir: str = 'checkpoints_publication/standard_baseline',
 ):
@@ -188,6 +286,7 @@ def train_standard_baseline(
         config: Model configuration
         train_loader: Training dataloader
         val_loader: Validation dataloader
+        test_loader: Test dataloader (optional, for final evaluation)
         device: Device to train on
         checkpoint_dir: Where to save checkpoints
     """
@@ -422,12 +521,29 @@ def train_standard_baseline(
     final_bpc = best_val_loss / math.log(2)
     improvement = random_ppl / final_ppl
 
-    print(f"\nFinal Metrics:")
+    print(f"\nFinal Validation Metrics:")
     print(f"  Loss: {best_val_loss:.4f}")
     print(f"  Perplexity: {final_ppl:.2f}")
     print(f"  BPC: {final_bpc:.3f}")
     print(f"  Improvement over random: {improvement:.1f}x")
     print("="*70)
+
+    # Run test set evaluation if test loader is available
+    test_metrics = None
+    if test_loader is not None:
+        # Load best model for test evaluation
+        best_checkpoint_path = checkpoint_path / 'best_model.pt'
+        if best_checkpoint_path.exists():
+            checkpoint = torch.load(best_checkpoint_path, map_location=device)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            print(f"\n📂 Loaded best model from step {checkpoint['step']} for test evaluation")
+
+        test_metrics = run_test_evaluation(
+            model=model,
+            test_loader=test_loader,
+            device=device,
+            vocab_size=config['vocab_size'],
+        )
 
     # Save training log (backward compatibility)
     log_path = checkpoint_path / 'training_log.json'
@@ -442,12 +558,19 @@ def train_standard_baseline(
         'improvement_over_random': improvement,
     }
 
+    # Add test metrics if available
+    if test_metrics is not None:
+        log_data['test_loss'] = test_metrics['test_loss']
+        log_data['test_ppl'] = test_metrics['test_ppl']
+        log_data['test_bpc'] = test_metrics['test_bpc']
+        log_data['test_improvement'] = test_metrics['improvement']
+
     with open(log_path, 'w') as f:
         json.dump(log_data, f, indent=2)
 
     print(f"\n💾 Saved training log: {log_path}")
 
-    return model, best_val_loss, final_ppl
+    return model, best_val_loss, final_ppl, test_metrics
 
 
 def main():
@@ -539,18 +662,20 @@ def main():
 
     if use_bpe:
         print(f"Using BPE tokenizer (vocab_size={config['vocab_size']})")
-        train_loader, val_loader, actual_vocab_size = create_dataloaders(
+        train_loader, val_loader, test_loader, actual_vocab_size = create_dataloaders(
             batch_size=config['batch_size'],
             max_seq_len=config['max_seq_len'],
             vocab_size=config['vocab_size'],
             num_workers=0,
+            include_test=True,  # Include test set for final evaluation
         )
     else:
         print("Using character-level tokenizer")
-        train_loader, val_loader, actual_vocab_size = create_char_dataloaders(
+        train_loader, val_loader, test_loader, actual_vocab_size = create_char_dataloaders(
             batch_size=config['batch_size'],
             max_seq_len=config['max_seq_len'],
             num_workers=0,
+            include_test=True,  # Include test set for final evaluation
         )
 
     config['vocab_size'] = actual_vocab_size
@@ -558,11 +683,12 @@ def main():
 
     # Train
     checkpoint_dir = f'checkpoints_publication/standard_baseline_{args.config}'
-    
-    model, best_val_loss, best_val_ppl = train_standard_baseline(
+
+    model, best_val_loss, best_val_ppl, test_metrics = train_standard_baseline(
         config=config,
         train_loader=train_loader,
         val_loader=val_loader,
+        test_loader=test_loader,
         device=device,
         checkpoint_dir=checkpoint_dir,
     )
@@ -573,6 +699,11 @@ def main():
     print(f"\nStandard Transformer Results:")
     print(f"  Validation Loss: {best_val_loss:.4f}")
     print(f"  Validation PPL:  {best_val_ppl:.2f}")
+    if test_metrics is not None:
+        print(f"\n  Test Loss:       {test_metrics['test_loss']:.4f}")
+        print(f"  Test PPL:        {test_metrics['test_ppl']:.2f}")
+        print(f"  Test BPC:        {test_metrics['test_bpc']:.3f}")
+        print(f"  Improvement:     {test_metrics['improvement']:.1f}x over random")
     print(f"\nMetrics saved in format compatible with plot_pub_figs.py")
     print(f"  Directory: {checkpoint_dir}/")
     print(f"  - metrics.csv (compatible with plotting)")
