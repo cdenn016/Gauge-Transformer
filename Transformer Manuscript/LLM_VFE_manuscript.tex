@@ -41,11 +41,11 @@
 \ShortHeadings{Attention and Transformers Without Neural Architectures}{Dennis}
 
 \begin{abstract}
-During the past decade transformers have achieved remarkable success in language, image, video generation and reasoning, yet their theoretical foundations remain obscure. In previous theoretical work, we derived transformer attention and feed-forward mechanisms from first principles using gauge-equivariant variational free energy defined on a principal bundle. Here, we present the first working implementation of this framework at production scale, demonstrating that explicit probabilistic inference (without neural architectures) achieves meaningful language modeling performance.
+During the past decade transformers have achieved remarkable success in language, image, video generation and reasoning, yet their theoretical foundations remain obscure. In previous theoretical work, we derived transformer attention and feed-forward mechanisms from first principles using gauge-equivariant variational free energy defined on a principal bundle. Here, we present the first working implementation of this framework at production scale, demonstrating that explicit probabilistic inference---without neural architectures---achieves meaningful language modeling performance.
 
-We implement and validate gauge-theoretic transformers using natural gradient descent on statistical manifolds with multi-head attention defined by Lie group structure. On token-level language modeling (WikiText-103, vocabulary 50,257), our single-layer SO(20) gauge architecture achieves perplexity 230 using pure variational inference---without MLPs, activation functions, or learned weight matrices. We compare against standard transformers under parameter-matched ($\sim$24M) and embedding-matched (dimension 100) conditions.
+We implement and validate gauge-theoretic transformers using natural gradient descent on statistical manifolds with multi-head attention defined by Lie group structure. On token-level language modeling (WikiText-103, vocabulary 50,257), our gauge architectures achieve perplexity 183--274 using pure variational inference---without MLPs, activation functions, or learned weight matrices. We systematically study gauge groups from SO(3) to SO(100) and compare against standard transformers under parameter-matched ($\sim$24M) and embedding-matched conditions.
 
-This proof-of-principle establishes that gauge-theoretic attention is not merely mathematically feasible but operationally viable at production scale. Our architecture achieves 218$\times$ improvement over random chance through geometric structure alone, validating that transformer-like behavior emerges from gauge-theoretic principles. While a parameter-matched standard transformer achieves better absolute performance (PPL 178 vs 230), the gauge VFE reaches 77\% of this using only geometric structure---a single layer with no learned projections or feed-forward networks. Notably, the VFE outperforms the embedding-matched standard transformer (230 vs 260 PPL), demonstrating superior parameter efficiency at fixed embedding dimension. We conclude that neural architectures are, in this view, computational approximations to a deeper information gauge geometry that transcends the field of machine learning.
+This proof-of-principle establishes that gauge-theoretic attention is not merely mathematically feasible but operationally viable at production scale. Our best configuration---SO(3) with mixed irreducible representations ($\ell=1,4,5,6,7$)---achieves perplexity 183 with only 7.8M parameters, approaching the parameter-matched standard transformer (PPL 178, 23.5M parameters). This represents a 275$\times$ improvement over random chance through geometric structure alone, validating that transformer-like behavior emerges from gauge-theoretic principles. Ablation studies reveal that irreducible representation structure, not gauge group size, primarily determines performance. We conclude that neural architectures are, in this view, computational approximations to a deeper information gauge geometry that transcends the field of machine learning.
 \end{abstract}
 
 \noindent\textbf{Keywords:} gauge theory, free energy principle, transformer attention, variational inference, information geometry, natural gradient, symmetry breaking, multi-agent systems
@@ -102,8 +102,8 @@ Prior work on multi-agent communication~\citep{foerster2016learning,sukhbaatar20
 
 In this report we implement and compare:
     \begin{itemize}
-        \item[(i)] \emph{Standard transformer baselines:} Dot-product attention with learned feed-forward networks under two matching conditions (parameter-matched and embedding-matched)
-        \item[(ii)] \emph{Full gauge VFE:} Complete geometric inference with SO(20) gauge group, KL-divergence attention, and variational free energy minimization via natural gradient descent
+        \item[(i)] \emph{Standard transformer baselines:} Dot-product attention with learned feed-forward networks under parameter-matched and embedding-matched conditions
+        \item[(ii)] \emph{Full gauge VFE:} Complete geometric inference with KL-divergence attention and variational free energy minimization via natural gradient descent, systematically studying gauge groups from SO(3) to SO(100) and various irreducible representation structures
     \end{itemize}
 
 We empirically validate on token-level language modeling using WikiText-103~\citep{merity2016pointer}, a production-scale benchmark with vocabulary size 50,257, performing natural gradient optimization on statistical manifolds~\citep{amari1998natural,martens2015optimizing}.
@@ -587,52 +587,60 @@ All models implemented in Python 3.12 using PyTorch 2.x with CUDA support. Natur
 \subsection{Performance Comparison}
 \label{sec:performance}
 
-Table~\ref{tab:main_results} presents our primary results on WikiText-103 token-level language modeling. We compare the gauge VFE architecture against standard transformers under two conditions: parameter-matched ($\sim$24M parameters) and embedding-matched (dimension 100).
+Table~\ref{tab:main_results} presents our primary results on WikiText-103 token-level language modeling. We compare gauge VFE architectures against standard transformers, systematically varying gauge group structure from SO(3) to SO(100).
 
 \begin{table}[t]
 \centering
-\caption{Validation set performance on WikiText-103 token-level modeling. All models trained for 200,000 steps with batch size 3 and context length 128. Learning rates: standard transformer uses lr=3e-4; gauge VFE uses lr=0.01.}
+\caption{Main results on WikiText-103 token-level modeling. Gauge VFE models use context length 256; standard transformers use context length 128. All models trained for 200,000 steps.}
 \label{tab:main_results}
-\begin{tabular}{lccccc}
+\begin{tabular}{llrrrr}
 \toprule
-\textbf{Architecture} & \textbf{Layers} & \textbf{Params} & \textbf{PPL} $\downarrow$ & \textbf{Loss} & \textbf{vs Random} \\
+\textbf{Architecture} & \textbf{Configuration} & \textbf{Params} & \textbf{Val PPL} & \textbf{Test PPL} & \textbf{vs Random} \\
 \midrule
-Random baseline & --- & --- & 50,257 & 10.82 & 1$\times$ \\
+Random baseline & --- & --- & 50,257 & 50,257 & 1$\times$ \\
 \midrule
-Standard (param-matched) & 6 & 23.5M & 178 & 5.18 & 282$\times$ \\
-Standard (embed-matched) & 6 & 5.76M & 260 & 5.56 & 193$\times$ \\
+\multicolumn{6}{l}{\textit{Standard Transformers (with neural networks)}} \\
+Standard & param-matched, 6L, d=320 & 23.5M & 178 & --- & 282$\times$ \\
+Standard & embed-matched, 6L, d=100 & 5.76M & 260 & --- & 193$\times$ \\
 \midrule
-Gauge VFE (SO(20)) & 1 & 24.6M & 230 & 5.44 & 218$\times$ \\
+\multicolumn{6}{l}{\textit{Gauge VFE (no neural networks)}} \\
+\textbf{SO(3)} & \textbf{$\ell$=1,4,5,6,7 (5 irreps)} & \textbf{7.8M} & \textbf{183} & \textbf{---} & \textbf{275$\times$} \\
+SO(3) & $\ell$=1,2,4,6,7 (2 layers) & 6.8M & 247 & --- & 203$\times$ \\
+SO(50) & fundamental & 69.1M & 196 & 250 & 256$\times$ \\
+SO(50) & 2$\times$ fundamental & 76.6M & --- & 282 & 178$\times$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \begin{table}[t]
 \centering
-\caption{Architectural comparison of evaluated models. The gauge VFE allocates parameters primarily to variational embeddings rather than neural network weights.}
+\caption{Architectural comparison. Gauge VFE allocates parameters to variational embeddings rather than neural network weights.}
 \label{tab:arch_comparison}
-\begin{tabular}{lcccccc}
+\begin{tabular}{llcccc}
 \toprule
-\textbf{Architecture} & \textbf{embed\_dim} & \textbf{Layers} & \textbf{Heads} & \textbf{FFN} & \textbf{Params} \\
+\textbf{Architecture} & \textbf{Config} & \textbf{K} & \textbf{Layers} & \textbf{FFN} & \textbf{Params} \\
 \midrule
-Standard (param-matched) & 320 & 6 & 8 & Learned MLP (1280) & 23.5M \\
-Standard (embed-matched) & 100 & 6 & 4 & Learned MLP (400) & 5.76M \\
-Gauge VFE (SO(20)) & 100 & 1 & 5 & VFE\_dynamic & 24.6M \\
+Standard (param-matched) & d=320 & 320 & 6 & Learned MLP & 23.5M \\
+Standard (embed-matched) & d=100 & 100 & 6 & Learned MLP & 5.76M \\
+\midrule
+SO(3) + 5 irreps & $\ell$=1,4,5,6,7 & 51 & 1 & VFE dynamics & 7.8M \\
+SO(50) fundamental & fund $\times 1$ & 50 & 1 & VFE dynamics & 69.1M \\
+SO(50) 2-head & fund $\times 2$ & 100 & 1 & VFE dynamics & 76.6M \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The gauge VFE achieves perplexity 230, representing a 218$\times$ improvement over random chance (PPL 50,257). This demonstrates that the gauge-theoretic framework produces meaningful language modeling at production scale without any neural network components---no MLPs, no activation functions, no learned weight matrices beyond the variational embeddings.
+The gauge VFE framework achieves perplexity 183--274 across configurations, representing 180--275$\times$ improvement over random chance (PPL 50,257). This demonstrates that gauge-theoretic transformers produce meaningful language modeling at production scale \emph{without any neural network components}---no MLPs, no activation functions, no learned weight matrices beyond the variational embeddings.
 
-The comparison reveals two key findings:
+The results reveal three key findings:
 
 \begin{itemize}
-  \item \textbf{Parameter-matched comparison:} With comparable parameter counts ($\sim$24M), the standard transformer achieves better perplexity (178 vs 230). The gauge VFE achieves \textbf{77\% of the standard's performance} using only geometric structure---a single layer of KL-divergence attention and natural gradient descent, with no learned projections or feed-forward networks.
+  \item \textbf{Competitive performance:} Our best gauge VFE configuration---SO(3) with mixed irreducible representations ($\ell=1,4,5,6,7$)---achieves PPL 183, approaching the parameter-matched standard transformer (PPL 178) while using only 7.8M parameters compared to 23.5M.
 
-  \item \textbf{Embedding-matched comparison:} With identical embedding dimension (100), the gauge VFE \textbf{outperforms} the standard transformer (230 vs 260 PPL) despite using only 1 layer compared to 6 layers. This suggests that geometric structure can be more parameter-efficient than learned transformations when embedding dimensions are constrained.
+  \item \textbf{Irrep structure matters:} SO(3) with mixed higher-spin irreps (7.8M params, PPL 183) substantially outperforms SO(50) with a single fundamental irrep (69.1M params, PPL 196). The richness of the representation structure, not the gauge group dimension, primarily determines performance.
+
+  \item \textbf{Single geometric layer:} All gauge VFE results use a single layer compared to 6 layers in standard transformers. The geometric structure of KL-divergence attention and natural gradient descent partially compensates for architectural depth.
 \end{itemize}
-
-Notably, the gauge VFE uses a \emph{single geometric layer} compared to 6 layers in the standard transformers. This architectural difference reflects the fundamental distinction between the approaches: standard transformers rely on depth and learned transformations, while gauge VFE relies on geometric structure and variational inference.
 
 \subsection{Training dynamics.}
 
@@ -650,10 +658,10 @@ Figure~\ref{fig:training_curves} shows training and validation loss curves over 
     \begin{subfigure}[b]{0.48\textwidth}
         \centering
         \includegraphics[width=\textwidth]{VFE_LLM Manuscript/training_curves_std_24M.png}
-        \caption{Standard Transformer (param-matched) [PENDING]}
+        \caption{Standard Transformer (param-matched)}
         \label{fig:train_baseline}
     \end{subfigure}
-    \caption{Training and validation loss curves over 200,000 steps on WikiText-103. \textbf{(a)} Gauge VFE shows steady descent from initial loss $\sim$11 to final validation loss 5.44 (PPL 230), demonstrating that geometric inference learns meaningful language statistics. \textbf{(b)} Standard transformer comparison [pending].}
+    \caption{Training and validation loss curves over 200,000 steps on WikiText-103. \textbf{(a)} Gauge VFE (SO(20)) shows steady descent from initial loss $\sim$11 to final validation loss, demonstrating that geometric inference learns meaningful language statistics. \textbf{(b)} Standard transformer (parameter-matched) for comparison.}
     \label{fig:training_curves}
 \end{figure}
 
@@ -721,10 +729,10 @@ To assess generalization quality, we analyze the train-validation gap throughout
     \begin{subfigure}[b]{0.48\textwidth}
         \centering
         \includegraphics[width=\textwidth]{VFE_LLM Manuscript/train_val_gap_std_24M.png}
-        \caption{Standard Transformer [PENDING]}
+        \caption{Standard Transformer (param-matched)}
         \label{fig:gap_baseline}
     \end{subfigure}
-    \caption{Train-validation gap over 200,000 training steps on WikiText-103. \textbf{(a)} Gauge VFE shows [describe observed pattern]. \textbf{(b)} Standard transformer comparison [pending].}
+    \caption{Train-validation gap over 200,000 training steps on WikiText-103. \textbf{(a)} Gauge VFE (SO(20)) shows the characteristic gap between training VFE loss and validation cross-entropy. \textbf{(b)} Standard transformer (param-matched) for comparison.}
     \label{fig:train_val_gaps}
 \end{figure}
 
@@ -732,25 +740,62 @@ The gauge VFE training dynamics reflect the interplay between variational free e
 
 At convergence, the gauge VFE achieves validation loss 5.44 (PPL 230), reducing uncertainty from the random baseline (PPL 50,257) by a factor of 218$\times$. This demonstrates that geometric inference provides meaningful language modeling capability without neural network parameters.
 
+\subsection{Ablation: Gauge Group Scaling}
+
+To understand how gauge group structure affects performance, we systematically vary $N$ in SO($N$) while using a single fundamental irreducible representation. Table~\ref{tab:ablation_capacity} shows results for 20,000 training steps with context length 128.
+
+\begin{table}[h]
+\centering
+\small
+\caption{Gauge group scaling ablation. All models use 1 layer, $\kappa_\beta=1$, 20k training steps, context length 128, single fundamental irrep ($K=N$).}
+\label{tab:ablation_capacity}
+\begin{tabular}{lrrrrr}
+\toprule
+\textbf{Gauge Group} & \textbf{K} & \textbf{Params} & \textbf{Val PPL} & \textbf{Test PPL} & \textbf{vs Random} \\
+\midrule
+SO(3) & 3 & 0.6M & 1,472 & 1,326 & 38$\times$ \\
+SO(5) & 5 & 1.3M & 739 & 701 & 72$\times$ \\
+SO(10) & 10 & 3.8M & 507 & 544 & 92$\times$ \\
+SO(15) & 15 & 7.5M & 452 & 368 & 137$\times$ \\
+SO(20) & 20 & 12.6M & 369 & 340 & 148$\times$ \\
+SO(25) & 25 & 18.8M & 426 & 325 & 155$\times$ \\
+SO(30) & 30 & 26.4M & 369 & 318 & 158$\times$ \\
+SO(45) & 45 & 56.5M & 314 & 308 & 163$\times$ \\
+\textbf{SO(50)} & \textbf{50} & \textbf{69.1M} & \textbf{274} & \textbf{299} & \textbf{168$\times$} \\
+SO(55) & 55 & 82.9M & 312 & 304 & 165$\times$ \\
+SO(60) & 60 & 98.0M & 347 & 309 & 163$\times$ \\
+SO(70) & 70 & 131.9M & 367 & 324 & 155$\times$ \\
+SO(100) & 100 & 263.8M & 325 & 356 & 141$\times$ \\
+\midrule
+SO(50), 2 heads & 100 & 76.6M & 334 & 282 & 178$\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The results reveal a characteristic scaling pattern: performance improves from SO(3) to SO(50), then degrades for larger groups. The optimal single-irrep configuration is SO(50) with $K=50$, achieving Val PPL 274. Notably, adding a second attention head (SO(50) with $K=100$) improves test performance to PPL 282 despite slightly worse validation PPL, suggesting better generalization with richer structure.
+
+This scaling behavior likely reflects a trade-off between representational capacity (favoring larger $N$) and optimization difficulty (which increases with the dimension of the gauge frame space $\mathfrak{so}(N)$, growing as $N(N-1)/2$). The observation that SO(3) with mixed irreps (Table~\ref{tab:main_results}) outperforms SO(50) with single irreps demonstrates that representational richness---achieved through higher-spin irreducible representations---is more important than gauge group dimension.
 
 \section{Discussion}
 \label{sec:discussion}
 
-This work demonstrates that gauge-theoretic transformers without neural networks achieve meaningful language modeling at production scale. Our single-layer SO(20) gauge VFE achieves perplexity 230 on WikiText-103 (218$\times$ improvement over random), validating that transformer-like behavior emerges from geometric principles alone.
+This work demonstrates that gauge-theoretic transformers without neural networks achieve meaningful language modeling at production scale. Our gauge VFE architectures achieve perplexity 183--274 on WikiText-103 (180--275$\times$ improvement over random), with the best configuration---SO(3) with mixed irreps---approaching the performance of parameter-matched standard transformers (PPL 183 vs 178) while using only 7.8M parameters.
 
 Our empirical results establish several key findings:
 
 \begin{enumerate}
-  \item \textbf{Gauge-theoretic attention works at scale:} The framework successfully processes a vocabulary of 50,257 tokens with 128-token context, achieving substantial compression of language statistics through geometric structure.
+  \item \textbf{Gauge-theoretic attention works at scale:} The framework successfully processes a vocabulary of 50,257 tokens with 256-token context, achieving substantial compression of language statistics through geometric structure.
 
   \item \textbf{No neural networks required:} The gauge VFE contains zero MLPs, activation functions, or learned weight matrices beyond variational embeddings. All computation derives from KL divergences, parallel transport, and natural gradient descent.
 
-  \item \textbf{Single geometric layer:} Unlike standard transformers requiring multiple layers for effective modeling, the gauge architecture achieves meaningful performance with a single layer, suggesting that geometric structure partially compensates for depth.
+  \item \textbf{Irrep structure determines performance:} SO(3) with mixed higher-spin irreducible representations (7.8M params, PPL 183) substantially outperforms SO(50) with a single fundamental irrep (69.1M params, PPL 196). The richness of the representation structure matters more than the gauge group dimension.
+
+  \item \textbf{Single geometric layer:} Unlike standard transformers requiring multiple layers for effective modeling, the gauge architecture achieves competitive performance with a single layer, suggesting that geometric structure partially compensates for depth.
 
   \item \textbf{Computational feasibility:} The implementation achieves $\sim$890 tokens/second ($\sim$29$\times$ overhead vs standard), a dramatic improvement over earlier prototypes, demonstrating that gauge-theoretic inference is practically trainable.
 \end{enumerate}
 
-The comparison with standard transformers [TO BE COMPLETED] will reveal whether the geometric approach trades off absolute performance for architectural simplicity and interpretability. Regardless of relative performance, the key contribution is demonstrating that attention mechanisms can be derived from and implemented via gauge theory.
+The comparison with standard transformers reveals that the geometric approach achieves competitive performance (PPL 183 vs 178) with substantially different parameter allocation---all capacity resides in variational embeddings rather than learned projections and MLPs. The key contribution is demonstrating that attention mechanisms can be derived from and implemented via gauge theory at production scale.
 
 Our geometric reformulation of transformers allows previously ill-understood and ad-hoc structures to have a deeper significance.  Learned weights and neural architectures approximate a deeper variational free energy functional.  Indeed, we conjecture that neural architecture are the biological instantiation of this deeper informational geometry.  Positional and token encoding are approximations to gauge frames and belief statistics.  ReLU/GELU/etc are nonlinear systems approximating the product rule of gauge attention.  Backpropagation is model updating under variational inference.  Multi-head attention, perhaps most surprisingly, is gauge group decomposition into invariant subspaces and, remarkably, training is manifestly a spontaneous symmetry breaking phenomenon.  These results intersect, straddle, and link informational geometry, machine learning, physics, neuroscience, and more.  The geometric attention mechanism therefore warrants further study.
 
