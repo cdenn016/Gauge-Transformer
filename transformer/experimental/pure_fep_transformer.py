@@ -1738,11 +1738,7 @@ class PureFEPLayer(nn.Module):
         # This is the BIGGEST optimization: avoid recomputing matrix_exp
         # every VFE step when φ is constant.
         if self.config.cache_transport and not self.config.gauge_evolution_enabled:
-            cached_transport = compute_transport_operators(
-                phi, self.generators,
-                use_fast_exp=self.config.use_fast_matrix_exp,
-                exp_order=self.config.matrix_exp_order,
-            )
+            cached_transport = compute_transport_operators(phi, self.generators)
         else:
             cached_transport = None
 
