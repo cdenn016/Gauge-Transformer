@@ -573,7 +573,9 @@ We report standard metrics for language modeling:
   \item \textbf{Improvement factor:} Ratio of random baseline PPL to model PPL
 \end{itemize}
 
-computed on the validation set. Random baseline (uniform distribution over 50,257 tokens) achieves PPL = 50,257.
+Random baseline (uniform distribution over 50,257 tokens) achieves PPL = 50,257.
+
+\paragraph{Checkpoint selection.} We save checkpoints based on best validation cross-entropy loss. Final test set evaluation uses the checkpoint with lowest validation loss. This standard practice means validation PPL reflects the selected checkpoint's performance, while test PPL provides an unbiased estimate of generalization.
 
 \subsection{Implementation details.}
 
