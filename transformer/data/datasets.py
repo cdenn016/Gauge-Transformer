@@ -1320,6 +1320,7 @@ def create_dataloaders(
     tokenizer_name: str = 'gpt2',
     dataset: str = 'wikitext-103',
     include_test: bool = False,
+    return_tokenizer: bool = False,
 ) -> Tuple[DataLoader, DataLoader, int] | Tuple[DataLoader, DataLoader, DataLoader, int]:
     """
     Create train, validation, and optionally test dataloaders for WikiText.
@@ -1336,17 +1337,19 @@ def create_dataloaders(
         tokenizer_name: HuggingFace tokenizer name (only used if tiktoken unavailable)
         dataset: 'wikitext-2' (~2M tokens) or 'wikitext-103' (~103M tokens, default)
         include_test: If True, also return test dataloader
+        return_tokenizer: If True, also return the train dataset (has .decode() method)
 
     Returns:
-        If include_test=False (default):
-            train_loader: Training dataloader
-            val_loader: Validation dataloader
-            vocab_size: Actual vocabulary size
-        If include_test=True:
-            train_loader: Training dataloader
-            val_loader: Validation dataloader
-            test_loader: Test dataloader
-            vocab_size: Actual vocabulary size
+        If include_test=False, return_tokenizer=False (default):
+            train_loader, val_loader, vocab_size
+        If include_test=True, return_tokenizer=False:
+            train_loader, val_loader, test_loader, vocab_size
+        If include_test=False, return_tokenizer=True:
+            train_loader, val_loader, vocab_size, tokenizer
+        If include_test=True, return_tokenizer=True:
+            train_loader, val_loader, test_loader, vocab_size, tokenizer
+
+        The tokenizer is actually the train_dataset which has .decode() and .encode() methods.
 
     Example:
         >>> train_loader, val_loader, vocab_size = create_dataloaders(
@@ -1497,7 +1500,11 @@ def create_dataloaders(
     print(f"{'='*70}\n")
 
     if include_test:
+        if return_tokenizer:
+            return train_loader, val_loader, test_loader, actual_vocab_size, train_dataset
         return train_loader, val_loader, test_loader, actual_vocab_size
+    if return_tokenizer:
+        return train_loader, val_loader, actual_vocab_size, train_dataset
     return train_loader, val_loader, actual_vocab_size
 
 
