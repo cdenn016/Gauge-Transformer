@@ -56,7 +56,8 @@ from transformer.baselines.standard_transformer import StandardTransformerLM
 class FastTrainingConfig:
     """Training configuration with per-parameter group learning rates."""
 
-    # Training steps
+    # Training steps (use epochs OR max_steps, epochs takes precedence)
+    epochs: Optional[int] = None  # If set, overrides max_steps
     max_steps: int = 1000
     warmup_steps: int = 50
 

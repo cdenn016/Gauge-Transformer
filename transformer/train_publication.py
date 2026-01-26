@@ -139,7 +139,8 @@ STANDARD_CONFIG = {
     'batch_size': 3,
     'use_amp': False,
     'num_workers': 6,
-    'max_steps': 200000,
+    'epochs': 3,               # Number of epochs (overrides max_steps if set)
+    'max_steps': 200000,       # Fallback if epochs not set
     'warmup_steps': 50,
 
     # Standard transformer settings
@@ -218,7 +219,8 @@ VFE_EM_CONFIG = {
     'batch_size': 2,
     'use_amp': False,             # FP32 for precision
     'num_workers': 6,
-    'max_steps': 200000,
+    'epochs': 3,                  # Number of epochs (overrides max_steps if set)
+    'max_steps': 200000,          # Fallback if epochs not set
     'warmup_steps': 50,
 
     # VFE transformer settings 
@@ -376,7 +378,8 @@ PURE_FEP_CONFIG = {
     'batch_size': 6,
     'use_amp': False,             # FP32 for precision
     'num_workers': 4,
-    'max_steps': 5000,
+    'epochs': 1,                  # Number of epochs (overrides max_steps if set)
+    'max_steps': 5000,            # Fallback if epochs not set
     'warmup_steps': 0,            # No warmup for P-flow
 
     # Pure FEP transformer settings
@@ -1260,12 +1263,24 @@ class PublicationTrainer(FastTrainer):
         start_time = time.time()
         train_iterator = iter(self.train_loader)
 
+        # Calculate total steps: epochs takes precedence over max_steps
+        epochs = getattr(self.config, 'epochs', None)
+        if epochs is not None and epochs > 0:
+            steps_per_epoch = len(self.train_loader)
+            total_steps = epochs * steps_per_epoch
+            print(f"  Training for {epochs} epoch(s) ({steps_per_epoch} steps/epoch = {total_steps:,} total steps)")
+        else:
+            total_steps = self.config.max_steps
+            steps_per_epoch = len(self.train_loader)
+            equiv_epochs = total_steps / steps_per_epoch if steps_per_epoch > 0 else 0
+            print(f"  Training for {total_steps:,} steps (~{equiv_epochs:.1f} epochs)")
+
         try:
             from tqdm import tqdm
-            pbar = tqdm(range(self.config.max_steps), desc="Training")
+            pbar = tqdm(range(total_steps), desc="Training")
             use_tqdm = True
         except ImportError:
-            pbar = range(self.config.max_steps)
+            pbar = range(total_steps)
             use_tqdm = False
 
         # Run initial gauge frame semantic analysis (step 0)
@@ -1332,7 +1347,7 @@ class PublicationTrainer(FastTrainer):
 
                 # Console logging
                 log_msg = (
-                    f"Step {step+1}/{self.config.max_steps} | "
+                    f"Step {step+1}/{total_steps} | "
                     f"Loss: {metrics['train_loss_total']:.4f} | "
                     f"CE: {metrics['train_loss_ce']:.4f} | "
                     f"β: {metrics['train_loss_belief_align']:.4f} | "
@@ -1717,6 +1732,7 @@ def run_single_experiment(
     # =================================================================
 
     train_config = FastTrainingConfig(
+        epochs=config.get('epochs', None),
         max_steps=config['max_steps'],
         warmup_steps=config['warmup_steps'],
 
@@ -1764,7 +1780,16 @@ def run_single_experiment(
     print("\n" + "="*70)
     print("TRAINING CONFIGURATION")
     print("="*70)
-    print(f"  Max steps:      {train_config.max_steps}")
+    # Calculate effective steps from epochs if set
+    steps_per_epoch = len(train_loader)
+    if train_config.epochs is not None and train_config.epochs > 0:
+        effective_steps = train_config.epochs * steps_per_epoch
+        print(f"  Epochs:         {train_config.epochs}")
+        print(f"  Steps/epoch:    {steps_per_epoch:,}")
+        print(f"  Total steps:    {effective_steps:,}")
+    else:
+        print(f"  Max steps:      {train_config.max_steps:,}")
+        print(f"  (~{train_config.max_steps / steps_per_epoch:.1f} epochs)")
     print(f"  Warmup:         {train_config.warmup_steps}")
     print(f"  Batch size:     {config['batch_size']}")
     print(f"  Seq length:     {config['max_seq_len']}")
@@ -1819,7 +1844,17 @@ def run_single_experiment(
         print("STARTING PURE FEP TRAINING")
         print("="*70)
         print(f"Device: {device}")
-        print(f"Total steps: {config['max_steps']:,}")
+
+        # Calculate total steps: epochs takes precedence
+        epochs = config.get('epochs', None)
+        steps_per_epoch = len(train_loader)
+        if epochs is not None and epochs > 0:
+            total_steps = epochs * steps_per_epoch
+            print(f"Epochs: {epochs} ({steps_per_epoch:,} steps/epoch = {total_steps:,} total)")
+        else:
+            total_steps = config['max_steps']
+            print(f"Total steps: {total_steps:,} (~{total_steps/steps_per_epoch:.1f} epochs)")
+
         print("\nLearning via P-flow: beliefs → priors (no backprop)")
         print("="*70 + "\n")
 
@@ -1833,9 +1868,8 @@ def run_single_experiment(
         best_val_ppl = float('inf')
         log_interval = config['log_interval']
         eval_interval = config['eval_interval']
-        max_steps = config['max_steps']
 
-        pbar = tqdm(range(max_steps), desc="Training") if use_tqdm else range(max_steps)
+        pbar = tqdm(range(total_steps), desc="Training") if use_tqdm else range(total_steps)
 
         try:
             for step in pbar:
@@ -2018,7 +2052,12 @@ def run_single_experiment(
         print("="*70)
         print(f"Device: {device}")
         print(f"FFN mode: {ffn_mode}")
-        print(f"Total steps: {train_config.max_steps:,}")
+        # Show epochs-based info if set
+        if train_config.epochs is not None and train_config.epochs > 0:
+            eff_steps = train_config.epochs * steps_per_epoch
+            print(f"Epochs: {train_config.epochs} ({steps_per_epoch:,} steps/epoch = {eff_steps:,} total)")
+        else:
+            print(f"Total steps: {train_config.max_steps:,}")
         print("\nNOTE: First few batches may be slow (JIT compilation)")
         print("="*70 + "\n")
 
