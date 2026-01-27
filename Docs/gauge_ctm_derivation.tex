@@ -91,7 +91,7 @@ The Continuous Thought Machine (CTM) introduced by Darlow et al.\ represents an 
 
 Separately, gauge-theoretic approaches to multi-agent inference propose that agents maintaining probabilistic beliefs over latent states can be understood as sections of fiber bundles over a base manifold, with inter-agent communication mediated by gauge transport operators that account for differences in local reference frames. The natural coupling between such agents involves the Kullback-Leibler divergence between an agent's belief and the gauge-transported belief of its neighbor.
 
-This paper investigates whether and to what extent these two frameworks are mathematically related. The investigation proceeds as follows. Section~\ref{sec:generative_model} presents the derivation of the gauge-theoretic variational free energy from a normalized generative model. Section~\ref{sec:uniqueness} establishes the conditional uniqueness of the forward KL divergence as the coupling term under exponential family constraints. Section~\ref{sec:exponential_families} extends the framework beyond Gaussians. Section~\ref{sec:proper_time} defines proper time as information-theoretic arc length. Section~\ref{sec:mass_matrix} distinguishes the Fisher-Rao metric from the dynamical mass matrix. Section~\ref{sec:ctm_correspondence} develops the correspondence with CTM. Section~\ref{sec:gaps} identifies assumptions and limitations.
+This paper investigates whether and to what extent these two frameworks are mathematically related. The investigation proceeds as follows. Section~\ref{sec:generative_model} presents the derivation of the gauge-theoretic variational free energy from a normalized generative model. Section~\ref{sec:uniqueness} establishes the conditional uniqueness of the forward KL divergence as the coupling term under exponential family constraints. Section~\ref{sec:exponential_families} extends the framework beyond Gaussians. Section~\ref{sec:proper_time} defines proper time as information-theoretic arc length. Section~\ref{sec:ctm_correspondence} develops the correspondence with CTM. Section~\ref{sec:gaps} identifies assumptions and limitations.
 
 % ============================================================================
 \section{The Generative Model and Variational Free Energy}
@@ -478,66 +478,6 @@ d\tau^2 = d\theta^\T G_\theta d\theta = d\eta^\T G_\eta d\eta,
 where $G_\eta = J^\T G_\theta J$ and $J = \partial\theta/\partial\eta$ is the Jacobian. This is the defining property of a Riemannian metric.
 
 % ============================================================================
-\section{Fisher Metric versus Dynamical Mass}
-\label{sec:mass_matrix}
-% ============================================================================
-
-A crucial distinction must be maintained between two related but distinct quantities: the Fisher-Rao metric, which defines the intrinsic geometry of the statistical manifold, and the Hessian of the free energy, which defines the effective mass governing belief dynamics.
-
-\subsection{The Fisher-Rao Metric}
-
-The Fisher-Rao metric $G(\theta)$ is the unique (up to scaling) Riemannian metric on a statistical manifold that is invariant under sufficient statistics. For Gaussians, $G_{\mu\mu} = \Sigma^{-1}$.
-
-This metric determines:
-\begin{itemize}
-\item Proper time (arc length)
-\item Natural gradients: $\nabla_{\text{nat}} f = G^{-1} \nabla f$
-\item Geodesics (shortest paths between distributions)
-\item Intrinsic curvature of the manifold
-\end{itemize}
-
-\subsection{The Mass Matrix}
-
-In a Hamiltonian formulation of belief dynamics (adopted as an ansatz motivated by the geometric structure), the effective mass is the Hessian of the free energy:
-\begin{equation}
-\mathbf{M} = \frac{\partial^2 \F}{\partial \xi \partial \xi^\T},
-\end{equation}
-where $\xi = (\mu_1, \ldots, \mu_N, \ldots)$ collects all mean parameters.
-
-Unlike the Fisher metric, this Hessian incorporates contributions from all terms in the free energy, not just the intrinsic geometry.
-
-\subsection{Contributions to Dynamical Mass}
-
-From the companion manuscript on belief inertia, the mass matrix for agent $i$ decomposes as:
-\begin{equation}
-\boxed{
-\mathbf{M}_i = \underbrace{\Sigma_{p,i}^{-1}}_{\text{prior precision}} + \underbrace{\Lambda_{o,i}}_{\text{observation precision}} + \underbrace{\sum_k \beta_{ik} \tilde{\Lambda}_{q,k}}_{\text{incoming social}} + \underbrace{\sum_j \beta_{ji} \Lambda_{q,i}}_{\text{outgoing social}}
-}
-\end{equation}
-
-where:
-\begin{itemize}
-\item $\Sigma_{p,i}^{-1}$: Prior precision---resistance to deviating from innate expectations.
-\item $\Lambda_{o,i} = H^\T R^{-1} H$ for observation model $p(o|k) = \N(o; Hk, R)$: Observation precision---grounding through sensory data.
-\item $\sum_k \beta_{ik} \tilde{\Lambda}_{q,k}$: Incoming social precision---being pulled toward confident neighbors.
-\item $\sum_j \beta_{ji} \Lambda_{q,i}$: Outgoing social precision---recoil from exerting influence on others.
-\end{itemize}
-
-\subsection{The Distinction}
-
-\begin{tcolorbox}[colback=yellow!5,colframe=orange!75,title=Key Distinction]
-\begin{itemize}
-\item \textbf{Fisher-Rao metric} $G = \Sigma^{-1}$: Intrinsic geometry of the statistical manifold, independent of the free energy functional.
-\item \textbf{Mass matrix} $\mathbf{M} = \partial^2 \F / \partial \xi^2$: Total resistance to belief change, incorporating all sources of constraint.
-\end{itemize}
-The mass matrix includes the Fisher metric (via the KL terms) but also incorporates prior, observation, and social contributions. An agent can have high Fisher information (precise beliefs) but low dynamical mass (weak priors, noisy observations, weak social coupling), or vice versa.
-\end{tcolorbox}
-
-\begin{remark}[Caveat]
-The identification of the Hessian with dynamical mass assumes a Hamiltonian formulation of belief dynamics. This is an ansatz, not a derivation from first principles. The Fisher metric provides geometry; it does not by itself imply that beliefs evolve according to Hamiltonian mechanics. The framework's predictions in the overdamped limit (gradient flow) depend only on the geometry, while underdamped predictions (oscillation, overshooting) depend on the ansatz.
-\end{remark}
-
-% ============================================================================
 \section{Correspondence with Continuous Thought Machines}
 \label{sec:ctm_correspondence}
 % ============================================================================
@@ -646,7 +586,6 @@ Fisher metric $G_i = W_i^\T \Sigma_i^{-1} W_i$ & NLM private weights & Exact \\
 $D_{\KL}(q_i \| \Omega_{ij} q_j)$ & Synchronization $S_{ij}$ & Approximate \\
 $\beta_{ij} = \softmax(-\KL/\kappa)$ & Attention from sync & Structural \\
 Proper time $d\tau = \|d\mu\|_{\Sigma^{-1}}$ & Adaptive iteration & Interpretive \\
-Mass matrix $\mathbf{M} = \partial^2 \F$ & Neuron stability & Interpretive \\
 Gauge transport $\Omega_{ij}$ & Implicit (correlation invariance) & Trivial limit \\
 \bottomrule
 \end{tabular}
@@ -690,10 +629,6 @@ CTM uses synchronization as a representation for prediction, with gradients flow
 \end{equation}
 These gradients encourage synchronization patterns that support accurate prediction---functionally similar to explicit free energy minimization, but learned rather than prescribed.
 
-\subsection{The Hamiltonian Ansatz}
-
-The identification of the free energy Hessian with dynamical mass assumes Hamiltonian belief dynamics. This is geometrically motivated but not derived from first principles. Predictions depending on underdamped dynamics (oscillation, overshooting) are contingent on this ansatz; predictions depending only on gradient flow are geometrically necessary.
-
 \subsection{Gauge Structure}
 
 CTM operates in a trivial gauge regime ($\Omega_{ij} = I$). The full richness of gauge-theoretic structure---non-trivial transport, curvature, topological effects---is absent. This limits the correspondence to the flat-bundle limit of the general framework.
@@ -713,8 +648,6 @@ We have developed a mathematical correspondence between gauge-theoretic variatio
 \item CTM's synchronization representation corresponds to KL-based belief alignment through the mutual information identity $I(X;Y) = D_{\KL}(p_{XY} \| p_X p_Y)$.
 
 \item CTM's adaptive computation admits interpretation as proper time stabilization, where iteration continues until the rate of information-theoretic distance traversed falls below threshold.
-
-\item The Fisher-Rao metric (intrinsic geometry) must be distinguished from the free energy Hessian (dynamical mass): the former defines proper time, the latter incorporates all constraints on belief change.
 
 \item The framework extends to arbitrary exponential families, suggesting the mathematical structure is not specific to Gaussian assumptions.
 \end{enumerate}
