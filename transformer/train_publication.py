@@ -1260,6 +1260,13 @@ class PublicationTrainer(FastTrainer):
         print("PUBLICATION-QUALITY TRAINING")
         print(f"{'='*70}\n")
 
+        # Support resuming from a checkpoint
+        start_step = self.global_step
+        if start_step > 0:
+            print(f"  Resuming from step {start_step}")
+
+        print(f"  Training for {self.config.max_steps:,} steps (~{self.config.max_steps / len(self.train_loader):.1f} epochs)")
+
         start_time = time.time()
         train_iterator = iter(self.train_loader)
 
@@ -1277,14 +1284,19 @@ class PublicationTrainer(FastTrainer):
 
         try:
             from tqdm import tqdm
-            pbar = tqdm(range(total_steps), desc="Training")
+            pbar = tqdm(
+                range(start_step, total_steps),
+                desc="Training",
+                initial=start_step,
+                total=total_steps
+            )
             use_tqdm = True
         except ImportError:
-            pbar = range(total_steps)
+            pbar = range(start_step, total_steps)
             use_tqdm = False
 
-        # Run initial gauge frame semantic analysis (step 0)
-        if self.pub_metrics:
+        # Run initial gauge frame semantic analysis (only if starting fresh)
+        if start_step == 0 and self.pub_metrics:
             try:
                 print("[Semantic] Running initial analysis (step 0)...")
                 self.pub_metrics.run_semantic_analysis(
