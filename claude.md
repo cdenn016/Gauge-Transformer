@@ -276,6 +276,13 @@ import sys
 - "I'm not sure this is right" beats confident speculation
 - Acknowledge when something needs verification
 
+**No bullshit:**
+- If a correspondence is interpretive rather than mathematically exact, say so explicitly
+- If something doesn't connect, don't force it—admit the gap
+- Remove content that doesn't earn its place through rigorous derivation
+- Never dress up hand-waving as theorem
+- When asked "what does X have to do with anything?"—if the answer is "not much", say that
+
 
 
 ### Categorical Observation Precision (Transformer-Specific)
