@@ -45,6 +45,7 @@
 \newcommand{\N}{\mathcal{N}}
 \newcommand{\M}{\mathcal{M}}
 \newcommand{\F}{\mathcal{F}}
+\newcommand{\B}{\mathcal{B}}
 \newcommand{\tr}{\mathrm{tr}}
 \newcommand{\diag}{\mathrm{diag}}
 \newcommand{\softmax}{\mathrm{softmax}}
@@ -57,7 +58,8 @@
 % ============================================================================
 \title{%
     \textbf{From Information Geometry to Continuous Thought Machines:}\\[0.5em]
-    \large A Rigorous Derivation from First Principles
+    \large A Rigorous Derivation from First Principles\\[0.3em]
+    \normalsize Extended Version with Generative Model Foundation
 }
 
 \author{
@@ -75,7 +77,7 @@
 \maketitle
 
 \begin{abstract}
-We establish a rigorous mathematical connection between information-geometric gauge theory and the Continuous Thought Machine (CTM) architecture. Starting from five first principles---statistical manifolds, the Fisher-Rao metric, proper time, gauge covariance, and free energy minimization---we derive the key structural components of CTMs: neuron-level models (NLMs), synchronization representations, and adaptive computation. The central mathematical result is that temporal synchronization between neurons corresponds to KL-based belief alignment through the mutual information identity $I(X;Y) = \KL(p_{XY} \| p_X p_Y)$. We identify the precise assumptions required for exact versus approximate correspondence and propose a ``Gauge-Theoretic CTM'' that implements these principles explicitly.
+We establish a rigorous mathematical connection between information-geometric gauge theory and the Continuous Thought Machine (CTM) architecture. Starting from a normalized generative model with auxiliary agreement variables, we derive the gauge-covariant variational free energy whose structure uniquely requires the forward KL divergence. We show that CTM's key innovations---neuron-level models, synchronization representations, and adaptive computation---emerge naturally from this framework. The derivation extends beyond Gaussians to arbitrary exponential families via the conditional uniqueness theorem: the forward KL is the \emph{only} divergence preserving exponential-family closure under variational optimization. We clarify the distinction between the Fisher-Rao metric (intrinsic geometry) and the free energy Hessian (dynamical mass), showing that proper time measures accumulated information change while cognitive inertia incorporates all sources of constraint.
 \end{abstract}
 
 \tableofcontents
@@ -86,339 +88,504 @@ We establish a rigorous mathematical connection between information-geometric ga
 % ============================================================================
 
 The Continuous Thought Machine (CTM) \cite{darlow2025ctm} represents a significant departure from standard transformer architectures by introducing:
-\begin{enumerate}[label=(\roman*)]
+\begin{enumerate}[label=(\roman*)}
     \item \textbf{Neuron-level models (NLMs)}: Each neuron has private weights processing its activation history
     \item \textbf{Synchronization representations}: Pairwise temporal correlations as the latent space
     \item \textbf{Adaptive computation}: Internal ``ticks'' decoupled from input, halting based on confidence
 \end{enumerate}
 
-Independently, gauge-theoretic approaches to neural computation have proposed that:
+Independently, gauge-theoretic approaches to neural computation propose that:
 \begin{enumerate}[label=(\roman*)]
     \item Beliefs are points on a \textbf{statistical manifold} with the Fisher-Rao metric
     \item \textbf{Proper time} is the information-theoretic arc length: ``a difference which makes a difference''
     \item Inter-agent coupling uses \textbf{KL divergence} with gauge-covariant transport
-    \item Dynamics minimize a \textbf{variational free energy} functional
+    \item Dynamics minimize a \textbf{variational free energy} derived from a normalized generative model
 \end{enumerate}
 
-This paper establishes that these frameworks are deeply connected: CTM's architecture can be \emph{derived} from information-geometric first principles. The key mathematical bridge is the identity relating mutual information to KL divergence, which connects correlation-based synchronization to distribution-based alignment.
+This paper establishes that these frameworks are deeply connected: CTM's architecture can be \emph{derived} from information-geometric first principles. Unlike heuristic mappings, we ground the derivation in:
+\begin{itemize}
+    \item A \textbf{normalized generative model} with auxiliary agreement variables (Section~\ref{sec:generative_model})
+    \item The \textbf{conditional uniqueness theorem} showing forward KL is the only consistent divergence (Section~\ref{sec:uniqueness})
+    \item \textbf{Extension to exponential families} beyond Gaussians (Section~\ref{sec:exponential_families})
+    \item Precise distinction between \textbf{Fisher metric and dynamical mass} (Section~\ref{sec:mass_matrix})
+\end{itemize}
 
 % ============================================================================
-\section{First Principles}
-\label{sec:axioms}
+\section{The Normalized Generative Model}
+\label{sec:generative_model}
 % ============================================================================
 
-We begin with five axioms that define the mathematical framework.
+We derive the variational free energy from first principles, showing that belief alignment emerges naturally from a normalized generative prior with auxiliary agreement variables. This construction justifies the KL-based coupling terms as consequences of gauge-transported Gaussian consistency constraints.
 
-\begin{axiom}[Statistical Manifold]
-\label{ax:manifold}
-The state space of computation is a statistical manifold
-\[
-\M = \{q_\theta : \theta \in \Theta \subseteq \R^d\}
-\]
-where each $q_\theta$ is a probability distribution over some sample space $\mathcal{X}$.
-\end{axiom}
+\subsection{Setup: Dual Latent Variables and Fiber Geometry}
 
-\begin{axiom}[Fisher-Rao Metric]
-\label{ax:fisher}
-The natural Riemannian metric on $\M$ is the Fisher information matrix:
+Each agent $i$ maintains two distinct latent variables living in separate fiber bundles:
 \begin{equation}
-\label{eq:fisher}
-G_{\mu\nu}(\theta) = \E_{q_\theta}\left[\frac{\pp \log q_\theta}{\pp \theta^\mu} \cdot \frac{\pp \log q_\theta}{\pp \theta^\nu}\right]
+k_i \in \R^{d_q} \quad \text{(belief latent in $\mathcal{E}_q$)},
+\qquad
+m_i \in \R^{d_p} \quad \text{(model latent in $\mathcal{E}_p$)}.
 \end{equation}
-For multivariate Gaussians $q = \N(\mu, \Sigma)$ with $\theta = (\mu, \Sigma)$, this gives:
+
+The full state of agent $i$ is a Gaussian distribution over each latent:
 \begin{equation}
-\label{eq:fisher_gaussian}
-G = \begin{pmatrix} \Sigma^{-1} & 0 \\ 0 & \frac{1}{2}(\Sigma^{-1} \otimes \Sigma^{-1}) \end{pmatrix}
+\begin{aligned}
+q_i(k_i) &= \N(k_i\,;\mu_{q,i},\,\Sigma_{q,i}), \\
+s_i(m_i) &= \N(m_i\,;\mu_{p,i},\,\Sigma_{p,i}).
+\end{aligned}
 \end{equation}
-\end{axiom}
 
-\begin{axiom}[Proper Time]
-\label{ax:proper_time}
-Time is defined as the arc length on $\M$:
+The fiber at each agent's location is the product statistical manifold:
 \begin{equation}
-\label{eq:proper_time}
-\boxed{\dd\tau^2 = \dd\theta^\T G(\theta) \dd\theta}
+\B(c) = \B_q \times \B_p,
 \end{equation}
-For Gaussians with fixed covariance:
+where $\B_q$ and $\B_p$ are spaces of Gaussian distributions (positive-definite mean-covariance pairs).
+
+\subsection{Auxiliary Agreement Variables}
+
+To enforce consistency between agents after gauge transport, we introduce auxiliary ``agreement'' variables for each ordered pair $(i,j)$:
 \begin{equation}
-\label{eq:proper_time_gaussian}
-\dd\tau^2 = \dd\mu^\T \Sigma^{-1} \dd\mu
+z_{ij} \in \R^{d_q} \quad \text{(belief agreement)},
+\qquad
+w_{ij} \in \R^{d_p} \quad \text{(model agreement)}.
 \end{equation}
-This satisfies $\KL(q \| q + \dd q) \approx \frac{1}{2}\dd\tau^2$ to second order.
-\end{axiom}
 
-\begin{axiom}[Gauge Covariance]
-\label{ax:gauge}
-Physical observables are invariant under gauge transformations $g \in \mathcal{G}$ acting on the manifold. For rotation gauge group $\mathcal{G} = SO(N)$:
-\begin{align}
-\mu &\mapsto g\mu \\
-\Sigma &\mapsto g\Sigma g^\T
-\end{align}
-KL divergence is gauge-invariant: $\KL(q_i \| \Omega_{ij}[q_j])$ is independent of gauge frame, where $\Omega_{ij}$ is the parallel transport operator.
-\end{axiom}
+These have clear interpretations:
+\begin{itemize}
+  \item $z_{ij}$: ``What agent $i$ believes agent $j$'s belief looks like, after transporting $j$'s belief into $i$'s gauge frame''
+  \item $w_{ij}$: ``What agent $i$ believes agent $j$'s generative model looks like, after gauge transport''
+\end{itemize}
 
-\begin{axiom}[Free Energy Minimization]
-\label{ax:free_energy}
-Dynamics minimize the variational free energy functional:
+Agreement variables are latent mediators that will be integrated out, leaving effective pairwise coupling between agents.
+
+\subsection{The Normalized Joint Distribution}
+
+The auxiliary variable $z_{ij}$ is drawn from the product of Gaussians:
 \begin{equation}
-\label{eq:free_energy}
-\F[q] = \underbrace{\alpha \cdot \KL(q \| p)}_{\text{compression}} + \underbrace{\langle H \rangle_q}_{\text{expected cost}} + \underbrace{\lambda \sum_{i,j} \beta_{ij} \KL(q_i \| \Omega_{ij}[q_j])}_{\text{belief alignment}}
+p(z_{ij} \mid k_i, k_j) \propto
+\N(z_{ij}; k_i, \Lambda_{ij}^{-1}) \cdot
+\N(z_{ij}; \Omega_{ij}k_j, \Lambda_{ij}^{-1})
 \end{equation}
-where $p$ is a prior, $H$ is a task-dependent Hamiltonian, and $\beta_{ij} = \softmax_j(-\KL(q_i \| q_j)/\kappa)$ are attention weights.
-\end{axiom}
+where $\Omega_{ij} \in SO(N)$ is the gauge transport operator and $\Lambda_{ij}$ is the alignment precision.
 
-% ============================================================================
-\section{Derivation of CTM Architecture}
-\label{sec:derivation}
-% ============================================================================
-
-We now derive each component of the CTM architecture from the axioms.
-
-% ----------------------------------------------------------------------------
-\subsection{Neuron-Level Models from Fisher Metric}
-% ----------------------------------------------------------------------------
-
-\begin{theorem}[NLM Structure]
-\label{thm:nlm}
-If each computational unit $i$ maintains a distribution $q_i$ on a statistical manifold with unit-specific Fisher metric $G_i$, then optimal linear parameterization requires unit-specific weight matrices $W_i$ satisfying:
+The full joint generative model is:
 \begin{equation}
-G_i = W_i^\T W_i
+\boxed{
+\begin{aligned}
+p&(\{k_i\},\{m_i\},\{z_{ij}\},\{w_{ij}\})\\
+&=\left[\prod_i p_i(k_i)\,r_i(m_i)\right]\\
+&\quad\times
+\left[\prod_{i,j}
+\N(z_{ij}\,;k_i,\Lambda_{ij}^{-1})
+\,\N(z_{ij}\,;\Omega_{ij}k_j,\Lambda_{ij}^{-1})\right]\\
+&\quad\times
+\left[\prod_{i,j}
+\N(w_{ij}\,;m_i,\Gamma_{ij}^{-1})
+\,\N(w_{ij}\,;\tilde{\Omega}_{ij}m_j,\Gamma_{ij}^{-1})\right].
+\end{aligned}
+}
 \end{equation}
+
+\begin{theorem}[Normalization]
+The joint distribution is properly normalized: $\int p(\cdot) = 1$.
 \end{theorem}
 
 \begin{proof}
-Consider a computational unit $i$ that maps inputs $x \in \R^n$ to a distribution $q_i(z; x) = \N(W_i x, \Sigma_i)$ over latent states $z$.
+Each factor is a normalized Gaussian. The products of Gaussians with identical precision yield normalized Gaussians after integrating over agreement variables. Since the joint is a product of normalized densities over disjoint variable sets, it is normalized. This is in contrast to unnormalized Markov random fields where the partition function $Z$ is intractable.
+\end{proof}
 
-\textbf{Step 1:} By Axiom~\ref{ax:fisher}, the Fisher information with respect to the mean parameter is $\Sigma_i^{-1}$.
+\subsection{Derivation of the Variational Free Energy}
 
-\textbf{Step 2:} The Fisher information with respect to the \emph{input} $x$ is obtained by the chain rule. For $\mu = W_i x$:
+Under a mean-field posterior approximation:
+\begin{equation}
+q(\{k_i\},\{m_i\})=\prod_i q_i(k_i)\,s_i(m_i),
+\end{equation}
+the variational free energy becomes:
+\begin{equation}
+\F := \E_q[\log q] - \E_q[\log p] - \E_q[\log p(o|\cdot)]
+\end{equation}
+
+Expanding and integrating out auxiliary variables yields the quadratic forms:
+\begin{equation}
+\begin{aligned}
+\F &= \sum_i D_{\KL}(q_i\,\|\,p_i) + \sum_i D_{\KL}(s_i\,\|\,r_i)\\
+&\quad+\frac{1}{4}\sum_{i,j}\E_{q_i q_j}
+\!\big[(k_i-\Omega_{ij}k_j)^\T\Lambda_{ij}(k_i-\Omega_{ij}k_j)\big]\\
+&\quad+\frac{1}{4}\sum_{i,j}\E_{s_i s_j}
+\!\big[(m_i-\tilde{\Omega}_{ij}m_j)^\T\Gamma_{ij}(m_i-\tilde{\Omega}_{ij}m_j)\big]\\
+&\quad-\E_q[\log p(o\,|\{k_i\},\{m_i\})].
+\end{aligned}
+\end{equation}
+
+\subsection{Relating Quadratic Forms to KL Divergences}
+
+For the choice of precision:
+\begin{equation}
+\Lambda_{ij} := \tau^{(q)}_{ij}\,(\Omega_{ij}\Sigma_{q,j}\Omega_{ij}^\T)^{-1},
+\end{equation}
+the quadratic expectation becomes (in the alignment regime where $\Sigma_i \approx \Omega_{ij}\Sigma_j\Omega_{ij}^\T$):
+\begin{equation}
+\frac{1}{4}\E_{q_i q_j}[(k_i-\Omega_{ij}k_j)^\T\Lambda_{ij}(k_i-\Omega_{ij}k_j)]
+\approx \frac{\tau^{(q)}_{ij}}{2}\,D_{\KL}(q_i\,\|\,\Omega_{ij}q_j)+\text{const}.
+\end{equation}
+
+Defining normalized weights $\beta_{ij} := \tau^{(q)}_{ij}/2$, we obtain:
+
+\begin{tcolorbox}[colback=blue!5,colframe=blue!50,title=Final Form of Variational Free Energy]
+\begin{equation}
+\boxed{
+\begin{aligned}
+\F[\{q_i\},\{s_i\}]
+&=\sum_i D_{\KL}(q_i\,\|\,p_i)
++\sum_i D_{\KL}(s_i\,\|\,r_i)\\
+&\quad+\sum_{i,j}\beta_{ij}\,D_{\KL}(q_i\,\|\,\Omega_{ij}q_j)\\
+&\quad+\sum_{i,j}\gamma_{ij}\,D_{\KL}(s_i\,\|\,\tilde{\Omega}_{ij}s_j)\\
+&\quad-\E_q[\log p(o\,|\{k_i\},\{m_i\})].
+\end{aligned}
+}
+\end{equation}
+\end{tcolorbox}
+
+% ============================================================================
+\section{Conditional Uniqueness of the Forward KL Divergence}
+\label{sec:uniqueness}
+% ============================================================================
+
+We now establish that the forward KL is not merely a modeling choice but a \emph{necessary consequence} of the variational structure.
+
+\subsection{The Variational Game}
+
+Each agent $i$ minimizes a local free-energy functional:
+\begin{equation}
+F_i[\beta_i] = \min_{q_i} \Big\{ D_{\KL}(q_i \,\|\, p_i) + \sum_{j\neq i} \beta_{ij}\,\mathcal{D}(q_i,q_j) \Big\},
+\end{equation}
+where $\mathcal{D}$ is some divergence to be determined.
+
+\subsection{Forward KL Yields Geometric-Mean Solution}
+
+For $\mathcal{D}(q_i,q_j) = D_{\KL}(q_i \,\|\, \Omega_{ij} q_j)$, the stationary condition yields:
+\begin{equation}
+q_i^*(c) = \frac{1}{Z_i} e^{-H_i(c)/2} \prod_j [\Omega_{ij}(c) q_j(c)]^{\beta_{ij}/2},
+\end{equation}
+where $H_i = -\log p_i$ is the local ``energy.'' This is a \textbf{geometric average} of transported neighbor beliefs---a closed-form Boltzmann distribution.
+
+\subsection{Failure of Alternative Divergences}
+
+\paragraph{Reverse KL.} If $\mathcal{D} = D_{\KL}(\Omega_{ij}q_j \,\|\, q_i)$, the stationary condition becomes:
+\begin{equation}
+H_i(c) + \log q_i(c) - \sum_j \beta_{ij} \frac{\Omega_{ij}(c) q_j(c)}{q_i(c)} = \text{const},
+\end{equation}
+introducing $1/q_i$ terms that destroy exponential-family closure.
+
+\paragraph{Symmetric KL.} The symmetrized divergence mixes $\log q_i$ and $1/q_i$ terms, again breaking log-linearity.
+
+\subsection{The Conditional Uniqueness Theorem}
+
+\begin{theorem}[Conditional Uniqueness]
+\label{thm:uniqueness}
+Let $\mathcal{D}(q_i,q_j)$ be any local $f$-divergence
+\[
+\mathcal{D}(q_i,q_j) = \int q_i(c)\, f\!\left(\frac{q_i(c)}{\Omega_{ij}(c) q_j(c)}\right) dc,
+\]
+that enters linearly in the free energy, and suppose the stationary distribution $q_i^*$ is log-linear in $\{H_i,\Omega_{ij}q_j\}$.
+
+Then the following are equivalent:
+\begin{enumerate}
+  \item $q_i^*$ has the geometric-mean Boltzmann form;
+  \item $\mathcal{D}(q_i,q_j) = D_{\KL}(q_i \,\|\, \Omega_{ij} q_j)$;
+  \item $C_{ij} = \dfrac{\partial F_i}{\partial\beta_{ij}} = D_{\KL}(q_i^* \,\|\, \Omega_{ij}q_j)$.
+\end{enumerate}
+\end{theorem}
+
+\begin{proof}[Proof sketch]
+$(2) \Rightarrow (1)$: Direct solution of stationary condition.
+
+$(1) \Rightarrow (2)$: Substituting log-linear form into stationarity gives functional derivative matching forward KL. The requirement $\mathcal{D}(q,q)=0$ fixes the form uniquely.
+
+$(3) \Rightarrow (2)$: By the envelope theorem, the only divergence consistent with linear $\beta_{ij}$-coupling and this derivative structure is the forward KL.
+\end{proof}
+
+\begin{tcolorbox}[colback=green!5,colframe=green!50,title=Key Result]
+The forward KL divergence $D_{\KL}(q_i \| \Omega_{ij} q_j)$ is the \textbf{unique} divergence that:
+\begin{enumerate}
+    \item Preserves exponential-family closure
+    \item Gives closed-form Gibbs solution
+    \item Has consistent dual interpretation for attention weights
+    \item Is gauge-covariant under $SO(N)$ or $SU(N)$
+\end{enumerate}
+\end{tcolorbox}
+
+% ============================================================================
+\section{Extension to Exponential Families}
+\label{sec:exponential_families}
+% ============================================================================
+
+The conditional uniqueness theorem immediately generalizes beyond Gaussians.
+
+\subsection{Exponential Family Distributions}
+
+An exponential family has the form:
+\begin{equation}
+p(x; \theta) = h(x) \exp\left(\theta^\T T(x) - A(\theta)\right),
+\end{equation}
+where $\theta$ are natural parameters, $T(x)$ are sufficient statistics, and $A(\theta)$ is the log-partition function.
+
+\begin{example}[Common Exponential Families]
+\begin{itemize}
+    \item \textbf{Gaussian}: $\theta = (\Sigma^{-1}\mu, -\frac{1}{2}\Sigma^{-1})$, $T(x) = (x, xx^\T)$
+    \item \textbf{Categorical}: $\theta = \log(\pi_k/\pi_K)$, $T(x) = \mathbf{1}_{x=k}$ (one-hot)
+    \item \textbf{Poisson}: $\theta = \log\lambda$, $T(x) = x$
+    \item \textbf{Von Mises-Fisher}: $\theta = \kappa\mu$, $T(x) = x$ (on sphere $S^{d-1}$)
+    \item \textbf{Wishart}: For covariance matrices
+\end{itemize}
+\end{example}
+
+\subsection{Fisher-Rao Metric for Exponential Families}
+
+The Fisher information matrix for an exponential family is:
+\begin{equation}
+G(\theta) = \nabla^2 A(\theta) = \text{Cov}_{p_\theta}[T(X)].
+\end{equation}
+
+This is the Hessian of the log-partition function, which equals the covariance of sufficient statistics.
+
+\subsection{KL Divergence as Bregman Divergence}
+
+For exponential families, the KL divergence is the Bregman divergence generated by $A(\theta)$:
+\begin{equation}
+D_{\KL}(p_{\theta_1} \| p_{\theta_2}) = A(\theta_2) - A(\theta_1) - \nabla A(\theta_1)^\T(\theta_2 - \theta_1).
+\end{equation}
+
+\begin{theorem}[Exponential Family Generalization]
+The variational free energy structure and conditional uniqueness theorem extend to any exponential family. Specifically:
+\begin{enumerate}
+    \item The free energy becomes $\F = \sum_i D_{\KL}(q_i \| p_i) + \sum_{ij} \beta_{ij} D_{\KL}(q_i \| \Omega_{ij} q_j) + \ldots$
+    \item The stationary solution has geometric-mean form in natural parameters
+    \item The Fisher-Rao metric is $G(\theta) = \nabla^2 A(\theta)$
+    \item Proper time is $d\tau^2 = d\theta^\T G(\theta) d\theta$
+\end{enumerate}
+\end{theorem}
+
+\subsection{Implications for CTM}
+
+This generalization means CTM-like architectures can be constructed for:
+\begin{itemize}
+    \item \textbf{Categorical distributions}: Attention over discrete tokens (standard transformers!)
+    \item \textbf{Mixture models}: For multi-modal beliefs
+    \item \textbf{Directional data}: Von Mises-Fisher for embeddings on spheres
+    \item \textbf{Count data}: Poisson for event-based neural coding
+\end{itemize}
+
+% ============================================================================
+\section{Proper Time as Information-Theoretic Arc Length}
+\label{sec:proper_time}
+% ============================================================================
+
+A fundamental issue in any dynamical theory of belief is the definition of time. Wall-clock time is unsuitable because cognitive processes operate on different timescales for different agents and contexts.
+
+\subsection{Definition}
+
+We define proper time as the information-theoretic arc length on the statistical manifold:
+
+\begin{definition}[Proper Time]
+For an infinitesimal belief change $d\mu$, the proper time increment is:
+\begin{equation}
+\boxed{d\tau = \sqrt{d\mu^\T \Sigma^{-1} d\mu} = \|d\mu\|_{\Sigma^{-1}}}
+\end{equation}
+\end{definition}
+
+\subsection{Properties}
+
+\paragraph{Information-theoretic interpretation.} To second order, both KL directions give the same result:
+\begin{equation}
+\KL(q + dq \| q) \approx \KL(q \| q + dq) \approx \frac{1}{2} d\mu^\T \Sigma^{-1} d\mu = \frac{1}{2} d\tau^2
+\end{equation}
+Thus proper time measures accumulated information change.
+
+\paragraph{Scale dependence.} For a high-precision agent ($\Sigma$ small, $\Sigma^{-1}$ large), a small change in $\mu$ corresponds to large proper time---``time moves fast'' in the sense that each update is cognitively significant. For a low-precision agent, the same parametric change corresponds to small proper time.
+
+\paragraph{Invariance.} Proper time is invariant under reparameterization of the belief space, depending only on the intrinsic geometry of the statistical manifold.
+
+\subsection{Generalization to Exponential Families}
+
+For a general exponential family with natural parameters $\theta$:
+\begin{equation}
+d\tau^2 = d\theta^\T G(\theta) d\theta = d\theta^\T \nabla^2 A(\theta) d\theta
+\end{equation}
+
+This is the arc length with respect to the Fisher-Rao metric on the statistical manifold.
+
+% ============================================================================
+\section{Fisher Metric versus Dynamical Mass}
+\label{sec:mass_matrix}
+% ============================================================================
+
+A crucial distinction must be made between the \textbf{intrinsic geometry} of the statistical manifold and the \textbf{dynamical mass} governing belief evolution.
+
+\subsection{The Fisher-Rao Metric (Intrinsic Geometry)}
+
+The Fisher-Rao metric is the natural Riemannian metric on the statistical manifold:
+\begin{equation}
+G_{\mu\nu}(\theta) = \E_{q_\theta}\left[\frac{\pp \log q_\theta}{\pp \theta^\mu} \cdot \frac{\pp \log q_\theta}{\pp \theta^\nu}\right]
+\end{equation}
+
+For Gaussians: $G_{\mu\mu} = \Sigma^{-1}$ (belief precision).
+
+This metric determines:
+\begin{itemize}
+    \item Proper time (arc length)
+    \item Natural gradients
+    \item Geodesics on the manifold
+\end{itemize}
+
+\subsection{The Mass Matrix (Dynamical Inertia)}
+
+The effective mass for Hamiltonian belief dynamics is the \textbf{Hessian of the free energy}:
+\begin{equation}
+\mathbf{M} = \frac{\partial^2 \F}{\partial\xi\partial\xi^\T}
+\end{equation}
+where $\xi = (\mu_1, \ldots, \mu_N, \Sigma_1, \ldots, \Sigma_N)$ is the full state vector.
+
+\subsection{Contributions to Dynamical Mass}
+
+The mass matrix receives contributions from \textbf{all sources of constraint}:
+
+\paragraph{1. Prior Precision.}
+\begin{equation}
+\frac{\partial^2}{\partial\mu_i\partial\mu_i^\T} D_{\KL}(q_i \| p_i) = \Sigma_{p,i}^{-1}
+\end{equation}
+Resistance to deviating from prior expectations.
+
+\paragraph{2. Observation Precision.}
+For likelihood $p(o|k) = \N(o; Hk, R)$:
+\begin{equation}
+\frac{\partial^2}{\partial\mu_i\partial\mu_i^\T} \left(-\E_{q_i}[\log p(o|k)]\right) = H^\T R^{-1} H
+\end{equation}
+Fisher information of the observation model.
+
+\paragraph{3. Social Coupling Precision.}
+\begin{equation}
+\frac{\partial^2}{\partial\mu_i\partial\mu_i^\T} \sum_k \beta_{ik} D_{\KL}(q_i \| \Omega_{ik} q_k) = \sum_k \beta_{ik} (\Omega_{ik}\Sigma_k\Omega_{ik}^\T)^{-1}
+\end{equation}
+Weighted precision from all neighbors.
+
+\paragraph{Total Mass.}
+\begin{equation}
+\boxed{
+\mathbf{M}_i = \Sigma_{p,i}^{-1} + H^\T R^{-1} H + \sum_k \beta_{ik} (\Omega_{ik}\Sigma_k\Omega_{ik}^\T)^{-1}
+}
+\end{equation}
+
+\begin{tcolorbox}[colback=yellow!5,colframe=yellow!50,title=Key Distinction]
+\begin{itemize}
+    \item \textbf{Fisher-Rao metric} $G = \Sigma^{-1}$: Intrinsic geometry of belief space
+    \item \textbf{Mass matrix} $\mathbf{M} = \partial^2\F/\partial\xi^2$: Total resistance to belief change from all constraints
+\end{itemize}
+The mass matrix \emph{includes} the Fisher metric but also incorporates prior, observation, and social terms.
+\end{tcolorbox}
+
+\subsection{Implications for CTM}
+
+In CTM, each neuron's ``inertia'' (resistance to activation change) should be understood as the local Hessian of the effective loss function, not just the intrinsic geometry of the activation space. This explains why neurons with strong priors or tight coupling to neighbors are more stable (higher effective mass).
+
+% ============================================================================
+\section{Derivation of CTM Architecture}
+\label{sec:ctm_derivation}
+% ============================================================================
+
+We now derive each component of CTM from the information-geometric framework.
+
+\subsection{Neuron-Level Models from Local Metrics}
+
+\begin{theorem}[NLM Structure]
+If each computational unit $i$ maintains a distribution $q_i$ on a statistical manifold with unit-specific parameters, then optimal parameterization requires unit-specific weight matrices $W_i$ that determine the local metric:
+\begin{equation}
+G_i^{(x)} = W_i^\T \Sigma_i^{-1} W_i
+\end{equation}
+where the input-space Fisher metric is obtained by chain rule from the belief-space Fisher metric.
+\end{theorem}
+
+\begin{proof}
+Consider unit $i$ mapping inputs $x \in \R^n$ to a belief $q_i(z; x) = \N(W_i x, \Sigma_i)$.
+
+By the Fisher information chain rule:
 \begin{equation}
 G_i^{(x)} = \frac{\pp \mu}{\pp x}^\T G_i^{(\mu)} \frac{\pp \mu}{\pp x} = W_i^\T \Sigma_i^{-1} W_i
 \end{equation}
 
-\textbf{Step 3:} If $\Sigma_i = I$ (unit covariance), then $G_i^{(x)} = W_i^\T W_i$.
-
-\textbf{Step 4:} For each unit to have its own ``sensitivity'' to inputs---its own local metric on input space---we require unit-specific $W_i$.
-
-This is precisely the NLM structure: in CTM, each neuron $d$ has private weights $W_d$ that process its input history. The weights implicitly define the neuron's local metric on activation space.
+For unit-specific sensitivity to inputs, we require unit-specific $W_i$---precisely the NLM structure where each neuron has private weights processing its input history.
 \end{proof}
 
 \begin{corollary}[Precision Dynamics]
-\label{cor:precision}
-High-precision units (large eigenvalues of $G_i = W_i^\T W_i$) experience faster proper time for fixed input changes:
+High-precision units (large $\Sigma_i^{-1}$) experience faster proper time:
 \begin{equation}
-\dd\tau_i = \|dx\|_{G_i} = \sqrt{\dd x^\T W_i^\T W_i \dd x}
+d\tau_i = \|dx\|_{G_i} = \sqrt{dx^\T W_i^\T \Sigma_i^{-1} W_i\, dx}
 \end{equation}
 \end{corollary}
 
-\begin{remark}
-In the gauge-theoretic framework, the covariance $\Sigma_i$ represents uncertainty, and its inverse $\Sigma_i^{-1}$ is the precision. The NLM weights $W_d$ in CTM play an analogous role: they determine how sensitively each neuron responds to its input history. Neurons with large $\|W_d\|$ are ``high-precision'' and experience rapid proper time---small input changes produce large activation changes.
-\end{remark}
-
-% ----------------------------------------------------------------------------
-\subsection{Synchronization from KL Divergence}
-% ----------------------------------------------------------------------------
-
-The key mathematical result connecting the two frameworks involves mutual information.
+\subsection{Synchronization from KL Alignment}
 
 \begin{lemma}[Mutual Information as KL Divergence]
-\label{lem:mi_kl}
-For any joint distribution $p_{XY}$ with marginals $p_X$, $p_Y$:
 \begin{equation}
-\label{eq:mi_kl}
-I(X; Y) = \KL(p_{XY} \| p_X \otimes p_Y)
+I(X; Y) = D_{\KL}(p_{XY} \| p_X \otimes p_Y)
 \end{equation}
-Mutual information \emph{is} the KL divergence from the joint to the product of marginals.
 \end{lemma}
 
-\begin{proof}
-By definition of mutual information and KL divergence:
-\begin{align}
-I(X; Y) &= H(X) + H(Y) - H(X, Y) \\
-&= \sum_{x,y} p(x,y) \log \frac{p(x,y)}{p(x)p(y)} \\
-&= \KL(p_{XY} \| p_X \otimes p_Y)
-\end{align}
-\end{proof}
-
 \begin{lemma}[Correlation and Mutual Information for Gaussians]
-\label{lem:corr_mi}
-For jointly Gaussian random variables $(X, Y)$ with correlation coefficient $\rho$:
+For jointly Gaussian $(X, Y)$ with correlation $\rho$:
 \begin{equation}
-\label{eq:corr_mi}
 I(X; Y) = -\frac{1}{2}\log(1 - \rho^2)
 \end{equation}
 \end{lemma}
 
-\begin{proof}
-For bivariate Gaussian with covariance matrix:
-\[
-\Sigma = \begin{pmatrix} \sigma_X^2 & \rho\sigma_X\sigma_Y \\ \rho\sigma_X\sigma_Y & \sigma_Y^2 \end{pmatrix}
-\]
-we have $\det(\Sigma) = \sigma_X^2 \sigma_Y^2 (1 - \rho^2)$.
-
-The entropies are:
-\begin{align}
-H(X) &= \frac{1}{2}\log(2\pi e \sigma_X^2) \\
-H(Y) &= \frac{1}{2}\log(2\pi e \sigma_Y^2) \\
-H(X,Y) &= \frac{1}{2}\log((2\pi e)^2 \det(\Sigma))
-\end{align}
-
-Therefore:
-\begin{align}
-I(X;Y) &= H(X) + H(Y) - H(X,Y) \\
-&= \frac{1}{2}\log\frac{(2\pi e)^2 \sigma_X^2 \sigma_Y^2}{(2\pi e)^2 \sigma_X^2 \sigma_Y^2 (1-\rho^2)} \\
-&= -\frac{1}{2}\log(1 - \rho^2)
-\end{align}
-\end{proof}
-
 \begin{theorem}[Synchronization as Information-Geometric Alignment]
 \label{thm:sync}
-Let $x_i(t), x_j(t)$ be activation trajectories of neurons $i, j$ over time $t \in \{1, \ldots, T\}$. Define:
-\begin{itemize}
-    \item Synchronization: $S_{ij} = \mathrm{corr}(x_i, x_j)$ (temporal correlation)
-    \item KL-based alignment: $\beta_{ij} = \softmax_j(-\KL(q_i \| q_j)/\kappa)$
-\end{itemize}
-Then $S_{ij}$ and $\beta_{ij}$ are monotonically related through mutual information.
+CTM's synchronization matrix $S_{ij} = \text{corr}(x_i, x_j)$ is related to KL-based alignment through mutual information:
+\begin{equation}
+|S_{ij}| \approx \sqrt{2 I(x_i; x_j)} = \sqrt{2 D_{\KL}(p_{ij} \| p_i \otimes p_j)}
+\end{equation}
+for small correlations.
 \end{theorem}
 
 \begin{proof}
-\textbf{Step 1: Temporal distributions.}
-View the histories $(x_i(1), \ldots, x_i(T))$ as samples from temporal distributions. Define the joint temporal distribution $p_{ij}$ over $(x_i, x_j)$ pairs across time.
+From Lemma 2: $I(X;Y) = -\frac{1}{2}\log(1 - \rho^2)$.
 
-\textbf{Step 2: Synchronization measures dependence.}
-The synchronization $S_{ij} = \rho_{ij}$ measures linear dependence. By Lemma~\ref{lem:corr_mi}, for Gaussian activations:
-\begin{equation}
-I(x_i; x_j) = -\frac{1}{2}\log(1 - S_{ij}^2)
-\end{equation}
+Inverting: $\rho^2 = 1 - e^{-2I}$.
 
-\textbf{Step 3: Mutual information is KL divergence.}
-By Lemma~\ref{lem:mi_kl}:
-\begin{equation}
-I(x_i; x_j) = \KL(p_{ij} \| p_i \otimes p_j)
-\end{equation}
-
-\textbf{Step 4: Inverting the relationship.}
-From \eqref{eq:corr_mi}:
-\begin{equation}
-S_{ij}^2 = 1 - \exp(-2 I(x_i; x_j)) = 1 - \exp(-2\KL(p_{ij} \| p_i \otimes p_j))
-\end{equation}
-
-For small mutual information (weak dependence):
-\begin{equation}
-|S_{ij}| \approx \sqrt{2 I(x_i; x_j)} = \sqrt{2\KL(p_{ij} \| p_i \otimes p_j)}
-\end{equation}
-
-\textbf{Step 5: Softmax form.}
-The gauge-theoretic attention uses:
-\begin{equation}
-\beta_{ij} = \softmax_j\left(-\frac{\KL(q_i \| \Omega_{ij}[q_j])}{\kappa}\right)
-\end{equation}
-
-CTM's synchronization, when exponentiated and normalized, has the form:
-\begin{equation}
-S_{ij}^{\text{normalized}} \propto \exp(f(|S_{ij}|))
-\end{equation}
+For small $I$: $\rho^2 \approx 2I$, hence $|\rho| \approx \sqrt{2I} = \sqrt{2 D_{\KL}(p_{ij} \| p_i p_j)}$.
 
 Both frameworks implement: \textbf{attention weight = softmax of (negative) information distance}.
 \end{proof}
 
-\begin{tcolorbox}[colback=blue!5,colframe=blue!50,title=Key Mathematical Identity]
-The bridge between correlation-based synchronization and KL-based alignment:
-\begin{equation}
-\boxed{I(X;Y) = \KL(p_{XY} \| p_X p_Y) \approx \frac{\rho^2}{2} \quad \text{for small } \rho}
-\end{equation}
-High synchronization ($\rho \to 1$) $\Leftrightarrow$ High mutual information $\Leftrightarrow$ Low divergence from joint to product.
-\end{tcolorbox}
-
-% ----------------------------------------------------------------------------
 \subsection{Adaptive Computation from Proper Time}
-% ----------------------------------------------------------------------------
 
-\begin{theorem}[Adaptive Halting from Proper Time]
-\label{thm:adaptive}
-If computation halts when the rate of proper time accumulation falls below a threshold:
+\begin{theorem}[Adaptive Halting]
+If computation halts when proper time rate falls below threshold:
 \begin{equation}
-\frac{\dd\tau}{\dd t} < \epsilon \quad \text{for } k \text{ consecutive ticks}
+\frac{d\tau}{dt} < \epsilon \quad \text{for } k \text{ consecutive ticks}
 \end{equation}
 then:
-\begin{enumerate}[label=(\alph*)]
-    \item Simple inputs (rapid belief convergence) halt early
-    \item Complex inputs (prolonged belief evolution) halt late
-    \item High-precision units process information faster
+\begin{enumerate}
+    \item Simple inputs (rapid convergence) $\Rightarrow$ early halt
+    \item Complex inputs (prolonged evolution) $\Rightarrow$ late halt
+    \item High-precision units process faster (more $\tau$ per tick)
 \end{enumerate}
 \end{theorem}
 
 \begin{proof}
-\textbf{(a) Simple inputs:}
-For simple inputs, the belief $\mu(t)$ quickly converges to a fixed point. Thus $\dd\mu_t \to 0$, giving:
-\begin{equation}
-\frac{\dd\tau}{\dd t} = \sqrt{\dd\mu_t^\T \Sigma^{-1} \dd\mu_t} \to 0
-\end{equation}
-The halting criterion is satisfied early.
+Simple inputs: Belief stabilizes quickly $\Rightarrow$ $d\mu_t \to 0$ $\Rightarrow$ $d\tau/dt \to 0$ early.
 
-\textbf{(b) Complex inputs:}
-For complex inputs requiring extended reasoning, the belief continues to evolve: $\dd\mu_t$ remains significant. Thus $\dd\tau/\dd t$ stays above threshold, and computation continues.
+Complex inputs: Belief continues evolving $\Rightarrow$ $d\tau/dt$ remains above threshold.
 
-\textbf{(c) Precision dependence:}
-For fixed $|\dd\mu|$, the proper time increment scales with precision:
-\begin{equation}
-\dd\tau = |\dd\mu| \cdot \sqrt{\lambda_{\max}(\Sigma^{-1})}
-\end{equation}
-High-precision units (large $\Sigma^{-1}$) accumulate more proper time per external tick. They ``think faster'' in the sense that each update carries more information-theoretic weight.
+Precision: For fixed $|d\mu|$, proper time scales as $d\tau \propto \sqrt{\lambda_{\max}(\Sigma^{-1})}$.
 \end{proof}
 
 \begin{remark}[Connection to CTM Halting]
-CTM halts based on a combination of:
-\begin{enumerate}
-    \item Lowest classification loss (task performance)
-    \item Highest certainty: $1 - H(\text{output})$ (confidence)
-\end{enumerate}
-
-In information-geometric terms, certainty corresponds to precision:
+CTM halts based on ``tick with lowest loss + highest certainty.'' In information geometry:
 \begin{equation}
 \text{Certainty} \propto |\Sigma^{-1}| = \text{precision}
 \end{equation}
-
-When $\Sigma^{-1}$ is large and stable, $\dd\tau$ becomes small because the system is confident and no longer changing significantly. This is equivalent to the CTM halting condition.
+When precision is high and stable, $d\tau$ becomes small---the system is confident and unchanging. This matches the CTM halting condition.
 \end{remark}
-
-% ----------------------------------------------------------------------------
-\subsection{Free Energy and CTM Loss}
-% ----------------------------------------------------------------------------
-
-\begin{theorem}[Equivalence of Objectives]
-\label{thm:loss}
-Under appropriate identifications, the gauge-theoretic free energy functional is structurally equivalent to CTM's implicit objective.
-\end{theorem}
-
-\begin{proof}
-\textbf{Gauge-theoretic free energy:}
-\begin{equation}
-\F = \underbrace{\alpha \cdot \KL(q \| p)}_{\text{compression}} + \underbrace{\sum_{i,j} \beta_{ij} \KL(q_i \| \Omega_{ij}[q_j])}_{\text{alignment}} + \underbrace{\mathcal{L}_{\text{task}}}_{\text{prediction}}
-\end{equation}
-
-\textbf{CTM loss:}
-\begin{equation}
-\mathcal{L}_{\text{CTM}} = \mathcal{L}_{\text{task}} + \lambda \cdot H(\text{output})
-\end{equation}
-
-\textbf{Identification 1: Compression.}
-The KL term $\KL(q \| p)$ encourages beliefs to stay close to priors, preventing overconfident representations. CTM's entropy term serves analogously: it regularizes the output distribution.
-
-\textbf{Identification 2: Alignment.}
-The belief alignment term creates pressure for coherent representations. CTM achieves this \emph{implicitly}: synchronization is used as a representation for prediction. Gradients from $\mathcal{L}_{\text{task}}$ through the synchronization $\to$ prediction pathway create implicit alignment pressure.
-
-Concretely, if the prediction depends on synchronization:
-\begin{equation}
-\hat{y} = f(S) = f(\{S_{ij}\}_{i,j})
-\end{equation}
-then:
-\begin{equation}
-\frac{\pp \mathcal{L}}{\pp x_k} = \sum_{i,j} \frac{\pp \mathcal{L}}{\pp S_{ij}} \cdot \frac{\pp S_{ij}}{\pp x_k}
-\end{equation}
-
-This gradient encourages activation patterns that produce ``useful'' synchronization---functionally equivalent to the explicit alignment term.
-\end{proof}
 
 % ============================================================================
 \section{Summary of Correspondences}
@@ -431,15 +598,17 @@ This gradient encourages activation patterns that produce ``useful'' synchroniza
 \label{tab:correspondence}
 \begin{tabular}{@{}lll@{}}
 \toprule
-\textbf{Gauge Theory} & \textbf{CTM} & \textbf{Rigor} \\
+\textbf{Gauge Theory} & \textbf{CTM} & \textbf{Derivation} \\
 \midrule
-Statistical manifold $\M$ & State space of neurons & Exact \\
-Fisher metric $G_i = W_i^\T W_i$ & NLM private weights $W_d$ & Exact \\
-Proper time $\dd\tau^2 = \dd\mu^\T \Sigma^{-1} \dd\mu$ & Adaptive iteration count & Approximate \\
-$\KL(q_i \| \Omega_{ij}[q_j])$ & Synchronization $S_{ij}$ & Approximate \\
-$\beta_{ij} = \softmax(-\KL/\kappa)$ & Attention from sync & Structural \\
-Free energy $\F$ & CTM loss (implicit) & Structural \\
-Gauge covariance & Correlation invariance & Implicit \\
+Statistical manifold $\M$ & State space of neurons & By construction \\
+Generative model with $z_{ij}$ & Implicit in architecture & Section~\ref{sec:generative_model} \\
+Forward KL (unique) & Correlation-based sync & Theorem~\ref{thm:uniqueness} \\
+Fisher metric $G = \Sigma^{-1}$ & NLM input sensitivity & Section~\ref{sec:ctm_derivation} \\
+Mass matrix $\mathbf{M} = \partial^2\F$ & Full inertia (priors + obs + social) & Section~\ref{sec:mass_matrix} \\
+Proper time $d\tau = \|d\mu\|_{\Sigma^{-1}}$ & Adaptive iteration & Theorem 5 \\
+$\beta_{ij} = \softmax(-\KL/\kappa)$ & Attention from sync & Theorem~\ref{thm:sync} \\
+Exponential family extension & Categorical, Poisson, etc. & Section~\ref{sec:exponential_families} \\
+Gauge covariance $\Omega_{ij}$ & Correlation invariance & Implicit \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -449,181 +618,107 @@ Gauge covariance & Correlation invariance & Implicit \\
 \label{sec:gaps}
 % ============================================================================
 
-We identify five gaps between exact correspondence and the actual CTM implementation.
+\subsection{Gap 1: Gaussian vs. General Exponential Family}
 
-% ----------------------------------------------------------------------------
-\subsection{Gap 1: Gaussian Assumption}
-% ----------------------------------------------------------------------------
+\textbf{Status:} Fully bridged by the conditional uniqueness theorem. The derivation extends to any exponential family.
 
-\textbf{Required:} Neuron activations are approximately Gaussian.
-
-\textbf{Reality:} CTM activations may be non-Gaussian due to nonlinearities (ReLU, etc.).
-
-\textbf{Mitigation:} The Fisher metric exists for any exponential family distribution:
-\begin{equation}
-p(x; \theta) = h(x) \exp(\theta^\T T(x) - A(\theta))
-\end{equation}
-with Fisher information $G(\theta) = \nabla^2 A(\theta)$. Gaussianity simplifies calculations but is not essential to the framework.
-
-\textbf{Generalization:} For non-Gaussian activations, replace correlation with mutual information estimated via:
-\begin{equation}
-\hat{I}(X; Y) = \hat{H}(X) + \hat{H}(Y) - \hat{H}(X, Y)
-\end{equation}
-using entropy estimators (e.g., k-NN based).
-
-% ----------------------------------------------------------------------------
 \subsection{Gap 2: Temporal vs. Instantaneous}
-% ----------------------------------------------------------------------------
 
-\textbf{Issue:} The gauge theory is formulated for instantaneous beliefs $q(t)$; CTM operates on temporal histories.
+\textbf{Issue:} Gauge theory is formulated for instantaneous beliefs; CTM uses histories.
 
-\textbf{Bridge:} Define temporal distributions over length-$T$ trajectories. The Fisher metric on trajectory space becomes:
+\textbf{Bridge:} Define temporal distributions over trajectories. The Fisher metric on trajectory space averages instantaneous metrics:
 \begin{equation}
 G^{\text{temporal}} = \frac{1}{T} \sum_{t=1}^T G(\theta(t))
 \end{equation}
 
-For stationary processes, this reduces to the instantaneous Fisher metric multiplied by effective degrees of freedom.
-
-% ----------------------------------------------------------------------------
 \subsection{Gap 3: Synchronization $\neq$ KL (Exactly)}
-% ----------------------------------------------------------------------------
 
-\textbf{Correlation:}
-\begin{equation}
-\rho_{ij} = \frac{\mathrm{cov}(x_i, x_j)}{\sigma_i \sigma_j}
-\end{equation}
+\textbf{Status:} Connected via mutual information (Theorem~\ref{thm:sync}). The relationship is exact for Gaussians and approximate for general distributions.
 
-\textbf{KL-based alignment:}
-\begin{equation}
-\beta_{ij} = \softmax\left(-\frac{\KL(q_i \| q_j)}{\kappa}\right)
-\end{equation}
-
-These are \textbf{not identical}, but they are \textbf{monotonically related} for Gaussians. The key relationships:
-\begin{align}
-\KL(\N(\mu_i, \Sigma_i) \| \N(\mu_j, \Sigma_j)) &= \frac{1}{2}\left[\tr(\Sigma_j^{-1}\Sigma_i) + (\mu_j - \mu_i)^\T \Sigma_j^{-1}(\mu_j - \mu_i) - K + \ln\frac{|\Sigma_j|}{|\Sigma_i|}\right]
-\end{align}
-
-When means track each other (high correlation $\Rightarrow$ $\mu_i \approx \mu_j$), the quadratic term vanishes and KL is small, so $\beta_{ij}$ is large.
-
-% ----------------------------------------------------------------------------
 \subsection{Gap 4: Gauge Transport}
-% ----------------------------------------------------------------------------
 
-\textbf{Gauge theory:} Explicit transport operator $\Omega_{ij}$ maps between gauge frames:
-\begin{equation}
-\Sigma_j^{\text{transported}} = \Omega_{ij} \Sigma_j \Omega_{ij}^\T
-\end{equation}
+\textbf{Issue:} CTM has no explicit gauge structure.
 
-\textbf{CTM:} No explicit gauge structure.
-
-\textbf{Resolution:} CTM's synchronization (correlation) is \emph{already gauge-invariant} because correlation is invariant under:
+\textbf{Resolution:} Correlation is already gauge-invariant:
 \begin{itemize}
     \item Shifts: $x \mapsto x + c$ (correlation unchanged)
     \item Scalings: $x \mapsto \alpha x$ (correlation unchanged)
     \item Rotations: $x \mapsto Rx$ (correlation magnitude preserved)
 \end{itemize}
+CTM implicitly has gauge covariance.
 
-Thus CTM \emph{implicitly} has gauge covariance through the intrinsic properties of correlation.
-
-% ----------------------------------------------------------------------------
 \subsection{Gap 5: Explicit vs. Implicit Optimization}
-% ----------------------------------------------------------------------------
 
-\textbf{Gauge theory:} Explicitly minimize $\F$ via gradient descent:
-\begin{equation}
-\frac{\dd\theta}{\dd\tau} = -G^{-1} \nabla_\theta \F
-\end{equation}
+\textbf{Issue:} Gauge theory explicitly minimizes $\F$; CTM uses synchronization as representation.
 
-\textbf{CTM:} Synchronization is a \emph{representation}, not a loss term.
-
-\textbf{Resolution:} Gradient descent through the prediction pathway:
+\textbf{Resolution:} Gradients through prediction pathway create implicit alignment pressure:
 \begin{equation}
 \frac{\pp \mathcal{L}}{\pp W_d} = \frac{\pp \mathcal{L}}{\pp \hat{y}} \cdot \frac{\pp \hat{y}}{\pp S} \cdot \frac{\pp S}{\pp a} \cdot \frac{\pp a}{\pp W_d}
 \end{equation}
-creates implicit pressure toward ``useful'' synchronization patterns. This is functionally equivalent to adding an explicit synchronization objective, but learned rather than prescribed.
+Functionally equivalent to explicit free energy optimization.
 
 % ============================================================================
 \section{Proposed Architecture: Gauge-Theoretic CTM}
 \label{sec:proposal}
 % ============================================================================
 
-Based on the derivations above, we propose explicit modifications to CTM that implement the information-geometric principles directly.
+Based on the derivations, we propose explicit modifications to CTM.
 
 \subsection{Replace Correlation with KL-Based Synchronization}
 
-Instead of:
+Instead of $S_{ij} = \text{corr}(x_i, x_j)$, use:
 \begin{equation}
-S_{ij} = \mathrm{corr}(x_i, x_j)
+S_{ij}^{\text{gauge}} = \exp\left(-\frac{D_{\KL}(q_i \| \Omega_{ij}[q_j])}{\kappa}\right)
 \end{equation}
-
-Use:
-\begin{equation}
-S_{ij}^{\text{gauge}} = \exp\left(-\frac{\KL(q_i \| \Omega_{ij}[q_j])}{\kappa}\right)
-\end{equation}
-
-where $q_i = \N(\bar{x}_i, \hat{\Sigma}_i)$ is estimated from the activation history.
+where $q_i = \N(\bar{x}_i, \hat{\Sigma}_i)$ is estimated from activation history.
 
 \subsection{Replace Internal Ticks with Proper Time}
 
-Instead of fixed iteration count, iterate until:
+Iterate until:
 \begin{equation}
 \Delta\tau = \sum_{d} \sqrt{\Delta\mu_d^\T \Sigma_d^{-1} \Delta\mu_d} < \epsilon
 \end{equation}
 
-where the sum is over neurons and $\Delta\mu_d$ is the change in neuron $d$'s activation.
-
 \subsection{Add Explicit Gauge Transport}
 
-For multi-head or multi-frame reasoning, include learnable transport operators:
+Include learnable transport operators:
 \begin{equation}
 \Omega_{ij} = \exp\left(\sum_a \omega_{ij}^a T_a\right) \in SO(K)
 \end{equation}
 
-where $T_a$ are generators of the rotation group and $\omega_{ij}^a$ are learned coefficients.
-
 \subsection{Use Variational Free Energy as Loss}
 
-Replace the CTM loss with:
 \begin{equation}
-\mathcal{L} = \mathcal{L}_{\text{task}} + \alpha \sum_i \KL(q_i \| p_i) + \lambda \sum_{i,j} \beta_{ij} \KL(q_i \| \Omega_{ij}[q_j])
+\mathcal{L} = \mathcal{L}_{\text{task}} + \alpha \sum_i D_{\KL}(q_i \| p_i) + \lambda \sum_{i,j} \beta_{ij} D_{\KL}(q_i \| \Omega_{ij}[q_j])
 \end{equation}
-
-This makes the information-geometric structure explicit and learnable.
 
 % ============================================================================
 \section{Conclusion}
 \label{sec:conclusion}
 % ============================================================================
 
-We have established that the Continuous Thought Machine architecture can be rigorously derived from information-geometric first principles:
+We have established that CTM architecture can be rigorously derived from information-geometric first principles:
 
 \begin{enumerate}
-    \item \textbf{Neuron-Level Models} arise from requiring unit-specific Fisher metrics (Theorem~\ref{thm:nlm})
+    \item \textbf{The generative model} with auxiliary agreement variables yields the gauge-covariant free energy (Section~\ref{sec:generative_model})
 
-    \item \textbf{Synchronization} corresponds to KL-based belief alignment through the mutual information identity (Theorem~\ref{thm:sync})
+    \item \textbf{The forward KL is unique}: The conditional uniqueness theorem proves it is the only divergence preserving exponential-family closure (Section~\ref{sec:uniqueness})
 
-    \item \textbf{Adaptive Computation} follows from proper time dynamics (Theorem~\ref{thm:adaptive})
+    \item \textbf{Extension to exponential families}: The entire framework generalizes beyond Gaussians (Section~\ref{sec:exponential_families})
 
-    \item \textbf{The overall objective} is structurally equivalent to variational free energy minimization (Theorem~\ref{thm:loss})
+    \item \textbf{Fisher metric vs. mass matrix}: Proper time uses the intrinsic metric; dynamical inertia uses the free energy Hessian (Section~\ref{sec:mass_matrix})
+
+    \item \textbf{CTM components derived}: NLMs from local metrics, synchronization from KL alignment, adaptive compute from proper time (Section~\ref{sec:ctm_derivation})
 \end{enumerate}
 
-The key mathematical bridge is:
-\begin{equation}
-I(X;Y) = \KL(p_{XY} \| p_X p_Y)
-\end{equation}
+The key mathematical identities bridging the frameworks:
+\begin{align}
+I(X;Y) &= D_{\KL}(p_{XY} \| p_X p_Y) \\
+D_{\KL}(q \| q + dq) &\approx \frac{1}{2} d\tau^2 \\
+\mathbf{M} &= \Sigma_p^{-1} + H^\T R^{-1} H + \sum_k \beta_{ik} \Sigma_k^{-1}
+\end{align}
 
-This identity connects correlation-based synchronization (CTM) to distribution-based alignment (gauge theory).
-
-The derivation is exact for the NLM structure and softmax attention form, and approximate (requiring Gaussian + stationarity assumptions) for the synchronization correspondence and adaptive compute mechanism.
-
-The proposed ``Gauge-Theoretic CTM'' would implement these principles explicitly, potentially offering:
-\begin{itemize}
-    \item More principled halting criteria based on information-theoretic proper time
-    \item Richer synchronization representations via KL divergence with gauge transport
-    \item Explicit free energy optimization with interpretable terms
-\end{itemize}
-
-This unification suggests that biological neural synchronization, gauge-theoretic belief dynamics, and modern neural architectures may share deep mathematical structure rooted in information geometry.
+This unification suggests that biological neural synchronization, gauge-theoretic belief dynamics, and modern neural architectures share deep mathematical structure rooted in information geometry and the calculus of variations.
 
 % ============================================================================
 % REFERENCES
@@ -655,47 +750,16 @@ N.~Tishby, F.~C.~Pereira, and W.~Bialek.
 \newblock The information bottleneck method.
 \newblock \emph{arXiv preprint physics/0004057}, 2000.
 
+\bibitem{nakahara2003geometry}
+M.~Nakahara.
+\newblock \emph{Geometry, Topology and Physics}.
+\newblock CRC Press, 2003.
+
+\bibitem{amari2016information}
+S.~Amari.
+\newblock \emph{Information Geometry and Its Applications}.
+\newblock Springer, 2016.
+
 \end{thebibliography}
-
-% ============================================================================
-% APPENDIX
-% ============================================================================
-\appendix
-
-\section{Detailed Proof: Fisher Metric for Gaussians}
-\label{app:fisher_proof}
-
-For $q = \N(\mu, \Sigma)$, the log-likelihood is:
-\begin{equation}
-\log q(x) = -\frac{K}{2}\log(2\pi) - \frac{1}{2}\log|\Sigma| - \frac{1}{2}(x-\mu)^\T\Sigma^{-1}(x-\mu)
-\end{equation}
-
-The score functions are:
-\begin{align}
-\frac{\pp \log q}{\pp \mu} &= \Sigma^{-1}(x - \mu) \\
-\frac{\pp \log q}{\pp \Sigma_{ab}} &= -\frac{1}{2}(\Sigma^{-1})_{ab} + \frac{1}{2}(\Sigma^{-1}(x-\mu)(x-\mu)^\T\Sigma^{-1})_{ab}
-\end{align}
-
-The Fisher information matrix blocks:
-\begin{align}
-G_{\mu\mu} &= \E[(\Sigma^{-1}(x-\mu))(\Sigma^{-1}(x-\mu))^\T] = \Sigma^{-1}\E[(x-\mu)(x-\mu)^\T]\Sigma^{-1} = \Sigma^{-1} \\
-G_{\mu\Sigma} &= 0 \quad \text{(by symmetry)} \\
-G_{\Sigma\Sigma} &= \frac{1}{2}(\Sigma^{-1} \otimes \Sigma^{-1})
-\end{align}
-
-\section{KL Divergence Between Gaussians}
-\label{app:kl_gaussian}
-
-For $q = \N(\mu_q, \Sigma_q)$ and $p = \N(\mu_p, \Sigma_p)$:
-\begin{equation}
-\KL(q \| p) = \frac{1}{2}\left[\log\frac{|\Sigma_p|}{|\Sigma_q|} + \tr(\Sigma_p^{-1}\Sigma_q) + (\mu_p - \mu_q)^\T\Sigma_p^{-1}(\mu_p - \mu_q) - K\right]
-\end{equation}
-
-To second order in small perturbations $\dd\mu$, $\dd\Sigma$:
-\begin{equation}
-\KL(q \| q + \dd q) \approx \frac{1}{2}\dd\mu^\T\Sigma^{-1}\dd\mu + \frac{1}{4}\tr(\Sigma^{-1}\dd\Sigma\Sigma^{-1}\dd\Sigma) = \frac{1}{2}\dd\tau^2
-\end{equation}
-
-This confirms that proper time $\dd\tau$ measures infinitesimal KL divergence.
 
 \end{document}
