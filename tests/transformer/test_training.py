@@ -52,6 +52,28 @@ class TestTrainingConfig:
         assert config.mu_lr == 0.05
         assert config.max_steps == 500
 
+    def test_identity_group_default_false(self):
+        """Test use_identity_group defaults to False."""
+        from transformer.training.config import TrainingConfig
+
+        config = TrainingConfig()
+        assert config.use_identity_group is False
+
+    def test_identity_group_vfe_dynamic(self):
+        """Test use_identity_group can be set via get_vfe_dynamic_config."""
+        from transformer.training.config import get_vfe_dynamic_config
+
+        config = get_vfe_dynamic_config(use_identity_group=True)
+        assert config.use_identity_group is True
+        assert config.training_mode == 'vfe_dynamic'
+
+    def test_identity_group_override(self):
+        """Test use_identity_group override on standard config."""
+        from transformer.training.config import get_standard_config
+
+        config = get_standard_config(use_identity_group=True)
+        assert config.use_identity_group is True
+
 
 class TestCreateParamGroups:
     """Test create_param_groups function."""

@@ -130,6 +130,15 @@ class TrainingConfig:
     use_amp: bool = False  # Automatic mixed precision
 
     # ==========================================================================
+    # Gauge Group
+    # ==========================================================================
+    # When True, trivialize the gauge group by setting all transport operators
+    # to identity (Ω_ij = I). This bypasses matrix exponentials in attention,
+    # reducing to raw KL(q_i || q_j) without frame alignment.
+    # Maps to 'use_identity_transport' in the model config dict.
+    use_identity_group: bool = False
+
+    # ==========================================================================
     # Model Architecture (for creation, not training)
     # ==========================================================================
     embed_dim: int = 128
@@ -162,7 +171,12 @@ def get_standard_config(**overrides) -> TrainingConfig:
 
 
 def get_vfe_dynamic_config(**overrides) -> TrainingConfig:
-    """Get configuration for VFE-dynamic transformer."""
+    """
+    Get configuration for VFE-dynamic transformer.
+
+    Supports use_identity_group=True to trivialize gauge transport
+    (sets all Ω_ij = I, bypassing matrix exponentials in attention).
+    """
     config = TrainingConfig(
         training_mode='vfe_dynamic',
         use_param_groups=True,
