@@ -1057,18 +1057,38 @@ class PublicationTrainer(FastTrainer):
         if self.scaler is not None:
             if self.config.grad_clip > 0:
                 self.scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(),
-                    self.config.grad_clip,
-                )
+                # Per-group clipping for large gauge groups (SO(N>3)):
+                # phi_embed gradients dominate global norm, starving mu/sigma
+                if self.config.use_param_groups:
+                    for group in self.optimizer.param_groups:
+                        if group['params']:
+                            torch.nn.utils.clip_grad_norm_(
+                                group['params'],
+                                self.config.grad_clip,
+                            )
+                else:
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(),
+                        self.config.grad_clip,
+                    )
             self.scaler.step(self.optimizer)
             self.scaler.update()
         else:
             if self.config.grad_clip > 0:
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(),
-                    self.config.grad_clip,
-                )
+                # Per-group clipping for large gauge groups (SO(N>3)):
+                # phi_embed gradients dominate global norm, starving mu/sigma
+                if self.config.use_param_groups:
+                    for group in self.optimizer.param_groups:
+                        if group['params']:
+                            torch.nn.utils.clip_grad_norm_(
+                                group['params'],
+                                self.config.grad_clip,
+                            )
+                else:
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(),
+                        self.config.grad_clip,
+                    )
             self.optimizer.step()
 
         if self.scheduler is not None:

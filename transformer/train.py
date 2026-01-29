@@ -29,6 +29,7 @@ warnings.filterwarnings("ignore", message="Failed to find cuobjdump", module="tr
 warnings.filterwarnings("ignore", message="Failed to find nvdisasm", module="triton")
 warnings.filterwarnings("ignore", message="CUDA path could not be detected", module="cupy")
 
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -318,9 +319,10 @@ def gaussian_kl_divergence(
         # KL divergence
         kl = 0.5 * (trace_term + mahal_term - K + logdet_term)
 
-    # Clamp to [0, 100] for numerical stability
-    # Values > 100 indicate severely divergent distributions and cause gradient explosion
-    return torch.clamp(kl, min=0.0, max=100.0)
+    # Clamp to [0, max] for numerical stability.
+    # Scale ceiling with K: each dimension contributes O(1) to KL.
+    kl_ceil = max(100.0, 5.0 * K)
+    return torch.clamp(kl, min=0.0, max=kl_ceil)
 
 try:
     from tqdm import tqdm
@@ -441,7 +443,12 @@ def compute_free_energy_loss(
         # Note: Averaging over batch and heads, summing over agent pairs
         belief_align_loss = weighted_kl.sum(dim=(-2, -1)).mean()  # Mean over (batch, heads)
 
-        belief_align_loss = lambda_beta * belief_align_loss
+        # Normalize by sqrt(K) to stabilize loss scale for large latent dimensions.
+        # KL between K-dim Gaussians scales O(K), which causes belief alignment
+        # loss to dominate CE for large K (e.g., K=100 in SO(100)).
+        K = mu_q.shape[-1]
+        dim_scale = math.sqrt(max(K, 1))
+        belief_align_loss = lambda_beta * belief_align_loss / dim_scale
     else:
         belief_align_loss = torch.tensor(0.0, device=ce_loss.device)
 
@@ -456,6 +463,7 @@ def compute_free_energy_loss(
     # This provides gradients to embeddings even when belief evolution is detached!
     # =================================================================
     if alpha > 0.0:
+        K = mu_q.shape[-1]
         # Proper KL divergence between evolved beliefs and embedding priors
         # CRITICAL: Detach sigmas to prevent gradient flow through Cholesky decomposition!
         # This matches simulation_runner.py which uses NumPy (no autograd through Cholesky).
@@ -467,11 +475,13 @@ def compute_free_energy_loss(
             sigma_p=sigma_p.detach() if sigma_p is not None else None,  # Detach to avoid Cholesky backward
         )  # (B, N)
 
-        # NOTE: With proper init_std=1/sqrt(K), KL is naturally O(1).
-        # No /K normalization needed - raw KL used directly.
+        # Normalize by sqrt(K): KL between K-dim Gaussians scales O(K) during
+        # training. Without normalization, self-consistency loss dominates CE
+        # for large K (e.g. K=100), preventing the model from learning.
+        dim_scale = math.sqrt(max(K, 1))
 
-        # Average over batch and agents
-        self_consistency_loss = alpha * kl_per_agent.mean()
+        # Average over batch and agents, normalized by sqrt(K)
+        self_consistency_loss = alpha * kl_per_agent.mean() / dim_scale
     else:
         self_consistency_loss = torch.tensor(0.0, device=ce_loss.device)
 
@@ -527,7 +537,10 @@ def compute_free_energy_loss(
         weighted_kl_prior = gamma * kl_prior  # (B, N, N)
 
         # Sum over all agent pairs and average over batch
-        model_align_loss = lambda_gamma * weighted_kl_prior.sum(dim=(-2, -1)).mean()
+        # Normalize by sqrt(K) for dimension-stable loss scale
+        K = mu_p.shape[-1]
+        dim_scale = math.sqrt(max(K, 1))
+        model_align_loss = lambda_gamma * weighted_kl_prior.sum(dim=(-2, -1)).mean() / dim_scale
     else:
         model_align_loss = torch.tensor(0.0, device=ce_loss.device)
 
@@ -977,10 +990,23 @@ class Trainer:
             if self.scaler is not None:
                 self.scaler.unscale_(self.optimizer)
 
-            torch.nn.utils.clip_grad_norm_(
-                self.model.parameters(),
-                self.config.grad_clip
-            )
+            # Per-group gradient clipping for large gauge groups.
+            # With SO(100), phi_embed has 4950 dims per token vs 100 for mu.
+            # Global clipping at grad_clip=1.0 means phi dominates the norm,
+            # starving mu/sigma of learning signal. Clip each param group
+            # independently so all parameter types get sufficient gradients.
+            if self.config.use_param_groups:
+                for group in self.optimizer.param_groups:
+                    if group['params']:
+                        torch.nn.utils.clip_grad_norm_(
+                            group['params'],
+                            self.config.grad_clip
+                        )
+            else:
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(),
+                    self.config.grad_clip
+                )
 
             # Optimizer step
             if self.scaler is not None:
