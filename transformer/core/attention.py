@@ -29,6 +29,7 @@ warnings.filterwarnings("ignore", message="CUDA path could not be detected", mod
 warnings.filterwarnings("ignore", message="Failed to find cuobjdump", module="triton")
 warnings.filterwarnings("ignore", message="Failed to find nvdisasm", module="triton")
 
+import math
 import numpy as np
 import torch
 import torch.nn as nn
@@ -182,13 +183,36 @@ def compute_transport_operators(
             'exp_neg_phi': (B, N, K, K) - exp(-φ·G) for each token
             'Omega': (B, N, N, K, K) - full pairwise transport Ω_ij = exp(φ_i)exp(-φ_j)
     """
+    K = generators.shape[1]
+    dtype = phi.dtype
+
     # φ·G: combine gauge frames with generators
     phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
 
-    # Matrix exponentials using torch's robust implementation
-    # (Padé approximation with scaling-squaring internally)
-    exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
-    exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
+    # For large K (≥16), compute matrix exponential in float64 to prevent
+    # numerical drift. 100×100 matrix_exp in float32 accumulates significant
+    # errors in the Padé scaling-squaring steps, causing transport operators
+    # to drift from SO(K). The numpy path (transport.py) already uses float64
+    # and SVD re-orthogonalization; this brings the PyTorch path to parity.
+    if K >= 16:
+        phi_matrix_f64 = phi_matrix.double()
+        exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
+        exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
+    else:
+        # Small K: float32 matrix_exp is sufficiently accurate
+        exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
+        exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
+
+    # Re-orthogonalize via one Newton-Schulz iteration for large K.
+    # For ideal orthogonal Q: Q^T Q = I. Newton-Schulz iteration:
+    #   Q_new = Q @ (3I - Q^T Q) / 2
+    # converges quadratically and is much cheaper than SVD.
+    # This corrects float32 rounding errors from matrix_exp composition.
+    # Uses regular tensor ops (not .data) to preserve autograd graph.
+    if K >= 16:
+        eye_K = torch.eye(K, device=phi.device, dtype=dtype)
+        exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
+        exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
 
     # Full pairwise transport: Ω_ij = exp(φ_i) @ exp(-φ_j)
     Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)  # (B, N, N, K, K)
@@ -363,14 +387,24 @@ def compute_attention_weights(
     # Convert KL distances to attention weights
     # =========================================================================
 
-    # NOTE: KL divergence is used directly without /K normalization.
-    # With proper initialization (init_std = 1/sqrt(K)), the mean embeddings
-    # have ||μ||² = O(1), making KL divergence naturally O(1) regardless of K.
-    # This avoids artificial scaling that breaks the information-geometric
-    # interpretation of attention as belief similarity.
+    # DIMENSION-AWARE KL NORMALIZATION:
+    # KL between K-dimensional Gaussians sums K terms, so KL magnitudes
+    # grow as O(K) during training (trace, Mahalanobis, and logdet terms
+    # each contribute O(K) once beliefs diverge from initialization).
+    #
+    # For K=3 (SO(3)), KL ≈ O(1) so kappa alone suffices.
+    # For K=100 (SO(100)), KL ≈ O(100) causing softmax saturation:
+    #   logits = -KL/κ ≈ -100 → one-hot attention → zero gradients.
+    #
+    # Fix: normalize by K to get per-dimension KL, ensuring O(1) logits.
+    # This preserves the information-geometric interpretation (now measuring
+    # per-dimension belief divergence) while preventing softmax saturation.
+    # The sqrt scaling provides a softer transition that works well across
+    # all K values (identity at K=1, gentle correction for K=3, strong for K=100).
+    dim_scale = math.sqrt(max(K, 1))
 
-    # Attention logits: -KL / κ (more similar = less KL = higher attention)
-    logits = -kl_matrix / kappa  # (B, N, N)
+    # Attention logits: -KL / (κ · √K)
+    logits = -kl_matrix / (kappa * dim_scale)  # (B, N, N)
 
     # ==========================================================================
     # ALiBi-STYLE POSITIONAL BIAS: Add relative position information
@@ -613,10 +647,21 @@ def _compute_kl_matrix_torch(
             Omega = cached_transport['Omega']
         else:
             # Compute transport operators
-            # phi: (B, N, 3) -> phi_matrix: (B, N, K, K)
+            # phi: (B, N, n_gen) -> phi_matrix: (B, N, K, K)
             phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
-            exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
-            exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
+
+            # Float64 matrix_exp + re-orthogonalization for large K
+            if K >= 16:
+                phi_matrix_f64 = phi_matrix.double()
+                exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
+                exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
+                # Newton-Schulz re-orthogonalization
+                eye_K = torch.eye(K, device=device, dtype=dtype)
+                exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
+                exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
+            else:
+                exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
+                exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
 
             # Omega_ij = exp(φ_i) @ exp(-φ_j)
             # Result: (B, N, N, K, K)
@@ -677,8 +722,11 @@ def _compute_kl_matrix_torch(
 
         # KL divergence for all pairs
         kl_all = 0.5 * (trace_term + mahal_term - K + logdet_term)  # (B, N, N)
-        # Clamp KL to [0, 100] for numerical stability
-        kl_all = torch.clamp(kl_all, min=0.0, max=100.0)
+        # Clamp KL to [0, max] for numerical stability.
+        # Scale ceiling with K: each dimension contributes O(1) to KL,
+        # so max reasonable KL ≈ O(K). Use 5*K as generous ceiling.
+        kl_ceil = max(100.0, 5.0 * K)
+        kl_all = torch.clamp(kl_all, min=0.0, max=kl_ceil)
 
         # Copy to output (in-place)
         kl_matrix.copy_(kl_all)
@@ -830,8 +878,18 @@ def _compute_kl_matrix_diagonal(
     else:
         # Compute transport operators
         phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
-        exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
-        exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
+
+        # Float64 matrix_exp + re-orthogonalization for large K
+        if K >= 16:
+            phi_matrix_f64 = phi_matrix.double()
+            exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
+            exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
+            eye_K = torch.eye(K, device=device, dtype=dtype)
+            exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
+            exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
+        else:
+            exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
+            exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
 
         # Omega_ij = exp(φ_i) @ exp(-φ_j)
         Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)  # (B, N, N, K, K)
@@ -880,9 +938,10 @@ def _compute_kl_matrix_diagonal(
 
     # Full KL
     kl_all = 0.5 * (trace_term + mahal_term - K + logdet_term)
-    # Clamp KL to [0, 100] for numerical stability
-    # Values > 100 indicate severely divergent distributions and cause gradient explosion
-    kl_all = torch.clamp(kl_all, min=0.0, max=100.0)
+    # Clamp KL to [0, max] for numerical stability.
+    # Scale ceiling with K: each dimension contributes O(1) to KL.
+    kl_ceil = max(100.0, 5.0 * K)
+    kl_all = torch.clamp(kl_all, min=0.0, max=kl_ceil)
 
     kl_matrix.copy_(kl_all)
 
