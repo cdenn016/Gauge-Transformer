@@ -1054,12 +1054,14 @@ class PublicationTrainer(FastTrainer):
         grad_norms = self._compute_gradient_norms() if is_log_step else None
 
         # Clip and step (with scaler if AMP enabled)
+        # Per-group clipping for large gauge groups (SO(N>3)):
+        # phi_embed gradients dominate global norm, starving mu/sigma.
+        # FastTrainingConfig always uses param groups; TrainingConfig has use_param_groups flag.
+        _use_param_groups = getattr(self.config, 'use_param_groups', True)
         if self.scaler is not None:
             if self.config.grad_clip > 0:
                 self.scaler.unscale_(self.optimizer)
-                # Per-group clipping for large gauge groups (SO(N>3)):
-                # phi_embed gradients dominate global norm, starving mu/sigma
-                if self.config.use_param_groups:
+                if _use_param_groups:
                     for group in self.optimizer.param_groups:
                         if group['params']:
                             torch.nn.utils.clip_grad_norm_(
@@ -1075,9 +1077,7 @@ class PublicationTrainer(FastTrainer):
             self.scaler.update()
         else:
             if self.config.grad_clip > 0:
-                # Per-group clipping for large gauge groups (SO(N>3)):
-                # phi_embed gradients dominate global norm, starving mu/sigma
-                if self.config.use_param_groups:
+                if _use_param_groups:
                     for group in self.optimizer.param_groups:
                         if group['params']:
                             torch.nn.utils.clip_grad_norm_(
